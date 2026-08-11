@@ -32,7 +32,13 @@ from tradeval import buzz, discover, reddit_auth, stocktwits
 from tradeval.config import Config
 from tradeval.context import TradeContext
 from tradeval.data import DataError, MarketData, resolve_symbols
-from tradeval.report import detect_width, make_palette, render, render_summary
+from tradeval.report import (
+    detect_width,
+    layout_panels,
+    make_palette,
+    render,
+    render_summary,
+)
 from tradeval.strategies import STRATEGIES, Report, menu_lines, resolve_key
 
 
@@ -62,7 +68,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--instrument",
-        help="earnings only: O for options, S for stock. Prompts if omitted.",
+        help="earnings only: O options, S stock, C call debit spread, P put debit spread. "
+        "Prompts if omitted.",
     )
     plan.add_argument(
         "--side",
@@ -71,7 +78,20 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--contracts",
         type=int,
-        help="earnings only: how many contracts to buy. Prompts if omitted.",
+        help="earnings options only: how many contracts to buy. Prompts with prices if omitted.",
+    )
+    plan.add_argument(
+        "--strikes",
+        type=int,
+        help="earnings options only: strikes to list either side of the money "
+        "(default 5, capped at what the expiry carries). Prompts if omitted.",
+    )
+    plan.add_argument(
+        "--min-reward-risk",
+        type=float,
+        metavar="RATIO",
+        help="earnings spreads only: the reward:risk a pairing must clear, e.g. 1.5. "
+        "Prompts with prices if omitted.",
     )
 
     account = parser.add_argument_group("account and sizing")
@@ -340,20 +360,41 @@ def resolve_horizon(key: str, args: argparse.Namespace, config: Config) -> str:
 INSTRUMENTS = {
     "O": "options", "OPT": "options", "OPTION": "options", "OPTIONS": "options",
     "S": "stock", "STOCK": "stock", "STOCKS": "stock", "SHARE": "stock", "SHARES": "stock",
+    "C": "call_spread", "CALL SPREAD": "call_spread", "CALL-SPREAD": "call_spread",
+    "CALL_SPREAD": "call_spread", "CALL DEBIT SPREAD": "call_spread",
+    "P": "put_spread", "PUT SPREAD": "put_spread", "PUT-SPREAD": "put_spread",
+    "PUT_SPREAD": "put_spread", "PUT DEBIT SPREAD": "put_spread",
 }
+
+INSTRUMENT_MENU = [
+    ("O", "Options", "single contracts on the report"),
+    ("S", "Stock", "shares held through it"),
+    ("C", "Call debit spread", "buy a strike, sell one above -- bullish"),
+    ("P", "Put debit spread", "buy a strike, sell one below -- bearish"),
+]
+
+# A spread picks its own side of the chain, so the calls-or-puts question
+# never comes up for one.
+SPREAD_SIDES = {"call_spread": "call", "put_spread": "put"}
 
 
 def resolve_instrument_choice(raw: str) -> str:
     instrument = INSTRUMENTS.get(raw.strip().upper())
     if instrument is None:
-        raise ValueError("Choose O for options or S for stock.")
+        raise ValueError(
+            "Choose O for options, S for stock, C for a call debit spread "
+            "or P for a put debit spread."
+        )
     return instrument
 
 
 def prompt_instrument() -> str:
+    print("\nWhat are you trading?\n")
+    for letter, name, blurb in INSTRUMENT_MENU:
+        print("  %s) %-18s %s" % (letter, name, blurb))
     while True:
         try:
-            raw = input("\nOptions or Stock? [O/S]: ")
+            raw = input("\nChoice [O/S/C/P]: ")
         except EOFError:
             print("Options.")  # close the prompt line so output does not run together
             return "options"
@@ -479,10 +520,10 @@ def resolve_earnings_date(
     return prompt_earnings_date(data)
 
 
-def prompt_contracts() -> int:
+def prompt_contracts(noun: str = "contracts") -> int:
     while True:
         try:
-            raw = input("How many contracts are you buying? [1]: ").strip()
+            raw = input("How many %s are you buying? [1]: " % noun).strip()
         except EOFError:
             print("1")  # terminate the prompt line so output does not run together
             return 1
@@ -490,15 +531,119 @@ def prompt_contracts() -> int:
             return 1
         if raw.isdigit() and int(raw) > 0:
             return int(raw)
-        print("  Enter a whole number of contracts, or press Enter for 1.")
+        print("  Enter a whole number of %s, or press Enter for 1." % noun)
+
+
+def prompt_min_reward_risk() -> Optional[float]:
+    """The reward:risk floor a spread has to clear, if the trader has one."""
+    while True:
+        try:
+            raw = input("Minimum reward:risk you will accept? [Enter to skip]: ").strip()
+        except EOFError:
+            print()  # close the prompt line so output does not run together
+            return None
+        if not raw:
+            return None
+        # "2:1" and "2" mean the same thing to everyone who trades these.
+        head = raw.split(":")[0].strip()
+        try:
+            ratio = float(head)
+        except ValueError:
+            ratio = None
+        if ratio and ratio > 0:
+            return ratio
+        print("  Enter a ratio like 1.5 or 2:1, or press Enter to skip.")
+
+
+def prompt_strikes(default: int, maximum: Optional[int]) -> int:
+    """How far out from the money to list, capped at what the chain carries."""
+    ceiling = "" if maximum is None else ", max %d" % maximum
+    while True:
+        try:
+            raw = input("How many strikes from the money? [%d%s]: " % (default, ceiling)).strip()
+        except EOFError:
+            print(default)  # close the prompt line so output does not run together
+            return default
+        if not raw:
+            return default
+        if raw.isdigit() and int(raw) > 0:
+            return clamp_strikes(int(raw), maximum)
+        print("  Enter a whole number of strikes, or press Enter for %d." % default)
+
+
+def clamp_strikes(count: int, maximum: Optional[int]) -> int:
+    """Hold the request to what Yahoo actually lists, and say so when it bites."""
+    if maximum is None or count <= maximum:
+        return count
+    print("  This expiry only lists %d strikes from the money -- showing those." % maximum)
+    return maximum
+
+
+def prompt_shares(price: float) -> Optional[int]:
+    """How many shares, converted to the dollars the concentration check wants."""
+    while True:
+        try:
+            raw = input("How many shares are you buying? [Enter to skip]: ").strip()
+        except EOFError:
+            print()  # close the prompt line so output does not run together
+            return None
+        if not raw:
+            return None
+        if raw.isdigit() and int(raw) > 0:
+            shares = int(raw)
+            print("  %d shares at $%.2f is $%s." % (shares, price, "{:,.0f}".format(shares * price)))
+            return shares
+        print("  Enter a whole number of shares, or press Enter to skip.")
+
+
+def size_position(strategy, args: argparse.Namespace, palette, width: int) -> None:
+    """Show what is being bought, then ask how much of it.
+
+    The profile comes first for every instrument: deciding size against a
+    ticker you have not looked at is the thing this tool exists to stop. Then
+    the prices, then the questions -- all of it before the checks that spend
+    those answers.
+    """
+    ctx = strategy.ctx
+    wants_shares = not ctx.trades_options and args.size is None
+    wants_count = ctx.trades_options and args.contracts is None
+    wants_floor = ctx.trades_spread and args.min_reward_risk is None
+    wants_strikes = ctx.trades_options and args.strikes is None
+
+    # Ladder depth is settled first either way: it decides what the prices
+    # below list, and an explicit --strikes still has to clear the chain.
+    if ctx.trades_options and not wants_strikes:
+        ctx.strikes = clamp_strikes(args.strikes, strategy.max_strikes())
+    if not (wants_shares or wants_count or wants_floor or wants_strikes):
+        return
+
+    panel = strategy.stock_info_panel()
+    if panel:
+        for line in layout_panels([panel], palette, width):
+            print(line)
+
+    if wants_strikes:
+        ctx.strikes = prompt_strikes(ctx.strikes, strategy.max_strikes())
+
+    for line in strategy.price_lines():
+        print(line)
+    print("")
+
+    if wants_shares:
+        shares = prompt_shares(strategy.data.price)
+        if shares:
+            ctx.size = shares * strategy.data.price
+    if wants_floor:
+        ctx.min_reward_risk = prompt_min_reward_risk()
+    if wants_count:
+        ctx.contracts = prompt_contracts("spreads" if ctx.trades_spread else "contracts")
 
 
 def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:
-    if key != "earnings" or instrument == "stock":
+    """The count from the command line. The prompt happens later, with prices."""
+    if key != "earnings" or instrument == "stock" or args.contracts is None:
         return 1
-    if args.contracts is not None:
-        return args.contracts
-    return prompt_contracts()
+    return args.contracts
 
 
 def resolve_event_plan(key: str, args: argparse.Namespace) -> EventPlan:
@@ -513,6 +658,8 @@ def resolve_event_plan(key: str, args: argparse.Namespace) -> EventPlan:
 
 def resolve_option_side(key: str, args: argparse.Namespace, instrument: str = "options") -> str:
     """Which side of the chain to display. Only earnings trades show one."""
+    if instrument in SPREAD_SIDES:
+        return SPREAD_SIDES[instrument]
     if key != "earnings" or instrument == "stock":
         return "both"
     if args.side:
@@ -644,6 +791,8 @@ def validate_symbol(
     buzz_scores: Optional[dict] = None,
     horizon: Optional[str] = None,
     plan: Optional[EventPlan] = None,
+    palette=None,
+    width: int = 0,
 ) -> Report:
     data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
     plan = plan or resolve_event_plan(key, args)
@@ -665,11 +814,17 @@ def validate_symbol(
         instrument=plan.instrument,
         option_side=plan.side,
         contracts=plan.contracts,
+        min_reward_risk=args.min_reward_risk,
+        strikes=config.earnings.ladder_strikes,
         buzz=(buzz_scores or {}).get(symbol),
         include_peers=bool(args.peers) and key == "earnings",
         horizon=horizon or config.short_term.default_horizon,
     )
-    return STRATEGIES[key](ctx).run()
+    strategy = STRATEGIES[key](ctx)
+    # Sizing is asked here, after the chain is priced and before the checks
+    # that spend those answers.
+    size_position(strategy, args, palette or make_palette(no_color=True), width or detect_width())
+    return strategy.run()
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -757,6 +912,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("--contracts must be at least 1.", file=sys.stderr)
         return 2
 
+    if args.min_reward_risk is not None and args.min_reward_risk <= 0:
+        print("--min-reward-risk must be greater than 0.", file=sys.stderr)
+        return 2
+
+    if args.strikes is not None and args.strikes < 1:
+        print("--strikes must be at least 1.", file=sys.stderr)
+        return 2
+
     try:
         # Strategy first: it decides which trade details are worth asking for.
         key = prompt_trade_type(args.trade_type)
@@ -801,7 +964,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     failures = 0
     for symbol in symbols:
         try:
-            report = validate_symbol(symbol, key, args, config, buzz_scores, horizon, plan)
+            report = validate_symbol(
+                symbol, key, args, config, buzz_scores, horizon, plan, palette, width
+            )
         except DataError as exc:
             print(palette.red("%s: %s" % (symbol, exc)), file=sys.stderr)
             failures += 1

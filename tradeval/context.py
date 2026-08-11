@@ -33,22 +33,40 @@ class TradeContext:
     earnings_date: Optional[dt.date] = None
     # Short term: how long the trade is meant to be held ("1m", "3m", "6m").
     horizon: str = "1m"
-    # Earnings: whether the trade is in options or in the shares themselves.
-    # A share trade has no premium to crush and no chain to price, so the
-    # option checks and panels drop out of the report entirely.
+    # Earnings: what is actually being bought -- "options" for single
+    # contracts, "stock" for the shares, "call_spread"/"put_spread" for a
+    # vertical debit spread. A share trade has no premium to crush and no
+    # chain to price, so the option checks and panels drop out entirely; a
+    # spread swaps the single-leg tables for its own.
     instrument: str = "options"
     # Which side of the option chain to show: call, put, or both.
     option_side: str = "both"
     # How many contracts the trade is sized at.
     contracts: int = 1
+    # Strikes either side of the money to list, and to build spreads from.
+    strikes: int = 5
+    # Spreads: the reward:risk the trader will not go below. None leaves the
+    # pairings ungraded, since the floor is a preference rather than a fact.
+    min_reward_risk: Optional[float] = None
     # Retail hype for this symbol, when a buzz source was requested.
     buzz: Optional[Any] = None
     # Peer earnings read-across costs a lookup per peer, so it is opt-in.
     include_peers: bool = False
 
+    SPREADS = {"call_spread": "call", "put_spread": "put"}
+
     @property
     def trades_options(self) -> bool:
         return self.instrument != "stock"
+
+    @property
+    def trades_spread(self) -> bool:
+        return self.instrument in self.SPREADS
+
+    @property
+    def spread_kind(self) -> Optional[str]:
+        """'call' or 'put' when a spread is being traded, else None."""
+        return self.SPREADS.get(self.instrument)
 
     def shows(self, kind: str) -> bool:
         """Whether contracts of this kind ('call'/'put') should be displayed."""

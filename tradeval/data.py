@@ -586,6 +586,21 @@ class MarketData:
             return None
         return calls, puts
 
+    def strikes_available(self, expiry: dt.date) -> Optional[int]:
+        """Most strikes the chain can show on either side of the money.
+
+        The ceiling on a ladder: asking for more than this returns the same
+        table, since there is nothing further out to list.
+        """
+        loaded = self.chain(expiry)
+        anchor = self.atm_strike(expiry)
+        if loaded is None or anchor is None:
+            return None
+        calls_df, puts_df = loaded
+        above = len({k for k in calls_df["strike"] if k >= anchor})
+        below = len({k for k in puts_df["strike"] if k <= anchor})
+        return max(above, below) or None
+
     def atm_quote(self, expiry: dt.date) -> Optional[AtmQuote]:
         """Bid/ask, IV and open interest for the strike nearest the money."""
         loaded = self.chain(expiry)

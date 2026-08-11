@@ -81,7 +81,8 @@
       "Bash(git merge *)",
       "Bash(git branch *)",
       "Bash(git push *)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(awk '/CALLS -- /,/^$/' /private/tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/c3b2f5d3-519f-4cdc-9864-7520bf2a39ed/scratchpad/st500b.txt)"
     ]
   }
 }

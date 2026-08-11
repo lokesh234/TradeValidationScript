@@ -177,19 +177,23 @@ EOF
     return 0
 }
 
-# Options or shares. Everything the earnings report grades follows from it, so
-# it is asked before the sizing questions -- premium or stop, not both.
+# What the trade is made of. Everything the earnings report grades follows from
+# it, so it is asked before the sizing questions -- premium or stop, not both.
 choose_instrument() {
     INSTRUMENT=""
-    printf '\n%sAre you trading options or the stock itself?%s\n\n' "$BOLD" "$OFF"
-    printf '  O) Options  %scontracts on the report%s\n'  "$DIM" "$OFF"
-    printf '  S) Stock    %sshares held through it%s\n\n' "$DIM" "$OFF"
+    printf '\n%sWhat are you trading?%s\n\n' "$BOLD" "$OFF"
+    printf '  O) Options            %ssingle contracts on the report%s\n'      "$DIM" "$OFF"
+    printf '  S) Stock              %sshares held through it%s\n'              "$DIM" "$OFF"
+    printf '  C) Call debit spread  %sbuy a strike, sell one above%s\n'        "$DIM" "$OFF"
+    printf '  P) Put debit spread   %sbuy a strike, sell one below%s\n\n'      "$DIM" "$OFF"
     while true; do
-        ask reply "Choice [O/S]"
+        ask reply "Choice [O/S/C/P]"
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
-            o|opt|option|options) INSTRUMENT="options"; return ;;
-            s|stock|stocks|share|shares) INSTRUMENT="stock"; return ;;
-            *) printf '  %sO for options, S for stock.%s\n' "$DIM" "$OFF" ;;
+            o|opt|option|options)         INSTRUMENT="options";      return ;;
+            s|stock|stocks|share|shares)  INSTRUMENT="stock";        return ;;
+            c|call|calls|call-spread)     INSTRUMENT="call_spread";  return ;;
+            p|put|puts|put-spread)        INSTRUMENT="put_spread";   return ;;
+            *) printf '  %sO options, S stock, C call spread, P put spread.%s\n' "$DIM" "$OFF" ;;
         esac
     done
 }

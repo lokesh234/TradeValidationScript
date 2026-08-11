@@ -9,7 +9,7 @@ makes a long-term hold good.
 
 | # | Type | Horizon | What it grades |
 |---|------|---------|----------------|
-| 1 | **Earnings Gamble** | 0-10 days, event driven | Is the event confirmed, does this name actually move on earnings, and — for a contract trade — is the options market charging more than the move is historically worth. Ask it for [stock instead](#options-or-stock) and it grades the shares |
+| 1 | **Earnings Gamble** | 0-10 days, event driven | Is the event confirmed, does this name actually move on earnings, and — for a contract trade — is the options market charging more than the move is historically worth. Ask it for [stock or a debit spread](#what-youre-trading) and it grades that instead |
 | 2 | **Short Term** | 2-20 trading days | Trend, momentum, relative strength, how extended the entry is, reward/risk, and whether earnings lands mid-trade |
 | 3 | **Long Term** | 1 year or more | Profitability, free cash flow, growth, balance sheet, valuation, and entry point |
 
@@ -317,21 +317,23 @@ carries its yield against market cap so you can read the two rows together.
 Anything Yahoo doesn't publish reads `Not Available`, and if none of it is
 available the whole panel is dropped.
 
-### Options or stock
+### What you're trading
 
 An earnings gamble first asks what you're actually buying:
 
 ```
-Are you trading options or the stock itself?
+What are you trading?
 
-  O) Options  contracts on the report
-  S) Stock    shares held through it
+  O) Options            single contracts on the report
+  S) Stock              shares held through it
+  C) Call debit spread  buy a strike, sell one above -- bullish
+  P) Put debit spread   buy a strike, sell one below -- bearish
 
-Choice [O/S]: S
+Choice [O/S/C/P]: S
 ```
 
-Holding shares through a report is a different trade from buying contracts on
-it, so the report changes rather than merely hiding a table. **Stock** drops
+Each is a different trade, so the report changes rather than merely hiding a
+table. **Stock** drops
 the option ladders and the profit-next-day tables, and with them the three
 checks that only grade a chain — implied vs historical move, IV crush risk and
 options liquidity. That last one is *critical* for a contract trade: leaving it
@@ -357,13 +359,94 @@ shares ask for entry, stop and percent of account. The report header names the
 choice — `0-10 days, shares` rather than `0-10 days, options` — so a saved run
 says which trade it graded.
 
-Skip the prompt with `--instrument S` (or `O`, or the long spellings `stock`
-and `options`).
+Whichever you pick, **the stock info panel prints before the sizing question**,
+because deciding how much to buy of a ticker you haven't looked at is the thing
+this tool exists to stop. Stock then asks for a share count:
+
+```
+How many shares are you buying? [Enter to skip]: 100
+  100 shares at $120.43 is $12,043.
+```
+
+That feeds `Position concentration`, which shares get and contracts don't: a
+contract position's notional *is* its premium, already graded by `Risk per
+trade`, while a share position can be many times its own risk and carries all
+of it through the gap. On a $20k account those 100 shares are 24% against a 15%
+cap — a fail — even though the stop only risks 2%. Tune the cap with
+`{ "earnings": { "max_position_pct_of_account": 25 } }`, or skip the question
+with `--size`.
+
+Skip the prompt with `--instrument S` (or `O`, `C`, `P`, or the long spellings
+`stock`, `options`, `call spread`, `put spread`).
+
+### Debit spreads
+
+`C` and `P` build **vertical debit spreads** instead: long the strike nearest
+the money, short each of the next ones out — five by default, or however many
+[strikes you asked for](#the-option-ladder). Holding the long leg still and
+walking the short leg outward is the decision actually being made — how much
+width to buy, and how much of the move to sell away:
+
+```
+ CALL DEBIT SPREADS -- 2026-08-14 expiry, per spread
+  Strikes   Width  Debit  Max profit  Max loss  Reward:risk  Breakeven  B/E move  To max
+  120/121  1 wide    $45         $55       $45       1.22:1     120.45     +0.0%   +0.5%
+  120/122  2 wide    $85        $115       $85       1.35:1     120.85     +0.3%   +1.3%
+  120/123  3 wide   $130        $170      $130       1.31:1     121.30     +0.7%   +2.1%
+  120/124  4 wide   $173        $227      $173       1.32:1     121.72     +1.1%   +3.0%
+  120/125  5 wide   $203        $297      $203       1.47:1     122.03     +1.3%   +3.8%  <- implied move reaches
+```
+
+`To max` is the move that reaches the short strike, where the payoff stops.
+The marker flags the widest pairing the implied move still reaches — past it
+you are paying for upside the options market doesn't expect to arrive. Max loss
+is the debit and nothing worse: the long leg covers the short one, so there is
+no assignment risk to size for.
+
+The profit table reprices **both legs** against the crushed volatility, which
+is the whole point of the structure — what the long leg gives up, the short leg
+hands back:
+
+```
+ PROFIT NEXT DAY -- call debit spreads, per spread, IV crushed 98% -> 53%
+  Strikes           120/121  120/122  120/123  120/124  120/125
+  Cost now              $45      $85     $130     $173     $203
+  -8.1% move           -$45     -$85    -$130    -$172    -$202
+    return on cost    -100%    -100%    -100%    -100%    -100%
+    spread value         $0       $0       $0       $0       $0
+  +0.0% move            +$4      +$1     -$17     -$42     -$61
+    return on cost      +8%      +1%     -13%     -24%     -30%
+    spread value        $49      $86     $113     $130     $142
+  +8.1% move           +$55    +$114    +$168    +$222    +$287
+    return on cost    +122%    +134%    +129%    +129%    +142%
+    spread value       $100     $199     $298     $395     $489
+```
+
+Two differences from the single-contract version, both because a spread
+behaves differently:
+
+- **The moves are scaled to the implied move**, at ±1x and ±½x either side of
+  flat, rather than the fixed 5-25% ladder. A spread caps out well inside the
+  expected move, so those columns would print the same number five times —
+  and none of them would be the loss.
+- **Adverse moves are shown.** A long contract's table only models the
+  direction that helps, since the downside is simply the premium. A spread's
+  losses arrive gradually, and the row that matters most is often the flat
+  one: here the narrow pairings still make money on no move at all, because
+  the crush takes more out of the short leg than the long.
+
+Sizing is off the **net debit** rather than a leg's premium, the pairings are
+graded against [the reward:risk floor you set](#how-many-contracts), and
+`IV crush risk` carries a third of its usual weight with the reasoning stated inline —
+severe backwardation is a real problem for a long contract and mostly a wash
+for a spread, so grading them the same would be wrong. Options liquidity still
+applies in full: a spread crosses two books, not one.
 
 ### Calls or puts
 
-An earnings **options** gamble then asks which side of the chain you're
-trading:
+A **single-contract** earnings gamble then asks which side of the chain you're
+trading. A spread already picked its side, and stock has no chain at all, so
+neither is asked:
 
 ```
 Calls or Puts? [C/P, or B for both]: C
@@ -382,9 +465,39 @@ Skip the prompt with `--side C` (`P`, `B`, or the long spellings `calls`,
 
 ### How many contracts
 
+The sizing question comes **after** the stock info panel and the chain prices,
+because asking it first is asking blind:
+
 ```
+2026-08-14 expiry, cost per contract:
+  120    call   $515
+  121    call   $470
+  122    call   $430
+  123    call   $385
+  124    call   $342
+
 How many contracts are you buying? [1]: 3
 ```
+
+A spread lists its pairings instead, and asks for a floor first:
+
+```
+2026-08-14 expiry, cost per spread:
+  Strikes        Debit  Max profit Reward:risk
+  120/121          $45         $55      1.22:1
+  120/122          $85        $115      1.35:1
+  120/125         $203        $297      1.47:1
+
+Minimum reward:risk you will accept? [Enter to skip]: 1.4
+How many spreads are you buying? [1]: 2
+```
+
+The floor is your own rule, so leaving it blank grades nothing — the
+`Spread reward:risk` check reports the best pairing and skips. Give one and it
+grades: `1 of 5 pairings clear your 1.40:1 floor`, with the qualifying rows
+marked in the table. Nothing clearing it at all fails the check, since a chain
+that doesn't pay for its risk is a trade not worth taking. `2:1` and `2` are
+both accepted; `--min-reward-risk 1.4` skips the question.
 
 The profit tables then show the whole position rather than a single contract —
 cost, P&L and value all scale, and the heading says `3 contracts` so you can't
@@ -407,8 +520,26 @@ always wins over the estimate. Skip the prompt with `--contracts 3`.
 
 ### The option ladder
 
-Then the five nearest-the-money strikes on the side you chose, for the expiry
-that captures the report:
+How deep to go is asked first, before anything is priced:
+
+```
+How many strikes from the money? [5, max 36]: 8
+```
+
+The default is five, and the ceiling is whatever that expiry actually lists —
+`max` is read off the chain, so it differs per name and per expiry. Ask for
+more than exists and it says so and shows what there is, rather than silently
+returning a shorter table. The count drives the ladder, the profit tables and
+the number of spread pairings alike, so `--strikes 3` gives three pairings and
+`--strikes 12` gives twelve of each. Set a different default in config with
+`{ "earnings": { "ladder_strikes": 8 } }`, or skip the question with
+`--strikes 8`.
+
+Wide is not always better: every extra strike is another column on the profit
+table, and those get wide fast on a narrow terminal.
+
+Then the strikes themselves, on the side you chose, for the expiry that
+captures the report:
 
 ```
  CALLS -- 2026-08-14 expiry, 5 strikes from the money
@@ -530,9 +661,11 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--entry` | Planned entry price. Defaults to the last close. |
 | `--stop` / `--target` | Your stop and profit target — needed to grade reward/risk. |
 | `--direction` | `long` or `short`. Inverts trend, momentum and RS checks. Defaults to `long`, or to whatever `--side` implies. |
-| `--instrument` | Earnings only: `O` options or `S` stock. Stock drops the chain panels and the checks that grade one. Prompts if omitted. |
+| `--instrument` | Earnings only: `O` single contracts, `S` stock, `C` call debit spread, `P` put debit spread. Each grades a different trade. Prompts if omitted. |
 | `--side` | Earnings options only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
-| `--contracts` | Earnings options only: how many contracts to buy. Prompts if omitted. |
+| `--strikes` | Earnings options only: strikes listed either side of the money. Default 5, capped at what the expiry carries. Prompts if omitted. |
+| `--contracts` | Earnings options only: how many contracts to buy. Prompts with prices if omitted. |
+| `--min-reward-risk` | Earnings spreads only: the reward:risk a pairing must clear, e.g. `1.5`. Prompts with prices if omitted; blank leaves it ungraded. |
 | `--account` | Account value, in dollars. |
 | `--risk` | Percent of the account risked on this trade. |
 | `--premium` | Dollars at risk outright (option premium). Overrides `--risk`. |

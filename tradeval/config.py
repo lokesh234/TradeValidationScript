@@ -45,7 +45,15 @@ class EarningsRules:
     min_dollar_volume: float = 20e6
     # Binary event: cap the account fraction at risk hard.
     max_account_risk_pct: float = 2.0
+    # Shares only. A contract position's notional is the premium, which the
+    # risk cap above already grades; a share position can be many times its
+    # own risk, and that exposure gaps overnight.
+    max_position_pct_of_account: float = 15.0
     max_extension_atr: float = 3.0
+    # Strikes listed either side of the money, and the number of spread
+    # pairings built from them. The prompt offers this as its default; the
+    # chain's own depth is the ceiling.
+    ladder_strikes: int = 5
     # Underlying moves modelled in the "profit next day" table, in percent.
     profit_move_pcts: List[float] = field(default_factory=lambda: [5.0, 10.0, 15.0, 20.0, 25.0])
     # Annual risk-free rate used to discount the repriced option.
