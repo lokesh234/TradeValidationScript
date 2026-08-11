@@ -144,7 +144,8 @@ class EarningsGambleStrategy(Strategy):
         A share trade stops after the first three: there is no chain to ladder
         and no premium to reprice the morning after.
         """
-        panels = [p for p in (self._estimates_panel(), self._buzz_panel(), self._peers_panel()) if p]
+        profile = None if self.ctx.profile_shown else self._estimates_panel()
+        panels = [p for p in (profile, self._buzz_panel(), self._peers_panel()) if p]
         if self.ctx.trades_options:
             panels.extend(self._ladder_panels())
             if self.ctx.trades_spread:
@@ -154,6 +155,14 @@ class EarningsGambleStrategy(Strategy):
         return panels
 
     # -- what the position costs, before you are asked to size it -----------
+
+    def profile_panel(self) -> Optional[Panel]:
+        """The table to print before the sizing questions.
+
+        The same one the report would show, consensus rows and all, so putting
+        it up front costs the report nothing.
+        """
+        return self._estimates_panel()
 
     def max_strikes(self) -> Optional[int]:
         """How deep the chain goes, so the ladder is never asked for more."""

@@ -45,6 +45,9 @@ class TradeContext:
     contracts: int = 1
     # Strikes either side of the money to list, and to build spreads from.
     strikes: int = 5
+    # Set once the profile has been printed for this run -- ahead of the
+    # sizing questions -- so the report does not repeat it a screen later.
+    profile_shown: bool = False
     # Spreads: the reward:risk the trader will not go below. None leaves the
     # pairings ungraded, since the floor is a preference rather than a fact.
     min_reward_risk: Optional[float] = None

@@ -605,6 +605,10 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     those answers.
     """
     ctx = strategy.ctx
+    # Only an earnings trade has a chain to price, or a position sized off one.
+    # A short or long trade collects everything it needs before it gets here.
+    if strategy.key != "earnings":
+        return
     wants_shares = not ctx.trades_options and args.size is None
     wants_count = ctx.trades_options and args.contracts is None
     wants_floor = ctx.trades_spread and args.min_reward_risk is None
@@ -617,10 +621,12 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     if not (wants_shares or wants_count or wants_floor or wants_strikes):
         return
 
-    panel = strategy.stock_info_panel()
+    panel = strategy.profile_panel()
     if panel:
         for line in layout_panels([panel], palette, width):
             print(line)
+        # The report would print the same table a screen later. Once is enough.
+        ctx.profile_shown = True
 
     if wants_strikes:
         ctx.strikes = prompt_strikes(ctx.strikes, strategy.max_strikes())
