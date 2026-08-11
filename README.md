@@ -9,7 +9,7 @@ makes a long-term hold good.
 
 | # | Type | Horizon | What it grades |
 |---|------|---------|----------------|
-| 1 | **Earnings Gamble** | 0-10 days, event driven | Is the event confirmed, does this name actually move on earnings, and is the options market charging more than the move is historically worth |
+| 1 | **Earnings Gamble** | 0-10 days, event driven | Is the event confirmed, does this name actually move on earnings, and — for a contract trade — is the options market charging more than the move is historically worth. Ask it for [stock instead](#options-or-stock) and it grades the shares |
 | 2 | **Short Term** | 2-20 trading days | Trend, momentum, relative strength, how extended the entry is, reward/risk, and whether earnings lands mid-trade |
 | 3 | **Long Term** | 1 year or more | Profitability, free cash flow, growth, balance sheet, valuation, and entry point |
 
@@ -192,35 +192,93 @@ Whichever report you choose drives the whole checklist — the days-to-earnings
 window, the option expiry used for the implied move, and the IV term structure
 all follow it. Skip the prompt with `--earnings-date 2026-08-13`.
 
-### Consensus estimates
+### The stock info panel
 
-An earnings gamble prints what the street expects from the report you selected:
+Every strategy prints the same profile of the company, and an earnings gamble
+adds what the street expects from the report you selected:
 
 ```
  STOCK INFO -- with consensus for the 2026-08-13 report
-  Metric                                             Value                 Range / note                  What's good
-  Market cap                                      $417.31B                                       $10B+ trades liquid
-  Price                                            $525.61             63% of 52w range        upper half = strength
-  52-week high                                     $739.67             spot 28.9% below
-  52-week low                                      $154.47            spot 240.3% above
-  Forward P/E                                        30.46               49.35 trailing            S&P averages ~22x
-  PEG ratio                                           1.19  P/E against expected growth    under 1.0 is cheap growth
-  Expected EPS                                        3.39                  3.21 - 3.56
-  Expected earnings (quarter)                       $2.70B         EPS x 793.96M shares
-  Expected revenue (quarter)                        $9.00B              $8.95B - $9.20B
+  Technology / Semiconductor Equipment & Materials -- 36,400 employees
+  Applied Materials, Inc. provides materials engineering solutions, equipment, services, and software to the semiconductor and
+  related industries in the United States, China, Korea, Taiwan, Japan, Southeast Asia, Europe, and internationally. The company
+  operates through Semiconductor Systems and Applied Global Services (AGS) segments.
+
+  Metric                                             Value                   Range / note                   What's good
+  SIZE AND PRICE
+  Market cap                                      $417.31B                                          $10B+ trades liquid
+  Price                                            $525.61               63% of 52w range         upper half = strength
+  52-week high                                     $739.67               spot 28.9% below
+  52-week low                                      $154.47              spot 240.3% above
+  Traded per day                                    $3.86B   7.36M shares, 20-day average       $20M+/day fills cleanly
+  TREND AND MOMENTUM
+  50-day SMA                                       $556.07                spot 5.5% below          the swing-trade line
+  200-day SMA                                      $384.17               spot 36.8% above          the bull / bear line
+  50-day EMA                                       $528.63                spot 0.6% below    same window, reacts faster
+  200-day EMA                                      $409.70               spot 28.3% above       the slow line, weighted
+  VWAP, 20-day                                     $527.23                spot 0.3% below      the month's average cost
+  VWAP, 1-year                                     $354.12               spot 48.4% above   where the year's buyers sit
+  RSI (14)                                            48.0          momentum over 14 days    30-70 normal, 70+ extended
+  ATR (14)                                          $36.46                  6.9% of price  a day's range, sets the stop
+  vs SPY, 3 months                                  +14.3%           +18.5% against +4.2%  positive means it is leading
+  VALUATION
+  Forward P/E                                        30.46                 49.35 trailing             S&P averages ~22x
+  PEG ratio                                           1.19    P/E against expected growth     under 1.0 is cheap growth
+  Price / sales                                      14.38   market cap per $1 of revenue     under 3 typical, 10+ rich
+  EV / EBITDA                                        44.59            counts the debt too              under 15 typical
+  THE COMING REPORT
+  Expected EPS                                        3.39                    3.21 - 3.56
+  Expected earnings (quarter)                       $2.70B           EPS x 793.96M shares
+  Expected revenue (quarter)                        $9.00B                $8.95B - $9.20B
+  THE BUSINESS
   Revenue (trailing 12m)                           $29.02B
-  Free cash flow                                    $5.70B          1.37% of market cap  positive, 5%+ of cap strong
-  Analyst target                                   $633.34             +20.5% from spot       targets skew ~15% high
-  Target range                 $358.00 - $900.00, 86% wide      35 analysts, strong buy   under 40% wide = agreement
-  Revenue growth                                    +11.4%               year over year        10%+ solid, 25%+ fast
-  Earnings growth                                   +31.3%     most recent quarter, YoY  should keep pace with sales
-  Profit margin                                      29.3%                               10%+ healthy, under 0 burns
-  Beta                                                1.62       amplifies market moves  over 2 needs a smaller size
-  Institutional held                                 84.7%                insiders 0.3%             40-80% is normal
+  Revenue growth                                    +11.4%                 year over year         10%+ solid, 25%+ fast
+  Earnings growth                                   +31.3%       most recent quarter, YoY   should keep pace with sales
+  Gross margin                                       49.0%     before running the company          40%+ = pricing power
+  Profit margin                                      29.3%     net income per $1 of sales   10%+ healthy, under 0 burns
+  Return on equity                                   39.7%  earned on shareholder capital           15%+ compounds well
+  Free cash flow                                    $5.70B            1.37% of market cap   positive, 5%+ of cap strong
+  Next earnings                                 2026-08-13                      in 2 days
+  BALANCE SHEET
+  Net cash                                        $973.00M     $8.24B cash vs $7.27B debt  cash above debt is a cushion
+  Debt / equity                                      30.4%      debt per $1 of book value     under 100% is comfortable
+  THE STREET AND THE FLOAT
+  Analyst target                                   $633.34               +20.5% from spot        targets skew ~15% high
+  Target range                 $358.00 - $900.00, 86% wide        35 analysts, strong buy    under 40% wide = agreement
+  Institutional held                                 84.7%                  insiders 0.3%              40-80% is normal
+  Short interest                                      2.1%            of float sold short  over 10% of float is crowded
+  Beta                                                1.62         amplifies market moves   over 2 needs a smaller size
+  Dividend yield                                     0.41%              17.3% of earnings            the S&P pays ~1.2%
 ```
 
-The same panel prints for a short term or long term trade, without the three
-consensus rows.
+A short term or long term trade gets the same panel without `THE COMING
+REPORT`.
+
+The two lines under the title say what you're actually buying: sector,
+industry, headcount, then the opening sentences of the company's own business
+description. Worth reading before the numbers — plenty of tickers are not the
+business you assumed they were.
+
+Rows are grouped because you read them one question at a time: where it is
+trading (`TREND AND MOMENTUM`), what it costs (`VALUATION`), whether it earns
+(`THE BUSINESS`), whether it can pay its debts (`BALANCE SHEET`), and who else
+is in it (`THE STREET AND THE FLOAT`).
+
+`TREND AND MOMENTUM` carries the lines price is trading against — 50 and 200
+day, simple and exponential — each with **where spot sits against it**, since a
+moving average on its own tells you nothing. Both VWAPs are built from daily
+bars rather than intraday ticks: what the average share actually cost over the
+last month and the last year, so you can see whether those buyers are above
+water. A young listing reports `not enough history` instead of a 200-day line
+built from sixty days — an EWM will happily produce one, which is the trap.
+
+Four weights of colour carry that structure in a terminal: section headings in
+the panel's own cyan, live figures in bold, the note beside each in grey, and
+the standing benchmark a shade quieter again. Figures colour by **sign only** —
+red for a negative, green for an explicit `+`, grey for `Not Available` so
+missing data stops competing with real numbers. Whether a P/E of 30 is good is
+your call; a minus in front of free cash flow is a fact, and that is the line
+the colour respects.
 
 `What's good` is the range the figure usually lives in, so a number means
 something without knowing the norms already — the S&P trades around 22x
@@ -233,7 +291,15 @@ something true of nothing.
 `PEG ratio` divides the P/E by expected earnings growth: it is the answer to
 "that multiple is high, but is it high for how fast this is growing?" Yahoo
 only publishes it when the company earns money and analysts forecast growth, so
-a loss-maker reads `Not Available` with a note saying what it would need.
+a loss-maker reads `Not Available` with a note saying what it would need. That
+is exactly when `Price / sales` and `EV / EBITDA` earn their place — they still
+say something about a company with no profit to divide by.
+
+Two figures are rebuilt rather than reported, because Yahoo publishes a wrong
+one: `Price / sales` goes missing whenever the market cap does, and is derived
+from cap over revenue instead; `Profit margin` comes back as exactly `0.0%` for
+some loss-makers — OKLO reads zero on a $152M loss — so a flat zero is
+recomputed from net income over revenue.
 
 The 52-week high and low come from the price history already downloaded, not
 the profile payload, so they survive a thin `info` response. `Price` shows where
@@ -251,9 +317,53 @@ carries its yield against market cap so you can read the two rows together.
 Anything Yahoo doesn't publish reads `Not Available`, and if none of it is
 available the whole panel is dropped.
 
+### Options or stock
+
+An earnings gamble first asks what you're actually buying:
+
+```
+Are you trading options or the stock itself?
+
+  O) Options  contracts on the report
+  S) Stock    shares held through it
+
+Choice [O/S]: S
+```
+
+Holding shares through a report is a different trade from buying contracts on
+it, so the report changes rather than merely hiding a table. **Stock** drops
+the option ladders and the profit-next-day tables, and with them the three
+checks that only grade a chain — implied vs historical move, IV crush risk and
+options liquidity. That last one is *critical* for a contract trade: leaving it
+in would let a wide book veto a share position that never touches the book.
+
+In their place comes **Stop vs expected move**. The straddle still prices the
+event even when you are not buying it — it is the market's own estimate of the
+gap you are about to hold overnight, and a stop tighter than that gets jumped
+rather than filled:
+
+```
+  FAIL   Stop vs expected move  2.9% stop vs 8.2% implied  stop distance against the move the
+                                                           options price in -- the gap jumps
+                                                           this stop, size for the loss
+```
+
+A stop wider than the implied move passes, one inside half of it fails, and
+with no `--stop` given the check warns and tells you the gap the market is
+pricing.
+
+The sizing prompts follow the same fork: options ask for premium at risk,
+shares ask for entry, stop and percent of account. The report header names the
+choice — `0-10 days, shares` rather than `0-10 days, options` — so a saved run
+says which trade it graded.
+
+Skip the prompt with `--instrument S` (or `O`, or the long spellings `stock`
+and `options`).
+
 ### Calls or puts
 
-An earnings gamble then asks which side of the chain you're trading:
+An earnings **options** gamble then asks which side of the chain you're
+trading:
 
 ```
 Calls or Puts? [C/P, or B for both]: C
@@ -420,8 +530,9 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--entry` | Planned entry price. Defaults to the last close. |
 | `--stop` / `--target` | Your stop and profit target — needed to grade reward/risk. |
 | `--direction` | `long` or `short`. Inverts trend, momentum and RS checks. Defaults to `long`, or to whatever `--side` implies. |
-| `--side` | Earnings only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
-| `--contracts` | Earnings only: how many contracts to buy. Prompts if omitted. |
+| `--instrument` | Earnings only: `O` options or `S` stock. Stock drops the chain panels and the checks that grade one. Prompts if omitted. |
+| `--side` | Earnings options only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
+| `--contracts` | Earnings options only: how many contracts to buy. Prompts if omitted. |
 | `--account` | Account value, in dollars. |
 | `--risk` | Percent of the account risked on this trade. |
 | `--premium` | Dollars at risk outright (option premium). Overrides `--risk`. |
@@ -463,6 +574,11 @@ python3 -m venv .venv
   outright, no matter how high the score is — that's why you can see `NO-GO` at
   76/100.
 - Default cutoffs: **GO** at 75+, **CAUTION** at 60-75, **NO-GO** below.
+
+Colour is consistent throughout the report: **bold is a figure**, grey is the
+explanation of it, and colour is a verdict — the status badge, or the sign of a
+number. A skipped check keeps its `n/a` grey, since there is no figure there to
+find.
 
 ### Width
 

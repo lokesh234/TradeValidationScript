@@ -177,6 +177,23 @@ EOF
     return 0
 }
 
+# Options or shares. Everything the earnings report grades follows from it, so
+# it is asked before the sizing questions -- premium or stop, not both.
+choose_instrument() {
+    INSTRUMENT=""
+    printf '\n%sAre you trading options or the stock itself?%s\n\n' "$BOLD" "$OFF"
+    printf '  O) Options  %scontracts on the report%s\n'  "$DIM" "$OFF"
+    printf '  S) Stock    %sshares held through it%s\n\n' "$DIM" "$OFF"
+    while true; do
+        ask reply "Choice [O/S]"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            o|opt|option|options) INSTRUMENT="options"; return ;;
+            s|stock|stocks|share|shares) INSTRUMENT="stock"; return ;;
+            *) printf '  %sO for options, S for stock.%s\n' "$DIM" "$OFF" ;;
+        esac
+    done
+}
+
 choose_ticker() {
     local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0
     # An earnings gamble offers this week's reporters to choose from.
@@ -270,8 +287,19 @@ collect_details() {
 
     case "$STRATEGY" in
         earnings)
-            ask_number premium "  Option premium at risk in \$ (Enter to skip)"
-            [ -n "$premium" ] && ARGS+=(--premium "$premium")
+            if [ "$INSTRUMENT" = "stock" ]; then
+                # Shares are sized off the stop, not off a premium.
+                ask_number risk   "  Percent of account to risk (Enter to skip)"
+                [ -n "$risk" ] && ARGS+=(--risk "$risk")
+                ask_number entry  "  Entry price (Enter for last close)"
+                [ -n "$entry" ] && ARGS+=(--entry "$entry")
+                ask_number stop   "  Stop-loss price (Enter to skip)"
+                [ -n "$stop" ] && ARGS+=(--stop "$stop")
+                confirm "  Short the stock instead of buying it" && ARGS+=(--direction short)
+            else
+                ask_number premium "  Option premium at risk in \$ (Enter to skip)"
+                [ -n "$premium" ] && ARGS+=(--premium "$premium")
+            fi
             ;;
         short)
             ask_number risk   "  Percent of account to risk (Enter to skip)"
@@ -322,7 +350,9 @@ LAST_STATUS=0
 while true; do
     choose_strategy
     HORIZON=""
+    INSTRUMENT=""
     [ "$STRATEGY" = "short" ] && choose_horizon
+    [ "$STRATEGY" = "earnings" ] && choose_instrument
     choose_ticker
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
@@ -339,6 +369,7 @@ while true; do
     # Word splitting on TICKERS is deliberate: multiple symbols are allowed.
     # shellcheck disable=SC2086
     [ -n "$HORIZON" ] && ARGS+=(--horizon "$HORIZON")
+    [ -n "$INSTRUMENT" ] && ARGS+=(--instrument "$INSTRUMENT")
     "$PY" "$ROOT/validate.py" $TICKERS -t "$STRATEGY" ${ARGS[@]+"${ARGS[@]}"}
     LAST_STATUS=$?
 

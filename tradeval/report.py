@@ -9,7 +9,7 @@ import sys
 from typing import List, Optional, Sequence
 
 from .checks import Status
-from .strategies.base import Panel, Report
+from .strategies.base import UNAVAILABLE, Panel, Report
 
 MIN_WIDTH = 72
 MAX_WIDTH = 200
@@ -50,6 +50,14 @@ class Palette:
 
     def grey(self, text: str) -> str:
         return self._wrap("90", text)
+
+    def faint(self, text: str) -> str:
+        """A step quieter than grey, for reference text beside live figures.
+
+        Terminals without faint support render it as plain grey, which is the
+        old appearance rather than a broken one.
+        """
+        return self._wrap("2;90", text)
 
     def bold(self, text: str) -> str:
         return self._wrap("1", text)
@@ -156,7 +164,8 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
         # digits.
         if fits:
             head = "  %s %s %s  %s  " % (
-                badge, flag, result.name.ljust(name_w), palette.grey(result.value.ljust(value_w)),
+                badge, flag, result.name.ljust(name_w),
+                _check_value(result, result.value.ljust(value_w), palette),
             )
             lines = _wrap_text(detail, width, " " * detail_col)
             out.append(head + palette.grey(lines[0].strip()))
@@ -166,7 +175,7 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
         if result.value:
             out.append(
                 "  %s %s %s  %s"
-                % (badge, flag, result.name.ljust(name_w), palette.grey(result.value))
+                % (badge, flag, result.name.ljust(name_w), _check_value(result, result.value, palette))
             )
         else:
             out.append("  %s %s %s" % (badge, flag, result.name))
@@ -176,6 +185,17 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
             indent = " " * (detail_col if inline else 11)
             out.extend(palette.grey(line) for line in _wrap_text(detail, width, indent))
     return out
+
+
+def _check_value(result, text: str, palette: Palette) -> str:
+    """The figure a check turned on, emphasised so the column can be scanned.
+
+    A skip has no figure to emphasise -- its 'n/a' stays grey rather than
+    drawing the eye to the one row that measured nothing.
+    """
+    if result.status is Status.SKIP or result.value.strip() in ("", "n/a"):
+        return palette.grey(text)
+    return palette.bold(text)
 
 
 def _render_verdict(report: Report, palette: Palette) -> List[str]:
@@ -351,10 +371,20 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
             parts.append(_color_cell(cell, padded, palette) if colorize and i else padded)
         return ("  " + "  ".join(parts)).rstrip()
 
-    out = [palette.cyan(palette.bold(" " + panel.title)), palette.grey(line(panel.headers))]
+    out = [palette.cyan(palette.bold(" " + panel.title))]
+    for paragraph in panel.lead:
+        out.extend(palette.grey(l) for l in _wrap_text(paragraph, width, "  "))
+    if panel.lead:
+        out.append("")
+    out.append(palette.grey(line(panel.headers)))
     if panel.subheaders:
         out.append(palette.grey(line(panel.subheaders)))
     for index, row in enumerate(panel.rows):
+        if index in panel.sections:
+            # Headings carry the title's colour, a step down from it in weight,
+            # so blocks separate without competing with the panel name.
+            out.append(palette.cyan(line(row)))
+            continue
         if index in panel.dim:
             out.append(palette.grey(line(row)))
             continue
@@ -379,6 +409,10 @@ def _render_info_row(
     when the row carries a verdict of its own. Column 0 is the label and column
     1 the figure, so everything past them is supporting text.
     """
+    def figure(padded: str, plain: str) -> str:
+        painter = getattr(palette, style, None) if style else None
+        return painter(padded) if painter else _sign_colour(plain, padded, palette)
+
     first_note = 2
     # Stop at the last cell with content. Padding an empty trailing cell would
     # bury spaces inside a colour escape where rstrip cannot reach them, and
@@ -400,12 +434,32 @@ def _render_info_row(
             padded = cell.rjust(widths[index])
         if index == 0:
             parts.append(padded)
-        elif index >= first_note:
+        elif index == first_note:
             parts.append(palette.grey(padded))
+        elif index > first_note:
+            # Anything past the note is standing reference text -- true of the
+            # metric, not of this stock -- so it sits a shade quieter again.
+            parts.append(palette.faint(padded))
         else:
-            painter = getattr(palette, style, None) if style else None
-            parts.append(painter(padded) if painter else palette.bold(padded))
+            parts.append(figure(padded, cell.strip()))
     return "  " + "  ".join(parts)
+
+
+def _sign_colour(plain: str, padded: str, palette: Palette) -> str:
+    """Emphasis for a figure, and its direction where it has one.
+
+    Only the sign is coloured, never the reading: whether a P/E of 30 is good
+    is the reader's call, but a minus in front of free cash flow is a fact.
+    Missing data recedes instead of shouting in bold beside real numbers.
+    """
+    if not plain or plain == UNAVAILABLE:
+        return palette.grey(padded)
+    figure = plain.lstrip("$")
+    if figure.startswith("+"):
+        return palette.green(padded)
+    if figure.startswith("-") and len(figure) > 1:
+        return palette.red(padded)
+    return palette.bold(padded)
 
 
 def _color_cell(plain: str, padded: str, palette: Palette) -> str:

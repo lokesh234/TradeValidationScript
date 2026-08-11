@@ -33,6 +33,10 @@ class TradeContext:
     earnings_date: Optional[dt.date] = None
     # Short term: how long the trade is meant to be held ("1m", "3m", "6m").
     horizon: str = "1m"
+    # Earnings: whether the trade is in options or in the shares themselves.
+    # A share trade has no premium to crush and no chain to price, so the
+    # option checks and panels drop out of the report entirely.
+    instrument: str = "options"
     # Which side of the option chain to show: call, put, or both.
     option_side: str = "both"
     # How many contracts the trade is sized at.
@@ -42,9 +46,13 @@ class TradeContext:
     # Peer earnings read-across costs a lookup per peer, so it is opt-in.
     include_peers: bool = False
 
+    @property
+    def trades_options(self) -> bool:
+        return self.instrument != "stock"
+
     def shows(self, kind: str) -> bool:
         """Whether contracts of this kind ('call'/'put') should be displayed."""
-        return self.option_side in ("both", kind)
+        return self.trades_options and self.option_side in ("both", kind)
 
     def set_derived_premium(self, per_contract_cost: Optional[float]) -> Optional[float]:
         """Fill in the dollars at risk from the contract count, if not given.

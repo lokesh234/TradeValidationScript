@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import cached_property
@@ -36,6 +37,37 @@ def _growth_pct(fraction: Optional[float]) -> str:
     return "%+.1f%%" % (fraction * 100.0) if fraction is not None else UNAVAILABLE
 
 
+# Sentence enders that are not the end of a sentence. Yahoo's summaries open
+# with the legal name, so "Micron Technology, Inc. designs..." would otherwise
+# be cut in half.
+_ABBREVIATIONS = (
+    "inc.", "corp.", "co.", "ltd.", "llc.", "plc.", "l.p.", "s.a.", "n.v.",
+    "a.g.", "u.s.", "u.k.",
+)
+
+
+def _first_sentences(text: Optional[str], count: int = 2, limit: int = 400) -> str:
+    """The opening sentences of a business summary.
+
+    Yahoo's runs to a page: the first sentences say what the company sells,
+    the rest lists segments and the incorporation date. Two is enough to know
+    what you are buying.
+    """
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    sentences: List[str] = []
+    for part in re.split(r"(?<=[.!?])\s+(?=[A-Z(])", cleaned):
+        if sentences and sentences[-1].lower().endswith(_ABBREVIATIONS):
+            sentences[-1] += " " + part
+        else:
+            sentences.append(part)
+    summary = " ".join(sentences[:count])
+    if len(summary) > limit:
+        summary = summary[:limit].rsplit(" ", 1)[0] + "..."
+    return summary
+
+
 def _gap_note(spot: Optional[float], level: Optional[float], direction: str) -> str:
     """How far the current price sits from a level, e.g. 'spot 8.0% below'."""
     if not spot or not level or level <= 0:
@@ -59,15 +91,34 @@ def _span(low: Optional[float], high: Optional[float], fmt: Optional[str]) -> st
 # purpose, so a filled cell is always an actual claim.
 GOOD_MARKET_CAP = "$10B+ trades liquid"
 GOOD_RANGE_POSITION = "upper half = strength"
+GOOD_DOLLAR_VOLUME = "$20M+/day fills cleanly"
+GOOD_SMA_50 = "the swing-trade line"
+GOOD_SMA_200 = "the bull / bear line"
+GOOD_EMA_50 = "same window, reacts faster"
+GOOD_EMA_200 = "the slow line, weighted"
+GOOD_VWAP_MONTH = "the month's average cost"
+GOOD_VWAP_YEAR = "where the year's buyers sit"
+GOOD_RSI = "30-70 normal, 70+ extended"
+GOOD_ATR = "a day's range, sets the stop"
+GOOD_RELATIVE_STRENGTH = "positive means it is leading"
 GOOD_FORWARD_PE = "S&P averages ~22x"
 GOOD_LOSS_MAKING = "negative = losses expected"
 GOOD_PEG = "under 1.0 is cheap growth"
+GOOD_PRICE_TO_SALES = "under 3 typical, 10+ rich"
+GOOD_EV_EBITDA = "under 15 typical"
 GOOD_FREE_CASH_FLOW = "positive, 5%+ of cap strong"
 GOOD_ANALYST_TARGET = "targets skew ~15% high"
 GOOD_TARGET_SPREAD = "under 40% wide = agreement"
 GOOD_REVENUE_GROWTH = "10%+ solid, 25%+ fast"
 GOOD_EARNINGS_GROWTH = "should keep pace with sales"
+GOOD_GROSS_MARGIN = "40%+ = pricing power"
 GOOD_PROFIT_MARGIN = "10%+ healthy, under 0 burns"
+GOOD_RETURN_ON_EQUITY = "15%+ compounds well"
+GOOD_NET_CASH = "cash above debt is a cushion"
+GOOD_LEVERAGE = "under 3x is comfortable"
+GOOD_DEBT_TO_EQUITY = "under 100% is comfortable"
+GOOD_DIVIDEND = "the S&P pays ~1.2%"
+GOOD_SHORT_INTEREST = "over 10% of float is crowded"
 GOOD_BETA = "over 2 needs a smaller size"
 GOOD_INSTITUTIONAL = "40-80% is normal"
 
@@ -83,6 +134,9 @@ class Panel:
     title: str
     headers: List[str]
     rows: List[List[str]]
+    # Paragraphs printed between the title and the table, wrapped to the
+    # report width -- prose the table has no column for.
+    lead: List[str] = field(default_factory=list)
     # A second header line, e.g. what each column's contract costs.
     subheaders: List[str] = field(default_factory=list)
     # Panels sharing a key are natural neighbours (calls beside puts) and are
@@ -94,6 +148,8 @@ class Panel:
     highlight_label: str = "ATM"
     # Rows rendered grey, for values that support the row above them.
     dim: List[int] = field(default_factory=list)
+    # Label-only rows that head a block of related metrics.
+    sections: List[int] = field(default_factory=list)
     # Extra columns to left-align. Column 0 always is; text columns read
     # badly ragged-left when right-aligned with the numbers.
     left_align: List[int] = field(default_factory=list)
@@ -278,26 +334,70 @@ class Strategy(ABC):
     ) -> Optional[Panel]:
         """The profile every strategy wants: size, price, valuation, quality.
 
-        ``extras`` are inserted after the valuation rows, which is where a
-        strategy's own numbers belong -- earnings consensus, for instance.
+        Grouped rather than run together, because the reader is asking one
+        question at a time -- what does it cost, does it earn, can it pay its
+        debts, who else is in it. ``extras`` get a section of their own after
+        the valuation rows, for a strategy's own numbers: earnings consensus,
+        for instance.
         """
+        rows: List[List[str]] = []
+        headings: List[int] = []
+
+        def heading(label: str) -> None:
+            headings.append(len(rows))
+            rows.append([label, "", "", ""])
+
+        heading("SIZE AND PRICE")
+        rows.extend(self._price_rows())
+        heading("TREND AND MOMENTUM")
+        rows.extend(self._trend_rows())
+        heading("VALUATION")
+        rows.extend(self._valuation_rows())
+        if extras:
+            heading("THE COMING REPORT")
+            rows.extend(extras)
+        heading("THE BUSINESS")
+        rows.extend(self._business_rows())
+        heading("BALANCE SHEET")
+        rows.extend(self._balance_sheet_rows())
+        heading("THE STREET AND THE FLOAT")
+        rows.extend(self._analyst_rows(self.data.price))
+        rows.extend(self._ownership_rows())
+
+        figures = [row for index, row in enumerate(rows) if index not in headings]
+        if all(row[1] == UNAVAILABLE for row in figures):
+            return None
+        return Panel(
+            title=title,
+            lead=[line for line in (self._profile_line(), self._business_summary()) if line],
+            headers=["Metric", "Value", "Range / note", "What's good"],
+            rows=rows,
+            sections=headings,
+            label_value_note=True,
+            note=note,
+        )
+
+    def _profile_line(self) -> str:
+        """Sector, industry and headcount -- what kind of company this is."""
+        info = self.data.info
+        sector = self.data.sector
+        parts = [str(info.get(key) or "").strip() for key in ("sector", "industry")]
+        line = " / ".join(p for p in parts if p) or (sector if sector != "Unknown" else "")
+        staff = self.data.info_value("fullTimeEmployees")
+        if staff:
+            line += " -- %s employees" % "{:,}".format(int(staff))
+        return line
+
+    def _business_summary(self) -> str:
+        return _first_sentences(self.data.info.get("longBusinessSummary"))
+
+    def _price_rows(self) -> List[List[str]]:
         data = self.data
         spot = data.price
         high, low = data.fifty_two_week_range
-        market_cap = data.market_cap
-        fcf = data.latest_free_cash_flow
-        fcf_note = ""
-        if fcf is not None and market_cap:
-            fcf_note = "%.2f%% of market cap" % (fcf / market_cap * 100.0)
-
-        peg = data.info_value("trailingPegRatio", "pegRatio")
-        forward_pe = data.info_value("forwardPE")
-        # A negative forward P/E is not a cheap one: it means the street models
-        # a loss, and the multiple is meaningless rather than attractive.
-        pe_guide = GOOD_LOSS_MAKING if forward_pe is not None and forward_pe <= 0 else GOOD_FORWARD_PE
-
-        rows: List[List[str]] = [
-            ["Market cap", _money(market_cap), "", GOOD_MARKET_CAP],
+        volume = data.avg_volume()
+        return [
+            ["Market cap", _money(data.market_cap), "", GOOD_MARKET_CAP],
             [
                 "Price",
                 _num(spot, "$%.2f"),
@@ -306,6 +406,101 @@ class Strategy(ABC):
             ],
             ["52-week high", _num(high, "$%.2f"), _gap_note(spot, high, "below")],
             ["52-week low", _num(low, "$%.2f"), _gap_note(spot, low, "above")],
+            [
+                "Traded per day",
+                _money(data.avg_dollar_volume()),
+                "%s shares, 20-day average" % _human(volume) if volume else "",
+                GOOD_DOLLAR_VOLUME,
+            ],
+        ]
+
+    def _trend_rows(self) -> List[List[str]]:
+        """The lines the price is trading against, and how hard it is moving.
+
+        Each level carries where spot sits against it, because the level on its
+        own says nothing -- a 200-day average is only news relative to price.
+        """
+        spot = self.data.price
+        close = self.data.close
+
+        def level(label: str, value: Optional[float], guide: str) -> List[str]:
+            if value is None:
+                return [label, UNAVAILABLE, "not enough history", guide]
+            side = "above" if spot >= value else "below"
+            return [label, "$%.2f" % value, _gap_note(spot, value, side), guide]
+
+        def moving_average(window: int) -> Optional[float]:
+            # An EWM produces a number from the very first bar, so a young
+            # listing would otherwise show a "200-day" line built from sixty.
+            return ind.last_value(ind.ema(close, window)) if len(close) >= window else None
+
+        def average_price(window: int) -> Optional[float]:
+            return ind.vwap(self.history, window) if len(self.history) >= window else None
+
+        rows = [
+            level("50-day SMA", self.sma50, GOOD_SMA_50),
+            level("200-day SMA", self.sma200, GOOD_SMA_200),
+            level("50-day EMA", moving_average(50), GOOD_EMA_50),
+            level("200-day EMA", moving_average(200), GOOD_EMA_200),
+            level("VWAP, 20-day", average_price(20), GOOD_VWAP_MONTH),
+            level("VWAP, 1-year", average_price(ind.TRADING_DAYS), GOOD_VWAP_YEAR),
+            [
+                "RSI (14)",
+                _num(self.rsi14, "%.1f"),
+                "momentum over 14 days",
+                GOOD_RSI,
+            ],
+            [
+                "ATR (14)",
+                _num(self.atr, "$%.2f"),
+                _num(self.atr_pct, "%.1f%% of price"),
+                GOOD_ATR,
+            ],
+        ]
+
+        # Leadership only means something against a market, so this row exists
+        # only when the benchmark downloaded.
+        bench = self.data.benchmark_history
+        if bench is not None:
+            window = 63  # a quarter of trading
+            stock = ind.pct_change_over(close, window)
+            market = ind.pct_change_over(bench["Close"], window)
+            label = "vs %s, 3 months" % self.data.benchmark_symbol
+            if stock is None or market is None:
+                rows.append([label, UNAVAILABLE, "not enough history", GOOD_RELATIVE_STRENGTH])
+            else:
+                rows.append(
+                    [
+                        label,
+                        "%+.1f%%" % (stock - market),
+                        "%+.1f%% against %+.1f%%" % (stock, market),
+                        GOOD_RELATIVE_STRENGTH,
+                    ]
+                )
+        return rows
+
+    def _valuation_rows(self) -> List[List[str]]:
+        """What the price implies, by three different measures.
+
+        P/E needs profit and PEG needs a forecast on top of it, so a young
+        company scores Not Available on both. Price/sales and EV/EBITDA still
+        say something there, which is exactly when you want them.
+        """
+        data = self.data
+        peg = data.info_value("trailingPegRatio", "pegRatio")
+        forward_pe = data.info_value("forwardPE")
+        # A negative forward P/E is not a cheap one: it means the street models
+        # a loss, and the multiple is meaningless rather than attractive.
+        pe_guide = GOOD_LOSS_MAKING if forward_pe is not None and forward_pe <= 0 else GOOD_FORWARD_PE
+
+        revenue = data.info_value("totalRevenue")
+        price_to_sales = data.info_value("priceToSalesTrailing12Months")
+        if price_to_sales is None and data.market_cap and revenue:
+            # Yahoo derives this from its own market cap, so it goes missing
+            # exactly where the cap does. The inputs are both here.
+            price_to_sales = data.market_cap / revenue
+
+        return [
             [
                 "Forward P/E",
                 _num(forward_pe, "%.2f"),
@@ -316,26 +511,161 @@ class Strategy(ABC):
                 "PEG ratio",
                 _num(peg, "%.2f"),
                 # Yahoo only publishes a PEG where both halves exist, so say
-                # which one is missing rather than leaving a bare n/a.
+                # what is missing rather than leaving a bare n/a.
                 "P/E against expected growth" if peg is not None else "needs profit and a forecast",
                 GOOD_PEG,
             ],
+            [
+                "Price / sales",
+                _num(price_to_sales, "%.2f"),
+                "market cap per $1 of revenue",
+                GOOD_PRICE_TO_SALES,
+            ],
+            [
+                "EV / EBITDA",
+                _num(data.info_value("enterpriseToEbitda"), "%.2f"),
+                "counts the debt too",
+                GOOD_EV_EBITDA,
+            ],
         ]
-        rows.extend(extras or [])
-        rows.append(["Revenue (trailing 12m)", _money(data.info_value("totalRevenue")), ""])
-        rows.append(["Free cash flow", _money(fcf), fcf_note, GOOD_FREE_CASH_FLOW])
-        rows.extend(self._analyst_rows(spot))
-        rows.extend(self._quality_rows())
 
-        if all(row[1] == UNAVAILABLE for row in rows):
-            return None
-        return Panel(
-            title=title,
-            headers=["Metric", "Value", "Range / note", "What's good"],
-            rows=rows,
-            label_value_note=True,
-            note=note,
-        )
+    def _business_rows(self) -> List[List[str]]:
+        """Is it growing, does it earn, and when does it report next?"""
+        data = self.data
+        market_cap = data.market_cap
+        fcf = data.latest_free_cash_flow
+        fcf_note = ""
+        if fcf is not None and market_cap:
+            fcf_note = "%.2f%% of market cap" % (fcf / market_cap * 100.0)
+
+        revenue = data.info_value("totalRevenue")
+        net_income = data.info_value("netIncomeToCommon")
+        margin = data.info_value("profitMargins")
+        if not margin and net_income is not None and revenue:
+            # Yahoo zeroes this field for some loss-makers: OKLO reads a 0.0%
+            # margin on a $152M loss. A margin of exactly nothing is not a
+            # reading, so derive it from the two numbers behind it instead.
+            margin = net_income / revenue
+
+        rows = [
+            ["Revenue (trailing 12m)", _money(revenue), ""],
+            [
+                "Revenue growth",
+                _growth_pct(data.info_value("revenueGrowth")),
+                "year over year",
+                GOOD_REVENUE_GROWTH,
+            ],
+            [
+                "Earnings growth",
+                _growth_pct(data.info_value("earningsQuarterlyGrowth")),
+                "most recent quarter, YoY",
+                GOOD_EARNINGS_GROWTH,
+            ],
+            [
+                "Gross margin",
+                # Banks and insurers have no cost of revenue to speak of, and
+                # Yahoo returns a flat zero rather than nothing. No business
+                # sells at exactly cost, so read it as the missing figure.
+                _pct_of(data.info_value("grossMargins") or None),
+                "before running the company",
+                GOOD_GROSS_MARGIN,
+            ],
+            ["Profit margin", _pct_of(margin), "net income per $1 of sales", GOOD_PROFIT_MARGIN],
+            [
+                "Return on equity",
+                _pct_of(data.info_value("returnOnEquity")),
+                "earned on shareholder capital",
+                GOOD_RETURN_ON_EQUITY,
+            ],
+            ["Free cash flow", _money(fcf), fcf_note, GOOD_FREE_CASH_FLOW],
+        ]
+
+        report = data.next_earnings
+        if report:
+            days = (report - dt.date.today()).days
+            if days < 0:
+                when = "date has passed"
+            elif days == 0:
+                when = "today"
+            elif days == 1:
+                when = "tomorrow"
+            else:
+                when = "in %d days" % days
+            rows.append(["Next earnings", report.isoformat(), when, ""])
+        return rows
+
+    def _balance_sheet_rows(self) -> List[List[str]]:
+        """Cash against debt -- what the company owes and what it holds."""
+        cash = self.data.info_value("totalCash")
+        debt = self.data.info_value("totalDebt")
+        if cash is None and debt is None:
+            return [["Cash vs debt", UNAVAILABLE, "", GOOD_NET_CASH]]
+
+        net = (cash or 0.0) - (debt or 0.0)
+        label = "Net cash" if net >= 0 else "Net debt"
+        holdings = "$%s cash vs $%s debt" % (_human(cash or 0.0), _human(debt or 0.0))
+        rows = [
+            [label, _money(abs(net)), holdings, GOOD_NET_CASH],
+            [
+                "Debt / equity",
+                # Yahoo reports this one as a percentage already.
+                _num(self.data.info_value("debtToEquity"), "%.1f%%"),
+                "debt per $1 of book value",
+                GOOD_DEBT_TO_EQUITY,
+            ],
+        ]
+
+        # How many years of earnings the borrowing represents. Only meaningful
+        # while the company owes more than it holds and earns something.
+        ebitda = self.data.info_value("ebitda")
+        if net < 0 and ebitda and ebitda > 0:
+            rows.append(
+                ["Net debt / EBITDA", "%.2fx" % (-net / ebitda), "years of earnings owed", GOOD_LEVERAGE]
+            )
+        return rows
+
+    def _ownership_rows(self) -> List[List[str]]:
+        """Who holds it, how crowded the short side is, how hard it swings."""
+        data = self.data
+        beta = data.info_value("beta", "beta3Year")
+        if beta is None:
+            beta_note = ""
+        elif beta >= 1.2:
+            beta_note = "amplifies market moves"
+        elif beta <= 0.8:
+            beta_note = "moves less than the market"
+        else:
+            beta_note = "moves with the market"
+
+        rows = [
+            [
+                "Institutional held",
+                _pct_of(data.info_value("heldPercentInstitutions")),
+                _pct_of(data.info_value("heldPercentInsiders"), "insiders %s"),
+                GOOD_INSTITUTIONAL,
+            ],
+            [
+                "Short interest",
+                _pct_of(data.info_value("shortPercentOfFloat")),
+                "of float sold short",
+                GOOD_SHORT_INTEREST,
+            ],
+            ["Beta", _num(beta, "%.2f"), beta_note, GOOD_BETA],
+        ]
+
+        # Yahoo already reports the yield in percent. Non-payers get no row
+        # rather than a zero that looks like missing data.
+        dividend = data.info_value("dividendYield")
+        if dividend:
+            rows.append(
+                [
+                    "Dividend yield",
+                    "%.2f%%" % dividend,
+                    _pct_of(data.info_value("payoutRatio"), "%s of earnings"),
+                    GOOD_DIVIDEND,
+                ]
+            )
+        return rows
 
     def _analyst_rows(self, spot: float) -> List[List[str]]:
         """Where the street is anchored, and how much they disagree.
@@ -367,45 +697,6 @@ class Strategy(ABC):
         return [
             ["Analyst target", _num(mean, "$%.2f"), upside, GOOD_ANALYST_TARGET],
             ["Target range", spread, ", ".join(coverage), GOOD_TARGET_SPREAD],
-        ]
-
-    def _quality_rows(self) -> List[List[str]]:
-        """Is the company growing, and how much of its move is the market's?"""
-        revenue = self.data.info_value("revenueGrowth")
-        earnings = self.data.info_value("earningsQuarterlyGrowth")
-        margin = self.data.info_value("profitMargins")
-        beta = self.data.info_value("beta", "beta3Year")
-        institutions = self.data.info_value("heldPercentInstitutions")
-        insiders = self.data.info_value("heldPercentInsiders")
-
-        if all(v is None for v in (revenue, earnings, margin, beta, institutions)):
-            return []
-
-        if beta is None:
-            beta_note = ""
-        elif beta >= 1.2:
-            beta_note = "amplifies market moves"
-        elif beta <= 0.8:
-            beta_note = "moves less than the market"
-        else:
-            beta_note = "moves with the market"
-
-        return [
-            ["Revenue growth", _growth_pct(revenue), "year over year", GOOD_REVENUE_GROWTH],
-            [
-                "Earnings growth",
-                _growth_pct(earnings),
-                "most recent quarter, YoY",
-                GOOD_EARNINGS_GROWTH,
-            ],
-            ["Profit margin", _pct_of(margin), "", GOOD_PROFIT_MARGIN],
-            ["Beta", _num(beta, "%.2f"), beta_note, GOOD_BETA],
-            [
-                "Institutional held",
-                _pct_of(institutions),
-                _pct_of(insiders, "insiders %s"),
-                GOOD_INSTITUTIONAL,
-            ],
         ]
 
     def build_panels(self) -> List[Panel]:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import getpass
+from dataclasses import dataclass
 import sys
 import warnings
 
@@ -60,8 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="trade direction (default: long, or inferred from --side)",
     )
     plan.add_argument(
+        "--instrument",
+        help="earnings only: O for options, S for stock. Prompts if omitted.",
+    )
+    plan.add_argument(
         "--side",
-        help="earnings only: C for calls, P for puts, B for both. Prompts if omitted.",
+        help="earnings options only: C for calls, P for puts, B for both. Prompts if omitted.",
     )
     plan.add_argument(
         "--contracts",
@@ -331,6 +336,58 @@ def resolve_horizon(key: str, args: argparse.Namespace, config: Config) -> str:
         return choice
     return prompt_horizon(config)
 
+# What you are actually buying for the event.
+INSTRUMENTS = {
+    "O": "options", "OPT": "options", "OPTION": "options", "OPTIONS": "options",
+    "S": "stock", "STOCK": "stock", "STOCKS": "stock", "SHARE": "stock", "SHARES": "stock",
+}
+
+
+def resolve_instrument_choice(raw: str) -> str:
+    instrument = INSTRUMENTS.get(raw.strip().upper())
+    if instrument is None:
+        raise ValueError("Choose O for options or S for stock.")
+    return instrument
+
+
+def prompt_instrument() -> str:
+    while True:
+        try:
+            raw = input("\nOptions or Stock? [O/S]: ")
+        except EOFError:
+            print("Options.")  # close the prompt line so output does not run together
+            return "options"
+        if not raw.strip():
+            continue
+        try:
+            return resolve_instrument_choice(raw)
+        except ValueError as exc:
+            print("  %s" % exc)
+
+
+def resolve_instrument(key: str, args: argparse.Namespace) -> str:
+    """Options or shares. Only an earnings trade has the choice."""
+    if key != "earnings":
+        return "stock"
+    if args.instrument:
+        return resolve_instrument_choice(args.instrument)
+    return prompt_instrument()
+
+
+@dataclass
+class EventPlan:
+    """What the caller said they are trading, asked once for the whole run.
+
+    Resolved before the first symbol is fetched: these answers describe the
+    trade rather than the ticker, so a list of symbols should not ask again
+    for each one.
+    """
+
+    instrument: str = "options"
+    side: str = "both"
+    contracts: int = 1
+
+
 # Every accepted spelling of a chain side.
 SIDES = {
     "C": "call", "CALL": "call", "CALLS": "call",
@@ -436,17 +493,27 @@ def prompt_contracts() -> int:
         print("  Enter a whole number of contracts, or press Enter for 1.")
 
 
-def resolve_contracts(key: str, args: argparse.Namespace) -> int:
-    if key != "earnings":
+def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:
+    if key != "earnings" or instrument == "stock":
         return 1
     if args.contracts is not None:
         return args.contracts
     return prompt_contracts()
 
 
-def resolve_option_side(key: str, args: argparse.Namespace) -> str:
+def resolve_event_plan(key: str, args: argparse.Namespace) -> EventPlan:
+    """Ask what is being traded, in the order the answers depend on each other."""
+    instrument = resolve_instrument(key, args)
+    return EventPlan(
+        instrument=instrument,
+        side=resolve_option_side(key, args, instrument),
+        contracts=resolve_contracts(key, args, instrument),
+    )
+
+
+def resolve_option_side(key: str, args: argparse.Namespace, instrument: str = "options") -> str:
     """Which side of the chain to display. Only earnings trades show one."""
-    if key != "earnings":
+    if key != "earnings" or instrument == "stock":
         return "both"
     if args.side:
         return resolve_side(args.side)
@@ -576,11 +643,12 @@ def validate_symbol(
     config: Config,
     buzz_scores: Optional[dict] = None,
     horizon: Optional[str] = None,
+    plan: Optional[EventPlan] = None,
 ) -> Report:
     data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
-    side = resolve_option_side(key, args)
+    plan = plan or resolve_event_plan(key, args)
     # An explicit --direction wins; otherwise the chosen side implies it.
-    direction = args.direction or SIDE_DIRECTION.get(side, "long")
+    direction = args.direction or SIDE_DIRECTION.get(plan.side, "long")
     ctx = TradeContext(
         data=data,
         config=config,
@@ -594,8 +662,9 @@ def validate_symbol(
         size=args.size,
         allow_earnings=args.allow_earnings,
         earnings_date=resolve_earnings_date(data, key, args),
-        option_side=side,
-        contracts=resolve_contracts(key, args),
+        instrument=plan.instrument,
+        option_side=plan.side,
+        contracts=plan.contracts,
         buzz=(buzz_scores or {}).get(symbol),
         include_peers=bool(args.peers) and key == "earnings",
         horizon=horizon or config.short_term.default_horizon,
@@ -670,6 +739,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     palette = make_palette(no_color=args.no_color)
     width = detect_width(args.width)
 
+    if args.instrument:
+        try:
+            resolve_instrument_choice(args.instrument)
+        except ValueError as exc:
+            print("Invalid --instrument '%s'. %s" % (args.instrument, exc), file=sys.stderr)
+            return 2
+
     if args.side:
         try:
             resolve_side(args.side)
@@ -709,9 +785,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         horizon = resolve_horizon(key, args, config)
+        # Asked once here rather than inside the per-symbol loop, so a list of
+        # tickers does not re-ask what is being traded for each one.
+        plan = resolve_event_plan(key, args)
     except SystemExit as exc:
         print(exc, file=sys.stderr)
         return 2
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return 130
 
     buzz_scores = resolve_buzz(symbols, args, config)
 
@@ -719,7 +801,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     failures = 0
     for symbol in symbols:
         try:
-            report = validate_symbol(symbol, key, args, config, buzz_scores, horizon)
+            report = validate_symbol(symbol, key, args, config, buzz_scores, horizon, plan)
         except DataError as exc:
             print(palette.red("%s: %s" % (symbol, exc)), file=sys.stderr)
             failures += 1

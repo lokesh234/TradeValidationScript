@@ -48,6 +48,25 @@ def atr(df: pd.DataFrame, window: int = 14) -> pd.Series:
     return true_range(df).ewm(alpha=1.0 / window, adjust=False).mean()
 
 
+def vwap(df: pd.DataFrame, window: int) -> Optional[float]:
+    """Volume-weighted average price across the last ``window`` sessions.
+
+    Built from daily bars, so this is not the intraday VWAP a desk trades
+    against: it is what the average share actually cost over the window, which
+    is the more useful number over a swing or a hold. Price above it means the
+    average buyer of that period is in profit.
+    """
+    recent = df.tail(window)
+    if len(recent) < 2 or "Volume" not in recent:
+        return None
+    typical = (recent["High"] + recent["Low"] + recent["Close"]) / 3.0
+    volume = recent["Volume"].fillna(0.0)
+    traded = float(volume.sum())
+    if traded <= 0:
+        return None
+    return float((typical * volume).sum() / traded)
+
+
 def realized_volatility(series: pd.Series, window: int = 20) -> pd.Series:
     """Annualised standard deviation of daily log returns."""
     returns = np.log(series / series.shift())

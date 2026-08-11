@@ -82,12 +82,16 @@ def _signed_pct(value: Optional[float]) -> str:
 class EarningsGambleStrategy(Strategy):
     key = "earnings"
     name = "Earnings Gamble"
-    horizon = "0-10 days, event driven"
     description = "Short-dated directional bet held across a scheduled earnings report."
 
     @property
     def rules(self):
         return self.config.earnings
+
+    @property
+    def horizon(self) -> str:
+        """Says which instrument the report was graded for, since it changes it."""
+        return "0-10 days, %s" % ("options" if self.ctx.trades_options else "shares")
 
     # -- the event ----------------------------------------------------------
 
@@ -132,10 +136,15 @@ class EarningsGambleStrategy(Strategy):
     # -- the contracts you'd actually buy -----------------------------------
 
     def build_panels(self) -> List[Panel]:
-        """What the street expects, the contracts you'd buy, and what they'd pay."""
+        """What the street expects, the contracts you'd buy, and what they'd pay.
+
+        A share trade stops after the first three: there is no chain to ladder
+        and no premium to reprice the morning after.
+        """
         panels = [p for p in (self._estimates_panel(), self._buzz_panel(), self._peers_panel()) if p]
-        panels.extend(self._ladder_panels())
-        panels.extend(self._profit_panels())
+        if self.ctx.trades_options:
+            panels.extend(self._ladder_panels())
+            panels.extend(self._profit_panels())
         return panels
 
     # -- what those contracts pay the morning after -------------------------
@@ -454,21 +463,67 @@ class EarningsGambleStrategy(Strategy):
     # -- checks -------------------------------------------------------------
 
     def build_checks(self) -> List[CheckResult]:
-        self._derive_premium_from_contracts()
-        return [
+        checks = [
             self._check_event_confirmed(),
             self._check_timing(),
             self._check_historical_reaction(),
             self._check_reaction_consistency(),
-            self._check_implied_vs_history(),
-            self._check_iv_term_structure(),
-            self._check_option_liquidity(),
-            self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
-            self.check_position_size(self.rules.max_account_risk_pct, weight=3.0, critical=True),
-            self._check_trend_alignment(),
-            self._check_not_extended(),
-            self._check_buzz(),
         ]
+        if self.ctx.trades_options:
+            # What the chain is charging, and what it costs to get out of it.
+            # None of it grades a share trade: those three would drag a sound
+            # stock position down, and options liquidity would veto it outright.
+            self._derive_premium_from_contracts()
+            checks.extend(
+                [
+                    self._check_implied_vs_history(),
+                    self._check_iv_term_structure(),
+                    self._check_option_liquidity(),
+                ]
+            )
+        else:
+            checks.append(self._check_expected_move())
+        checks.extend(
+            [
+                self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
+                self.check_position_size(self.rules.max_account_risk_pct, weight=3.0, critical=True),
+                self._check_trend_alignment(),
+                self._check_not_extended(),
+                self._check_buzz(),
+            ]
+        )
+        return checks
+
+    def _check_expected_move(self) -> CheckResult:
+        """Shares gap through stops, so the move has to fit inside the risk.
+
+        The straddle still prices the event even when you are not buying it:
+        it is the market's own estimate of the gap you are about to hold, and
+        a stop tighter than that is a stop that gets jumped rather than filled.
+        """
+        name = "Stop vs expected move"
+        implied = self.implied_move_pct
+        if implied is None:
+            return skipped(name, "no ATM straddle priced for the event expiry", weight=2.0)
+
+        entry = self.ctx.entry or self.data.price
+        value = "%.1f%% implied move" % implied
+        if not self.ctx.stop or not entry:
+            return warned(
+                name,
+                "the market prices in a gap of %.1f%% -- pass --stop to check yours clears it" % implied,
+                value,
+                weight=2.0,
+            )
+
+        stop_pct = abs(entry - self.ctx.stop) / entry * 100.0
+        value = "%.1f%% stop vs %.1f%% implied" % (stop_pct, implied)
+        detail = "stop distance against the move the options price in"
+        if stop_pct >= implied:
+            return passed(name, detail + " -- the stop sits outside the expected gap", value, weight=2.0)
+        if stop_pct >= implied / 2.0:
+            return warned(name, detail + " -- a normal reaction takes you out", value, weight=2.0)
+        return failed(name, detail + " -- the gap jumps this stop, size for the loss", value, weight=2.0)
 
     def _check_buzz(self) -> CheckResult:
         """Retail hype. Loud crowds mean the move is already in the premium."""
