@@ -195,6 +195,13 @@ ask_buzz() {
     confirm "  Include retail buzz score" && ARGS+=(--buzz)
 }
 
+# Peer read-across needs a lookup per competitor, so say what it costs.
+ask_peers() {
+    printf '  %sPeer read-across compares how competitors moved on their own\n' "$DIM"
+    printf '  earnings. It queries each peer, so it adds ~10 seconds.%s\n' "$OFF"
+    confirm "  Include peer earnings read-across" && ARGS+=(--peers)
+}
+
 # Only ask for the inputs the chosen strategy actually grades.
 collect_details() {
     ARGS=()
@@ -258,8 +265,11 @@ while true; do
     choose_strategy
     choose_ticker
     collect_details
-    # Asked outside collect_details: buzz is context, not position sizing.
-    [ "$STRATEGY" = "earnings" ] && ask_buzz
+    # Asked outside collect_details: these are context, not position sizing.
+    if [ "$STRATEGY" = "earnings" ]; then
+        ask_buzz
+        ask_peers
+    fi
 
     # Kept out of ${:-} because an apostrophe there re-opens quoting.
     target="$TICKERS"

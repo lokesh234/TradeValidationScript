@@ -39,7 +39,10 @@
       "Bash(./trade.sh help *)",
       "Bash(./trade.sh reddit *)",
       "Bash(env -u REDDIT_CLIENT_ID .venv/bin/python validate.py --reddit-status)",
-      "Bash(timeout 200 ./trade.sh)"
+      "Bash(timeout 200 ./trade.sh)",
+      "Bash(.venv/bin/python validate.py ZZZZNOTREAL -t long --quiet --no-color)",
+      "Bash(.venv/bin/python validate.py AMAT -t earnings --side X)",
+      "Bash(.venv/bin/python validate.py CSCO -t earnings --side C --contracts 1 --buzz --peers --no-color --width 128)"
     ]
   }
 }

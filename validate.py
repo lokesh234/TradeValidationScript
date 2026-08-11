@@ -17,7 +17,15 @@ import argparse
 import datetime as dt
 import getpass
 import sys
-from typing import List, Optional
+import warnings
+
+# macOS ships a Python linked against LibreSSL, and urllib3 v2 grumbles about
+# it on every import. Harmless here, and it has to be filtered before the
+# import below pulls urllib3 in.
+warnings.filterwarnings("ignore", message=r".*OpenSSL.*", module="urllib3")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
+
+from typing import List, Optional  # noqa: E402
 
 from tradeval import buzz, discover, reddit_auth, stocktwits
 from tradeval.config import Config
@@ -75,6 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--earnings-date",
         metavar="YYYY-MM-DD",
         help="earnings only: which scheduled report to trade. Prompts if omitted.",
+    )
+
+    plan.add_argument(
+        "--peers",
+        action="store_true",
+        help="earnings only: show how industry peers moved on their own reports "
+        "(one lookup per peer, adds roughly 10 seconds)",
     )
 
     reddit = parser.add_argument_group("reddit buzz")
@@ -475,6 +490,7 @@ def validate_symbol(
         option_side=side,
         contracts=resolve_contracts(key, args),
         buzz=(buzz_scores or {}).get(symbol),
+        include_peers=bool(args.peers) and key == "earnings",
     )
     return STRATEGIES[key](ctx).run()
 
@@ -548,6 +564,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "Note: --entry/--stop/--target describe one trade; they will be applied "
                 "to every symbol listed."
             )
+        )
+
+    if args.peers and key == "earnings" and config.earnings.peer_limit > 0:
+        print(
+            "Looking up peer earnings reactions -- one request per peer, "
+            "this takes about 10 seconds.",
+            file=sys.stderr,
         )
 
     buzz_scores = resolve_buzz(symbols, args, config)

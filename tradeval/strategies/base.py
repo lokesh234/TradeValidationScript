@@ -35,6 +35,9 @@ class Panel:
     highlight_label: str = "ATM"
     # Rows rendered grey, for values that support the row above them.
     dim: List[int] = field(default_factory=list)
+    # Extra columns to left-align. Column 0 always is; text columns read
+    # badly ragged-left when right-aligned with the numbers.
+    left_align: List[int] = field(default_factory=list)
     # Layout hint for reference tables: first column is a label, middle
     # columns are the numbers worth scanning, last column is supporting note.
     label_value_note: bool = False

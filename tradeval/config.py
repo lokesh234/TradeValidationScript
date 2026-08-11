@@ -56,6 +56,10 @@ class EarningsRules:
     discovery_limit: int = 10
     discovery_sector: str = "Technology"
     discovery_min_market_cap: float = 2e9
+    # Read-across from industry peers that already reported. Costs one lookup
+    # per peer, so set peer_limit to 0 to skip the section entirely.
+    peer_limit: int = 5
+    peer_lookback_days: int = 90
 
 
 @dataclass

@@ -35,8 +35,10 @@ class TradeContext:
     option_side: str = "both"
     # How many contracts the trade is sized at.
     contracts: int = 1
-    # Reddit hype for this symbol, when credentials are configured.
+    # Retail hype for this symbol, when a buzz source was requested.
     buzz: Optional[Any] = None
+    # Peer earnings read-across costs a lookup per peer, so it is opt-in.
+    include_peers: bool = False
 
     def shows(self, kind: str) -> bool:
         """Whether contracts of this kind ('call'/'put') should be displayed."""

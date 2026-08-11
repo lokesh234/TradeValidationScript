@@ -258,15 +258,14 @@ def _stack_panels(blocks: Sequence[Sequence[str]]) -> List[str]:
     out: List[str] = []
     for row in range(height):
         lines = [block[row] if row < len(block) else "" for block in blocks]
-        # Stop at the last column with content so a shorter panel does not
-        # leave a dangling divider hanging off the end of the row.
-        last = max((i for i, line in enumerate(lines) if line.strip()), default=-1)
-        if last < 0:
+        if not any(line.strip() for line in lines):
             out.append("")
             continue
+        # The divider runs the full height of the section, so it still reads as
+        # one rule where the shorter panel has run out of rows.
         parts = [
-            lines[i] + " " * max(widths[i] - plain_len(lines[i]), 0) if i < last else lines[i]
-            for i in range(last + 1)
+            line + " " * max(widths[index] - plain_len(line), 0)
+            for index, line in enumerate(lines)
         ]
         out.append(PANEL_GAP.join(parts).rstrip())
     return out
@@ -324,7 +323,10 @@ def layout_panels(panels: Sequence[Panel], palette: Palette, width: int) -> List
     """Pack panels two-up where the width allows, otherwise one per row."""
     out: List[str] = []
     for row in _pair_panels(panels, width):
+        # Rule between sections. Side-by-side panels are already divided by
+        # the '||' gutter, so this only ever separates one row from the next.
         out.append("")
+        out.append(palette.cyan("=" * width))
         if len(row) == 1:
             out.extend(_render_panel(row[0], palette, width))
             continue
@@ -337,13 +339,15 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
     """Right-aligned numeric table, column widths driven by the content."""
     widths = _panel_column_widths(panel)
 
+    left = {0} | set(panel.left_align)
+
     def line(cells: Sequence[str], colorize: bool = False) -> str:
-        # First column left-aligned (the label), the rest right-aligned.
+        # Labels and text columns run left, figures right.
         parts = []
         for i, cell in enumerate(cells):
             # Pad on the plain text, then colour -- escape codes would
             # otherwise be counted as width and break the alignment.
-            padded = cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
+            padded = cell.ljust(widths[i]) if i in left else cell.rjust(widths[i])
             parts.append(_color_cell(cell, padded, palette) if colorize and i else padded)
         return ("  " + "  ".join(parts)).rstrip()
 

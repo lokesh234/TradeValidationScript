@@ -11,7 +11,7 @@ import datetime as dt
 from functools import cached_property
 from typing import List, Optional
 
-from .. import pricing
+from .. import peers, pricing
 from ..checks import CheckResult, failed, passed, skipped, warned
 from ..data import AtmQuote, OptionQuote
 from .base import Panel, Strategy, _human
@@ -56,6 +56,31 @@ def _buzz_colour(score: float, rules) -> str:
     if score >= rules.warm_score:
         return "yellow"
     return "green"
+
+
+PEER_NAME_WIDTH = 24
+
+
+def _company(name: str) -> str:
+    """Trim a company name to keep the peers table beside the option ladder.
+
+    Legal suffixes carry no information here, so they go before any truncation
+    does -- "Pinterest" reads better than "Pinterest, Inc.".
+    """
+    trimmed = str(name or "").strip()
+    for suffix in (", Inc.", " Inc.", ", Ltd.", " Ltd.", " Corporation", " Corp.",
+                   " Company", " Holdings", " Group", " plc", " S.A.", " N.V."):
+        if trimmed.endswith(suffix):
+            trimmed = trimmed[: -len(suffix)].rstrip(" ,")
+            break
+    if len(trimmed) > PEER_NAME_WIDTH:
+        trimmed = trimmed[: PEER_NAME_WIDTH - 1].rstrip() + "\u2026"
+    return trimmed
+
+
+def _signed_pct(value: Optional[float]) -> str:
+    """Percent with an explicit sign so the renderer can colour it."""
+    return "%+.1f%%" % value if value is not None else "n/a"
 
 
 def _gap_note(spot: Optional[float], level: Optional[float], direction: str) -> str:
@@ -127,7 +152,7 @@ class EarningsGambleStrategy(Strategy):
 
     def build_panels(self) -> List[Panel]:
         """What the street expects, the contracts you'd buy, and what they'd pay."""
-        panels = [p for p in (self._estimates_panel(), self._buzz_panel()) if p]
+        panels = [p for p in (self._estimates_panel(), self._buzz_panel(), self._peers_panel()) if p]
         panels.extend(self._ladder_panels())
         panels.extend(self._profit_panels())
         return panels
@@ -421,6 +446,63 @@ class EarningsGambleStrategy(Strategy):
         if buzz.score >= rules.warm_score:
             return warned(name, detail + " -- getting attention, expect richer IV", value, weight=1.0)
         return passed(name, detail + " -- not a crowded trade", value, weight=1.0)
+
+    def _peers_panel(self) -> Optional[Panel]:
+        """How the market treated competitors that reported ahead of this one."""
+        limit = self.rules.peer_limit
+        if limit <= 0 or not self.ctx.include_peers:
+            return None
+        try:
+            reports = peers.peers_already_reported(
+                self.data,
+                limit=limit,
+                lookback_days=self.rules.peer_lookback_days,
+                before=self.event_date,
+            )
+        except Exception:
+            return None
+        if not reports:
+            return None
+
+        rows = [
+            [
+                r.symbol,
+                _company(r.name),
+                r.reported.strftime("%d %b"),
+                _signed_pct(r.surprise_pct),
+                _signed_pct(r.move_pct),
+            ]
+            for r in reports
+        ]
+        rows.append(
+            [
+                "Average",
+                "",
+                "",
+                _signed_pct(peers.average_surprise(reports)),
+                _signed_pct(peers.average_move(reports)),
+            ]
+        )
+
+        average = peers.average_move(reports)
+        note = (
+            "The closest competitors that already reported, newest first. "
+            "Beats being sold off is the warning worth reading here: it means "
+            "good news is already in the price."
+        )
+        if average is not None:
+            note += "  Sector averaged %+.1f%% on the day." % average
+
+        return Panel(
+            title="PEERS ALREADY REPORTED -- %s" % (self.data.info.get("industry") or "same industry"),
+            headers=["Peer", "Company", "Reported", "Surprise", "Move"],
+            rows=rows,
+            left_align=[1],
+            color_signed=True,
+            highlight=[len(rows) - 1],
+            highlight_label="avg",
+            note=note,
+        )
 
     def _buzz_panel(self) -> Optional[Panel]:
         buzz = self.ctx.buzz

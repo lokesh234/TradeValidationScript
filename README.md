@@ -135,6 +135,41 @@ Note StockTwits' endpoint is public but undocumented; if it ever starts
 refusing requests the check reports `Not Available` and is excluded from the
 score, like any other missing data.
 
+### Peer earnings read-across
+
+`--peers` shows how the closest competitors were treated when *they* reported:
+
+```
+ PEERS ALREADY REPORTED -- Beverages - Non-Alcoholic
+  Peer     Reported  Surprise    Move
+  MNST       06 Aug     +1.8%   -4.0%
+  KDP        06 Aug     +6.2%   -1.2%
+  CELH       06 Aug    -13.9%  -18.5%
+  PRMB       05 Aug    +10.6%   +8.7%
+  COCO       23 Jul    +58.5%   -6.8%
+  Average              +12.7%   -4.4%  <- avg
+```
+
+Read that before buying KO calls: the sector averaged a **+12.7% EPS beat** and
+still fell **4.4%** on the day. Beats being sold off means good news is already
+in the price — the single most useful thing to know going into a report, and
+something no amount of chart or option analysis will tell you.
+
+Peers come from the ticker's Yahoo industry, ranked by market weight, so they
+are genuine competitors rather than a hand-maintained list. Only reports dated
+**before** the one you are trading count, since a peer reporting afterwards
+could not have informed the decision.
+
+**Off by default, because it is slow.** It needs a separate lookup per peer,
+which adds roughly 10 seconds; `trade.sh` says so before asking, and the run
+prints a line when it starts. Tune with:
+
+```json
+{ "earnings": { "peer_limit": 5, "peer_lookback_days": 90 } }
+```
+
+`peer_limit: 0` removes the section entirely.
+
 ### Choosing the earnings report
 
 An earnings gamble lists the next four scheduled reports and lets you pick which

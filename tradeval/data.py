@@ -65,6 +65,7 @@ class EarningsReaction:
     date: dt.date
     move_pct: float
     session: str  # BMO, AMC or ? when the timestamp doesn't say
+    surprise_pct: Optional[float] = None  # reported EPS vs consensus
 
 
 @dataclass
@@ -456,7 +457,12 @@ class MarketData:
         today = pd.Timestamp(dt.date.today())
         reactions: List[EarningsReaction] = []
 
-        for stamp in pd.DatetimeIndex(table.index):
+        surprises = (
+            pd.to_numeric(table["Surprise(%)"], errors="coerce")
+            if "Surprise(%)" in table.columns
+            else None
+        )
+        for position, stamp in enumerate(pd.DatetimeIndex(table.index)):
             hour = int(stamp.hour)
             naive = stamp.tz_localize(None) if stamp.tz is not None else stamp
             day = naive.normalize()
@@ -479,7 +485,10 @@ class MarketData:
                     best = float(move)
 
             if best is not None:
-                reactions.append(EarningsReaction(day.date(), best, session))
+                surprise = None
+                if surprises is not None and position < len(surprises):
+                    surprise = _f(surprises.iloc[position])
+                reactions.append(EarningsReaction(day.date(), best, session, surprise))
 
         return reactions[-16:]
 
