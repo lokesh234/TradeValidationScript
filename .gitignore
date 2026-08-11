@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.DS_Store
+
+# --- secrets: never commit any of this -------------------------------------
+# Credentials belong in ~/.config/tradeval/reddit.json, outside this tree.
+# These patterns are a backstop for when one lands here by accident.
+reddit.json
+*credential*
+*credentials*
+*secret*
+*secrets*
+*.key
+*.pem
+.env
+.env.*
+!.env.example

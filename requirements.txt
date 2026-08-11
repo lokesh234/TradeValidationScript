@@ -1,0 +1,9 @@
+yfinance>=0.2.40
+pandas>=1.3
+numpy>=1.21
+# yfinance parses the earnings-date table with lxml; without it every
+# earnings check silently degrades to SKIP.
+lxml>=4.9
+# Declared outright rather than leaned on as a yfinance transitive: the Reddit
+# buzz client owns its own session, retries and rate limiting.
+requests>=2.31

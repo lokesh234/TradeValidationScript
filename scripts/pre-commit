@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# Blocks a commit that would publish credentials.
+#
+# Install:  ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+#
+# .gitignore alone is not enough: it does nothing for a file already tracked,
+# or one added with `git add -f`. This inspects the staged content itself.
+
+set -u
+
+staged="$(git diff --cached --name-only --diff-filter=ACM)"
+[ -z "$staged" ] && exit 0
+
+fail=0
+note() { printf 'BLOCKED: %s\n' "$1" >&2; fail=1; }
+
+# 1. Filenames that should never be committed.
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    case "$(basename "$file")" in
+        reddit.json|.env|.env.*|*secret*|*credential*|*.pem|*.key)
+            note "$file looks like a credentials file" ;;
+    esac
+done <<EOF
+$staged
+EOF
+
+# 2. Secret-shaped content, whatever the file is called. Reddit client secrets
+#    are ~27 chars of base64-ish text; the assignment patterns catch the rest.
+patterns='client_secret"?[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9_-]{15,}
+REDDIT_CLIENT_SECRET[[:space:]]*=[[:space:]]*[A-Za-z0-9_-]{15,}
+api[_-]?key"?[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9_-]{20,}
+-----BEGIN [A-Z ]*PRIVATE KEY-----'
+
+while IFS= read -r file; do
+    [ -z "$file" ] && continue
+    # Skip this hook and the docs, which describe the patterns on purpose.
+    case "$file" in
+        scripts/pre-commit|README.md|.gitignore) continue ;;
+    esac
+    while IFS= read -r pattern; do
+        [ -z "$pattern" ] && continue
+        # -e matters: the private-key pattern starts with dashes and would
+        # otherwise be parsed as grep options.
+        if git show ":$file" 2>/dev/null | grep -Eqi -e "$pattern"; then
+            note "$file contains something shaped like a secret (/$pattern/)"
+        fi
+    done <<PATTERNS
+$patterns
+PATTERNS
+done <<EOF
+$staged
+EOF
+
+if [ "$fail" -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+Nothing was committed. Move credentials to ~/.config/tradeval/reddit.json
+(or use `python validate.py --reddit-setup`) and unstage the file:
+
+    git restore --staged <file>
+
+Override only if you are certain:  git commit --no-verify
+MSG
+    exit 1
+fi
+exit 0
