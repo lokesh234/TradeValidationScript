@@ -63,27 +63,68 @@ class EarningsRules:
 
 
 @dataclass
-class ShortTermRules:
-    """Swing trade held days to a few weeks."""
+class HorizonProfile:
+    """Thresholds that have to move with the holding period.
 
-    holding_days: int = 15
+    A stop that is right for a one-month trade is far too tight for six: the
+    same daily noise accumulates, so room, patience and the payoff demanded
+    all scale with time.
+    """
+
+    label: str
+    trading_days: int
+    # Bars used for the relative-strength comparison; matched to the horizon
+    # so a six-month trade is not judged on three weeks of leadership.
+    rs_lookback: int
+    stop_atr_multiple: float
+    min_reward_risk: float
+    warn_reward_risk: float
+    max_extension_atr: float
+    warn_extension_atr: float
+    # Beyond a month or so a report is unavoidable, so holding through one
+    # stops being a mistake and becomes a risk to size for.
+    spans_earnings: bool
+
+
+def _default_horizons() -> Dict[str, HorizonProfile]:
+    return {
+        "1m": HorizonProfile(
+            label="1 month", trading_days=21, rs_lookback=21,
+            stop_atr_multiple=2.0, min_reward_risk=2.0, warn_reward_risk=1.5,
+            max_extension_atr=2.0, warn_extension_atr=3.0, spans_earnings=False,
+        ),
+        "3m": HorizonProfile(
+            label="3 months", trading_days=63, rs_lookback=63,
+            stop_atr_multiple=3.0, min_reward_risk=2.5, warn_reward_risk=1.8,
+            max_extension_atr=3.0, warn_extension_atr=4.5, spans_earnings=True,
+        ),
+        "6m": HorizonProfile(
+            label="6 months", trading_days=126, rs_lookback=126,
+            stop_atr_multiple=4.0, min_reward_risk=3.0, warn_reward_risk=2.0,
+            max_extension_atr=4.0, warn_extension_atr=6.0, spans_earnings=True,
+        ),
+    }
+
+
+@dataclass
+class ShortTermRules:
+    """Swing trade held one to six months."""
+
+    default_horizon: str = "1m"
+    horizons: Dict[str, HorizonProfile] = field(default_factory=_default_horizons)
+
     min_rsi: float = 45.0
     max_rsi: float = 70.0
     warn_rsi_high: float = 80.0
     warn_rsi_low: float = 30.0
-    min_rel_strength_pct: float = 0.0  # vs benchmark over 3 months
+    min_rel_strength_pct: float = 0.0  # vs the benchmark over the horizon
     min_volume_ratio: float = 1.0      # 5d avg vs 20d avg
     warn_volume_ratio: float = 0.8
-    max_extension_atr: float = 2.0
-    warn_extension_atr: float = 3.0
     max_pct_below_52w_high: float = 15.0
     min_dollar_volume: float = 10e6
     min_price: float = 5.0
     min_atr_pct: float = 1.5
     max_atr_pct: float = 8.0
-    min_reward_risk: float = 2.0
-    warn_reward_risk: float = 1.5
-    default_stop_atr_multiple: float = 2.0
     max_account_risk_pct: float = 1.0
     max_position_pct_of_account: float = 25.0
     max_gaps_60d: int = 3
@@ -168,6 +209,29 @@ class BuzzRules:
     warm_score: float = 45.0
 
 
+def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
+    """Overlay a JSON fragment onto a dataclass, one nesting level at a time.
+
+    Lets a config name a single horizon -- ``short_term.horizons.6m`` -- and
+    change one of its fields without restating the rest.
+    """
+    for key, value in raw.items():
+        if not hasattr(target, key):
+            raise ValueError("Unknown config key: %s.%s" % (path, key))
+        current = getattr(target, key)
+        if isinstance(value, dict) and hasattr(current, "__dataclass_fields__"):
+            _merge_section(current, value, "%s.%s" % (path, key))
+        elif isinstance(value, dict) and isinstance(current, dict):
+            for sub_key, sub_value in value.items():
+                existing = current.get(sub_key)
+                if isinstance(sub_value, dict) and hasattr(existing, "__dataclass_fields__"):
+                    _merge_section(existing, sub_value, "%s.%s.%s" % (path, key, sub_key))
+                else:
+                    current[sub_key] = sub_value
+        else:
+            setattr(target, key, value)
+
+
 @dataclass
 class Config:
     scoring: ScoringThresholds = field(default_factory=ScoringThresholds)
@@ -193,11 +257,7 @@ class Config:
             value = raw[f.name]
             current = getattr(cfg, f.name)
             if isinstance(value, dict) and hasattr(current, "__dataclass_fields__"):
-                for key, val in value.items():
-                    if hasattr(current, key):
-                        setattr(current, key, val)
-                    else:
-                        raise ValueError("Unknown config key: %s.%s" % (f.name, key))
+                _merge_section(current, value, f.name)
             else:
                 setattr(cfg, f.name, value)
         unknown = set(raw) - {f.name for f in fields(cls)}

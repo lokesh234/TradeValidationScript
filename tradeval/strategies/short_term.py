@@ -1,7 +1,9 @@
-"""Short term swing: trend continuation held days to a few weeks.
+"""Short term: trend continuation held one to six months.
 
-Weighted toward things that decide a swing trade's outcome -- trend, momentum,
-where you are entering relative to the move, and a defined stop.
+Weighted toward what decides such a trade -- trend, momentum, where you are
+entering relative to the move, and a defined stop. Stop distance, the payoff
+demanded and the relative-strength window all scale with the holding period,
+because a stop that suits a month is far too tight for half a year.
 """
 
 from __future__ import annotations
@@ -10,18 +12,32 @@ from typing import List
 
 from .. import indicators as ind
 from ..checks import CheckResult, failed, passed, skipped, warned
-from .base import Strategy
+from .base import Panel, Strategy
 
 
 class ShortTermStrategy(Strategy):
     key = "short"
     name = "Short Term"
-    horizon = "2-20 trading days"
-    description = "Swing trade riding an established trend, out before the next catalyst."
+    horizon = "1 to 6 months"
+    description = "Trend-following position held for a month to half a year."
 
     @property
     def rules(self):
         return self.config.short_term
+
+    @property
+    def profile(self):
+        """Thresholds for the chosen holding period."""
+        horizons = self.rules.horizons
+        return horizons.get(self.ctx.horizon) or horizons[self.rules.default_horizon]
+
+    @property
+    def horizon(self) -> str:
+        """Shadows the class attribute so the report header names the horizon."""
+        return "%s hold, %d trading days" % (self.profile.label, self.profile.trading_days)
+
+    def build_panels(self) -> List[Panel]:
+        return [p for p in (self.stock_info_panel(),) if p]
 
     def build_checks(self) -> List[CheckResult]:
         return [
@@ -98,24 +114,26 @@ class ShortTermStrategy(Strategy):
 
     def _check_relative_strength(self) -> CheckResult:
         """Swings work best in names leading the market, not lagging it."""
-        name = "Relative strength (3m)"
+        name = "Relative strength"
         bench = self.data.benchmark_history
         if bench is None:
             return skipped(name, "benchmark unavailable", weight=2.0)
-        stock = ind.pct_change_over(self.data.close, 63)
-        market = ind.pct_change_over(bench["Close"], 63)
+        lookback = self.profile.rs_lookback
+        stock = ind.pct_change_over(self.data.close, lookback)
+        market = ind.pct_change_over(bench["Close"], lookback)
         if stock is None or market is None:
-            return skipped(name, "not enough history for a 3-month comparison", weight=2.0)
+            return skipped(name, "not enough history for a %d-bar comparison" % lookback, weight=2.0)
 
         spread = stock - market
         value = "%+.1f%% vs %s %+.1f%%" % (stock, self.data.benchmark_symbol, market)
+        detail_span = "over %d bars" % lookback
         wants_outperform = self.ctx.direction == "long"
         effective = spread if wants_outperform else -spread
         if effective >= self.rules.min_rel_strength_pct:
-            return passed(name, "leading the market by %.1f points" % abs(spread), value, weight=2.0)
+            return passed(name, "leading the market by %.1f points %s" % (abs(spread), detail_span), value, weight=2.0)
         if effective >= -5.0:
-            return warned(name, "roughly in line with the market", value, weight=2.0)
-        return failed(name, "lagging the market by %.1f points" % abs(spread), value, weight=2.0)
+            return warned(name, "roughly in line with the market %s" % detail_span, value, weight=2.0)
+        return failed(name, "lagging the market by %.1f points %s" % (abs(spread), detail_span), value, weight=2.0)
 
     # -- entry quality ------------------------------------------------------
 
@@ -142,9 +160,9 @@ class ShortTermStrategy(Strategy):
             return skipped(name, "no ATR available", weight=2.0)
         value = "%.1f ATR from 20EMA" % extension
         detail = "entry distance from the 20 EMA"
-        if extension <= self.rules.max_extension_atr:
+        if extension <= self.profile.max_extension_atr:
             return passed(name, detail + " -- entry is close to support", value, weight=2.0)
-        if extension <= self.rules.warn_extension_atr:
+        if extension <= self.profile.warn_extension_atr:
             return warned(name, detail + " -- chasing; wait for a pullback", value, weight=2.0)
         return failed(name, detail + " -- far too extended, stop would be huge", value, weight=2.0)
 
@@ -179,28 +197,50 @@ class ShortTermStrategy(Strategy):
         return warned(name, detail + " -- wild swings will run a normal stop", value)
 
     def _check_earnings_blackout(self) -> CheckResult:
-        """A swing trade held over a report is an earnings gamble in disguise."""
+        """Does a report land inside the trade, and does that matter at this horizon?
+
+        On a one-month trade it is avoidable, so holding through one is a
+        choice you should have to make deliberately. Past a quarter it is
+        unavoidable, and the honest reading is that earnings risk is simply
+        part of the position.
+        """
         name = "Earnings blackout"
         days = self.days_to_earnings
-        holding = self.rules.holding_days
+        # days_to_earnings counts calendar days; the profile counts trading
+        # days, so convert before comparing the two.
+        holding = int(round(self.profile.trading_days * 7 / 5))
         if days is None:
             return warned(
                 name,
                 "no earnings date published -- confirm manually before entering",
                 "unknown",
                 weight=2.0,
-                critical=False,
             )
+
         value = "%d days out" % days
-        detail = "report vs a %d-day holding period" % holding
+        detail = "report vs a %s hold (~%d calendar days)" % (self.profile.label, holding)
         if days > holding:
-            return passed(name, detail + " -- clear of the trade window", value, weight=2.0, critical=True)
+            return passed(name, detail + " -- clear of the trade window", value, weight=2.0)
+
+        if self.profile.spans_earnings:
+            reports = max(1, int(holding / 91) + (1 if holding % 91 > 30 else 0))
+            self.note(
+                "A %s hold spans roughly %d earnings report%s. Size for the gap risk "
+                "rather than relying on the stop." % (self.profile.label, reports, "" if reports == 1 else "s")
+            )
+            return warned(
+                name,
+                detail + " -- unavoidable at this horizon, so size for gap risk",
+                value,
+                weight=2.0,
+            )
+
         if self.ctx.allow_earnings:
             self.note("Holding through earnings by request (--allow-earnings); gap risk is uncapped.")
             return warned(name, detail + " -- overridden, but the stop will not hold on a gap", value, weight=2.0)
         return failed(
             name,
-            detail + " -- earnings lands mid-trade; use --allow-earnings to override",
+            detail + " -- earnings lands mid-trade; use --allow-earnings or a longer horizon",
             value,
             weight=2.0,
             critical=True,
@@ -220,16 +260,16 @@ class ShortTermStrategy(Strategy):
             self.ctx.stop,
             self.ctx.entry_price,
         )
-        if ratio >= self.rules.min_reward_risk:
+        if ratio >= self.profile.min_reward_risk:
             return passed(name, detail, value, weight=3.0)
-        if ratio >= self.rules.warn_reward_risk:
+        if ratio >= self.profile.warn_reward_risk:
             return warned(name, detail + " -- thin payoff for the risk", value, weight=3.0)
         return failed(name, detail + " -- not worth the risk taken", value, weight=3.0)
 
     def _suggest_stop(self) -> None:
         if not self.atr:
             return
-        multiple = self.rules.default_stop_atr_multiple
+        multiple = self.profile.stop_atr_multiple
         stop = self.ctx.suggested_stop(self.atr, multiple)
         self.note(
             "Suggested stop %.2f (%.1f ATR from %.2f); a %.1fR target sits near %.2f."
@@ -237,12 +277,12 @@ class ShortTermStrategy(Strategy):
                 stop,
                 multiple,
                 self.ctx.entry_price,
-                self.rules.min_reward_risk,
+                self.profile.min_reward_risk,
                 self.ctx.entry_price
                 + (1 if self.ctx.direction == "long" else -1)
                 * self.atr
                 * multiple
-                * self.rules.min_reward_risk,
+                * self.profile.min_reward_risk,
             )
         )
 

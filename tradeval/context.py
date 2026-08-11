@@ -31,6 +31,8 @@ class TradeContext:
     allow_earnings: bool = False      # hold a swing trade through a report
     # Which scheduled report to trade. None means the soonest one.
     earnings_date: Optional[dt.date] = None
+    # Short term: how long the trade is meant to be held ("1m", "3m", "6m").
+    horizon: str = "1m"
     # Which side of the option chain to show: call, put, or both.
     option_side: str = "both"
     # How many contracts the trade is sized at.

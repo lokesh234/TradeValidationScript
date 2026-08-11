@@ -14,18 +14,9 @@ from typing import List, Optional
 from .. import peers, pricing
 from ..checks import CheckResult, failed, passed, skipped, warned
 from ..data import AtmQuote, OptionQuote
-from .base import Panel, Strategy, _human
+from .base import UNAVAILABLE, Panel, Strategy, _human, _money, _num, _span
 
 LADDER_STRIKES = 5
-UNAVAILABLE = "Not Available"
-
-
-def _num(value: Optional[float], fmt: str) -> str:
-    return fmt % value if value is not None else UNAVAILABLE
-
-
-def _money(value: Optional[float]) -> str:
-    return "$%s" % _human(value) if value is not None else UNAVAILABLE
 
 
 def _scale(value: Optional[float], count: int) -> Optional[float]:
@@ -78,24 +69,14 @@ def _company(name: str) -> str:
     return trimmed
 
 
+def _return_pct(value: Optional[float]) -> str:
+    """Percent return on the premium paid. Whole percents: these run large."""
+    return "%+.0f%%" % value if value is not None else "-"
+
+
 def _signed_pct(value: Optional[float]) -> str:
     """Percent with an explicit sign so the renderer can colour it."""
     return "%+.1f%%" % value if value is not None else "n/a"
-
-
-def _gap_note(spot: Optional[float], level: Optional[float], direction: str) -> str:
-    """How far the current price sits from a level, e.g. 'spot 8.0% below'."""
-    if not spot or not level or level <= 0:
-        return ""
-    return "spot %.1f%% %s" % (abs(spot / level - 1.0) * 100.0, direction)
-
-
-def _range(low: Optional[float], high: Optional[float], fmt: Optional[str]) -> str:
-    """Low-to-high consensus spread. Money when no explicit format is given."""
-    if low is None or high is None:
-        return UNAVAILABLE
-    render = (lambda v: fmt % v) if fmt else (lambda v: "$%s" % _human(v))
-    return "%s - %s" % (render(low), render(high))
 
 
 class EarningsGambleStrategy(Strategy):
@@ -205,15 +186,24 @@ class EarningsGambleStrategy(Strategy):
             rows, dim = [], []
             for move in moves:
                 profits = ["%s%.0f%% move" % (sign, move)]
+                returns = ["  return on cost"]
                 values = ["  position value" if count > 1 else "  contract price"]
                 for q in priced:
                     args = (q.kind, spot, q.strike, move, days_left, volatility, rate)
                     value = pricing.value_after_move(*args)
-                    profit = None if value is None else value - q.mid * 100
+                    cost = q.mid * 100.0
+                    profit = None if value is None else value - cost
+                    # Percent return is the same whatever the contract count,
+                    # so it is taken before scaling.
+                    pct = None if profit is None or cost <= 0 else profit / cost * 100.0
                     profits.append(_signed_money(_scale(profit, count)))
+                    returns.append(_return_pct(pct))
                     values.append(_money_cell(_scale(value, count)))
-                # Each move gets its P&L, then what the contract is worth.
+                # Each move: the P&L, the same thing as a percentage, then
+                # what the position is then worth.
                 rows.append(profits)
+                dim.append(len(rows))
+                rows.append(returns)
                 dim.append(len(rows))
                 rows.append(values)
 
@@ -240,6 +230,7 @@ class EarningsGambleStrategy(Strategy):
         count = self.ctx.contracts
         position = "one long contract" if count == 1 else "%d long contracts" % count
         note = (
+            "Return on cost is the P&L against the premium paid. "
             "Black-Scholes reprice of %s the session after the report, with "
             "%.0f day%s to expiry left"
             % (position, days_left, "" if days_left == 1 else "s")
@@ -250,57 +241,28 @@ class EarningsGambleStrategy(Strategy):
         return note
 
     def _estimates_panel(self) -> Optional[Panel]:
-        """Consensus for the quarter being reported, plus the forward multiple."""
+        """The shared profile, plus consensus for the report being traded."""
         estimate = self.data.earnings_estimate
-        forward_pe = self.data.info_value("forwardPE")
-        trailing_revenue = self.data.info_value("totalRevenue")
         shares = self.data.info_value("sharesOutstanding")
         net_income = estimate.net_income(shares)
+        when = "the %s report" % self.event_date.isoformat() if self.event_date else "the next report"
 
-        market_cap = self.data.market_cap
-        fcf = self.data.latest_free_cash_flow
-        # A cash-flow yield is the useful reading of FCF against the price.
-        fcf_note = ""
-        if fcf is not None and market_cap:
-            fcf_note = "%.2f%% of market cap" % (fcf / market_cap * 100.0)
-
-        high, low = self.data.fifty_two_week_range
-        spot = self.data.price
-        position = self.data.range_position_pct()
-
-        rows = [
-            ["Market cap", _money(market_cap), ""],
-            ["Price", _num(spot, "$%.2f"), _num(position, "%.0f%% of 52w range")],
-            ["52-week high", _num(high, "$%.2f"), _gap_note(spot, high, "below")],
-            ["52-week low", _num(low, "$%.2f"), _gap_note(spot, low, "above")],
-            ["Forward P/E", _num(forward_pe, "%.2f"), _num(self.data.info_value("trailingPE"), "%.2f trailing")],
-            [
-                "Expected EPS",
-                _num(estimate.eps_avg, "%.2f"),
-                _range(estimate.eps_low, estimate.eps_high, "%.2f"),
-            ],
+        extras = [
+            ["Expected EPS", _num(estimate.eps_avg, "%.2f"), _span(estimate.eps_low, estimate.eps_high, "%.2f")],
             [
                 "Expected earnings (quarter)",
                 _money(net_income),
-                "EPS x %s shares" % _human(shares) if net_income is not None else "Not Available",
+                "EPS x %s shares" % _human(shares) if net_income is not None else UNAVAILABLE,
             ],
             [
                 "Expected revenue (quarter)",
                 _money(estimate.revenue_avg),
-                _range(estimate.revenue_low, estimate.revenue_high, None),
+                _span(estimate.revenue_low, estimate.revenue_high, None),
             ],
-            ["Revenue (trailing 12m)", _money(trailing_revenue), ""],
-            ["Free cash flow", _money(fcf), fcf_note],
         ]
-        if all(row[1] == "Not Available" for row in rows):
-            return None
-
-        when = "the %s report" % self.event_date.isoformat() if self.event_date else "the next report"
-        return Panel(
+        return self.stock_info_panel(
             title="STOCK INFO -- with consensus for %s" % when,
-            headers=["Metric", "Value", "Range / note"],
-            rows=rows,
-            label_value_note=True,
+            extras=extras,
             note="Beating consensus does not guarantee a rally -- the stock trades "
             "against expectations already in the price.",
         )
@@ -351,13 +313,6 @@ class EarningsGambleStrategy(Strategy):
             )
         return panels
 
-    def _visible_sides(
-        self, calls: List[OptionQuote], puts: List[OptionQuote]
-    ) -> List["tuple[str, List[OptionQuote]]"]:
-        """Chain sides to display, honouring the caller's call/put choice."""
-        pairs = (("CALLS", "call", calls), ("PUTS", "put", puts))
-        return [(label, quotes) for label, kind, quotes in pairs if quotes and self.ctx.shows(kind)]
-
     def _check_budget_covers_a_contract(self, quotes: List[OptionQuote]) -> None:
         """Warn when the money set aside cannot buy the position you asked for."""
         budget = self.ctx.risk_dollars
@@ -399,53 +354,12 @@ class EarningsGambleStrategy(Strategy):
             "%+.1f%%" % move if move is not None else "-",
         ]
 
-    # -- checks -------------------------------------------------------------
-
-    def build_checks(self) -> List[CheckResult]:
-        self._derive_premium_from_contracts()
-        return [
-            self._check_event_confirmed(),
-            self._check_timing(),
-            self._check_historical_reaction(),
-            self._check_reaction_consistency(),
-            self._check_implied_vs_history(),
-            self._check_iv_term_structure(),
-            self._check_option_liquidity(),
-            self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
-            self.check_position_size(self.rules.max_account_risk_pct, weight=3.0, critical=True),
-            self._check_trend_alignment(),
-            self._check_not_extended(),
-            self._check_buzz(),
-        ]
-
-    def _check_buzz(self) -> CheckResult:
-        """Retail hype. Loud crowds mean the move is already in the premium."""
-        name = "Retail buzz"
-        buzz = self.ctx.buzz
-        if buzz is None:
-            return skipped(name, "buzz not requested (use --buzz)", weight=1.0)
-        if not buzz.available:
-            return skipped(name, buzz.reason or UNAVAILABLE, weight=1.0)
-
-        rules = self.config.buzz
-        value = "%.0f/100 %s" % (buzz.score, buzz.label)
-        detail = "%d messages on %s over %.0fh (%.2f/hour), leaning %s" % (
-            buzz.mentions,
-            rules.source,
-            buzz.span_hours,
-            buzz.per_hour,
-            buzz.lean,
-        )
-        if buzz.score >= rules.crowded_score:
-            return failed(
-                name,
-                detail + " -- crowded trade, the move is likely priced into the premium",
-                value,
-                weight=1.0,
-            )
-        if buzz.score >= rules.warm_score:
-            return warned(name, detail + " -- getting attention, expect richer IV", value, weight=1.0)
-        return passed(name, detail + " -- not a crowded trade", value, weight=1.0)
+    def _visible_sides(
+        self, calls: List[OptionQuote], puts: List[OptionQuote]
+    ) -> "List[tuple[str, List[OptionQuote]]]":
+        """Chain sides to display, honouring the caller's call/put choice."""
+        pairs = (("CALLS", "call", calls), ("PUTS", "put", puts))
+        return [(label, quotes) for label, kind, quotes in pairs if quotes and self.ctx.shows(kind)]
 
     def _peers_panel(self) -> Optional[Panel]:
         """How the market treated competitors that reported ahead of this one."""
@@ -536,6 +450,50 @@ class EarningsGambleStrategy(Strategy):
             note="Hype is a contrarian input for an earnings gamble: the louder the "
             "crowd, the more of the expected move is already inside the option price.",
         )
+
+    # -- checks -------------------------------------------------------------
+
+    def build_checks(self) -> List[CheckResult]:
+        self._derive_premium_from_contracts()
+        return [
+            self._check_event_confirmed(),
+            self._check_timing(),
+            self._check_historical_reaction(),
+            self._check_reaction_consistency(),
+            self._check_implied_vs_history(),
+            self._check_iv_term_structure(),
+            self._check_option_liquidity(),
+            self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
+            self.check_position_size(self.rules.max_account_risk_pct, weight=3.0, critical=True),
+            self._check_trend_alignment(),
+            self._check_not_extended(),
+            self._check_buzz(),
+        ]
+
+    def _check_buzz(self) -> CheckResult:
+        """Retail hype. Loud crowds mean the move is already in the premium."""
+        name = "Retail buzz"
+        buzz = self.ctx.buzz
+        if buzz is None:
+            return skipped(name, "buzz not requested (use --buzz)", weight=1.0)
+        if not buzz.available:
+            return skipped(name, buzz.reason or UNAVAILABLE, weight=1.0)
+
+        rules = self.config.buzz
+        value = "%.0f/100 %s" % (buzz.score, buzz.label)
+        detail = "%d messages on %s over %.0fh (%.2f/hour), leaning %s" % (
+            buzz.mentions, rules.source, buzz.span_hours, buzz.per_hour, buzz.lean,
+        )
+        if buzz.score >= rules.crowded_score:
+            return failed(
+                name,
+                detail + " -- crowded trade, the move is likely priced into the premium",
+                value,
+                weight=1.0,
+            )
+        if buzz.score >= rules.warm_score:
+            return warned(name, detail + " -- getting attention, expect richer IV", value, weight=1.0)
+        return passed(name, detail + " -- not a crowded trade", value, weight=1.0)
 
     def _derive_premium_from_contracts(self) -> None:
         """Price the position from the ATM contract when no premium was given."""

@@ -13,6 +13,45 @@ from ..checks import CheckResult, Verdict, failed, passed, score_checks, skipped
 from ..context import TradeContext
 
 
+UNAVAILABLE = "Not Available"
+
+
+def _num(value: Optional[float], fmt: str) -> str:
+    return fmt % value if value is not None else UNAVAILABLE
+
+
+def _money(value: Optional[float]) -> str:
+    return "$%s" % _human(value) if value is not None else UNAVAILABLE
+
+
+def _pct_of(fraction: Optional[float], template: str = "%s") -> str:
+    """Yahoo reports these as fractions: 0.3135 is a 31.4% margin."""
+    if fraction is None:
+        return "" if template != "%s" else UNAVAILABLE
+    return template % ("%.1f%%" % (fraction * 100.0))
+
+
+def _growth_pct(fraction: Optional[float]) -> str:
+    """Signed growth rate, so direction reads at a glance."""
+    return "%+.1f%%" % (fraction * 100.0) if fraction is not None else UNAVAILABLE
+
+
+def _gap_note(spot: Optional[float], level: Optional[float], direction: str) -> str:
+    """How far the current price sits from a level, e.g. 'spot 8.0% below'."""
+    if not spot or not level or level <= 0:
+        return ""
+    return "spot %.1f%% %s" % (abs(spot / level - 1.0) * 100.0, direction)
+
+
+def _span(low: Optional[float], high: Optional[float], fmt: Optional[str]) -> str:
+    """Low-to-high spread. Money when no explicit format is given."""
+    if low is None or high is None:
+        return UNAVAILABLE
+    render = (lambda v: fmt % v) if fmt else (lambda v: "$%s" % _human(v))
+    return "%s - %s" % (render(low), render(high))
+
+
+
 @dataclass
 class Panel:
     """A supporting table printed under the checks.
@@ -208,6 +247,116 @@ class Strategy(ABC):
     @abstractmethod
     def build_checks(self) -> List[CheckResult]:
         """Produce this strategy's checklist, in display order."""
+
+    # -- shared reference panel --------------------------------------------
+
+    def stock_info_panel(
+        self,
+        title: str = "STOCK INFO",
+        extras: Optional[List[List[str]]] = None,
+        note: str = "",
+    ) -> Optional[Panel]:
+        """The profile every strategy wants: size, price, valuation, quality.
+
+        ``extras`` are inserted after the valuation rows, which is where a
+        strategy's own numbers belong -- earnings consensus, for instance.
+        """
+        data = self.data
+        spot = data.price
+        high, low = data.fifty_two_week_range
+        market_cap = data.market_cap
+        fcf = data.latest_free_cash_flow
+        fcf_note = ""
+        if fcf is not None and market_cap:
+            fcf_note = "%.2f%% of market cap" % (fcf / market_cap * 100.0)
+
+        rows: List[List[str]] = [
+            ["Market cap", _money(market_cap), ""],
+            ["Price", _num(spot, "$%.2f"), _num(data.range_position_pct(), "%.0f%% of 52w range")],
+            ["52-week high", _num(high, "$%.2f"), _gap_note(spot, high, "below")],
+            ["52-week low", _num(low, "$%.2f"), _gap_note(spot, low, "above")],
+            [
+                "Forward P/E",
+                _num(data.info_value("forwardPE"), "%.2f"),
+                _num(data.info_value("trailingPE"), "%.2f trailing"),
+            ],
+        ]
+        rows.extend(extras or [])
+        rows.append(["Revenue (trailing 12m)", _money(data.info_value("totalRevenue")), ""])
+        rows.append(["Free cash flow", _money(fcf), fcf_note])
+        rows.extend(self._analyst_rows(spot))
+        rows.extend(self._quality_rows())
+
+        if all(row[1] == UNAVAILABLE for row in rows):
+            return None
+        return Panel(
+            title=title,
+            headers=["Metric", "Value", "Range / note"],
+            rows=rows,
+            label_value_note=True,
+            note=note,
+        )
+
+    def _analyst_rows(self, spot: float) -> List[List[str]]:
+        """Where the street is anchored, and how much they disagree.
+
+        A wide high/low spread is the interesting case: genuine disagreement
+        about the outcome usually means a bigger move.
+        """
+        mean = self.data.info_value("targetMeanPrice")
+        high = self.data.info_value("targetHighPrice")
+        low = self.data.info_value("targetLowPrice")
+        count = self.data.info_value("numberOfAnalystOpinions")
+        rating = str(self.data.info.get("recommendationKey") or "").replace("_", " ")
+
+        if mean is None and high is None and low is None:
+            return [["Analyst target", UNAVAILABLE, ""]]
+
+        upside = "%+.1f%% from spot" % ((mean / spot - 1.0) * 100.0) if mean and spot else ""
+        coverage = []
+        if count:
+            coverage.append("%d analyst%s" % (int(count), "" if count == 1 else "s"))
+        if rating:
+            coverage.append(rating)
+
+        spread = _span(low, high, "$%.2f")
+        if low and high and mean:
+            # Disagreement measured against the anchor, not the price.
+            spread += ", %.0f%% wide" % ((high - low) / mean * 100.0)
+
+        return [
+            ["Analyst target", _num(mean, "$%.2f"), upside],
+            ["Target range", spread, ", ".join(coverage)],
+        ]
+
+    def _quality_rows(self) -> List[List[str]]:
+        """Is the company growing, and how much of its move is the market's?"""
+        revenue = self.data.info_value("revenueGrowth")
+        earnings = self.data.info_value("earningsQuarterlyGrowth")
+        margin = self.data.info_value("profitMargins")
+        beta = self.data.info_value("beta", "beta3Year")
+        institutions = self.data.info_value("heldPercentInstitutions")
+        insiders = self.data.info_value("heldPercentInsiders")
+
+        if all(v is None for v in (revenue, earnings, margin, beta, institutions)):
+            return []
+
+        if beta is None:
+            beta_note = ""
+        elif beta >= 1.2:
+            beta_note = "amplifies market moves"
+        elif beta <= 0.8:
+            beta_note = "moves less than the market"
+        else:
+            beta_note = "moves with the market"
+
+        return [
+            ["Revenue growth", _growth_pct(revenue), "year over year"],
+            ["Earnings growth", _growth_pct(earnings), "most recent quarter, YoY"],
+            ["Profit margin", _pct_of(margin), ""],
+            ["Beta", _num(beta, "%.2f"), beta_note],
+            ["Institutional held", _pct_of(institutions), _pct_of(insiders, "insiders %s")],
+        ]
 
     def build_panels(self) -> List[Panel]:
         """Optional reference tables to print under the checks."""

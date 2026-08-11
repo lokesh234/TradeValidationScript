@@ -389,8 +389,14 @@ def _render_info_row(
 
     parts = []
     for index, cell in enumerate(row[: last + 1]):
-        pad_to = widths[index] if index < last else 0
-        padded = cell.ljust(pad_to) if index == 0 else cell.rjust(pad_to)
+        # Right-aligned cells pad on the left, so they can always be padded --
+        # figures then line up whether or not a note follows. Only the label
+        # would leave trailing spaces, so it is padded only when something
+        # comes after it.
+        if index == 0:
+            padded = cell.ljust(widths[index]) if last > 0 else cell
+        else:
+            padded = cell.rjust(widths[index])
         if index == 0:
             parts.append(padded)
         elif index == note_column and note_column > 1:

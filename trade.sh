@@ -85,7 +85,7 @@ confirm() {  # confirm <prompt> -- defaults to no
 choose_strategy() {
     printf '\n%sWhich strategy are you trading?%s\n\n' "$BOLD" "$OFF"
     printf '  1) Earnings Gamble   %s0-10 days, event driven%s\n' "$DIM" "$OFF"
-    printf '  2) Short Term        %s2-20 trading days%s\n'       "$DIM" "$OFF"
+    printf '  2) Short Term        %s1 to 6 months%s\n'           "$DIM" "$OFF"
     printf '  3) Long Term         %s1 year or more%s\n\n'        "$DIM" "$OFF"
 
     while true; do
@@ -122,10 +122,67 @@ EOF
     return 0
 }
 
+# How long the position is meant to be held. Scales the stop, the payoff
+# demanded and the relative-strength window.
+choose_horizon() {
+    HORIZON=""
+    printf '\n%sHow long do you plan to hold?%s\n\n' "$BOLD" "$OFF"
+    printf '  1) 1 month    %s21 trading days, 2 ATR stop, wants 2.0R%s\n' "$DIM" "$OFF"
+    printf '  2) 3 months   %s63 trading days, 3 ATR stop, wants 2.5R%s\n' "$DIM" "$OFF"
+    printf '  3) 6 months   %s126 trading days, 4 ATR stop, wants 3.0R%s\n\n' "$DIM" "$OFF"
+    while true; do
+        ask reply "Choice [1-3]"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            1|1m) HORIZON="1m"; return ;;
+            2|3m) HORIZON="3m"; return ;;
+            3|6m) HORIZON="6m"; return ;;
+            *) printf '  %sPick 1, 2 or 3.%s\n' "$DIM" "$OFF" ;;
+        esac
+    done
+}
+
+# Sector menu, then that sector's largest companies. Runs before the ticker
+# prompt so there is something to choose from.
+choose_sector() {
+    SECTOR=""
+    printf '\n%sWhich sector?%s\n\n' "$BOLD" "$OFF"
+    "$PY" "$ROOT/validate.py" --list-sectors 2>/dev/null
+    printf '\n'
+    while true; do
+        ask reply "Choice [1-6]"
+        if "$PY" "$ROOT/validate.py" --list-sector-companies "$reply" >/dev/null 2>&1; then
+            SECTOR="$reply"
+            return 0
+        fi
+        printf '  %sPick a number from 1 to 6.%s\n' "$DIM" "$OFF"
+    done
+}
+
+browse_sector() {
+    CANDIDATES=()
+    local out sym line n=0
+    out="$("$PY" "$ROOT/validate.py" --list-sector-companies "$SECTOR" 2>/dev/null)" || return 1
+    [ -z "$out" ] && return 1
+    printf '\n%sLargest companies in that sector:%s\n\n' "$BOLD" "$OFF"
+    while IFS="$(printf '\t')" read -r sym line; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        CANDIDATES+=("$sym")
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$out
+EOF
+    [ "$n" -gt 0 ] || return 1
+    return 0
+}
+
 choose_ticker() {
     local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0
     # An earnings gamble offers this week's reporters to choose from.
     if [ "$STRATEGY" = "earnings" ] && browse_earnings; then
+        count=${#CANDIDATES[@]}
+        prompt="Pick a number, or type a ticker"
+    elif [ "$STRATEGY" = "short" ] && choose_sector && browse_sector; then
         count=${#CANDIDATES[@]}
         prompt="Pick a number, or type a ticker"
     fi
@@ -263,6 +320,8 @@ printf '%s\n%sTrade Validation%s  %sscore a trade idea before you place it%s\n%s
 LAST_STATUS=0
 while true; do
     choose_strategy
+    HORIZON=""
+    [ "$STRATEGY" = "short" ] && choose_horizon
     choose_ticker
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
@@ -278,6 +337,7 @@ while true; do
 
     # Word splitting on TICKERS is deliberate: multiple symbols are allowed.
     # shellcheck disable=SC2086
+    [ -n "$HORIZON" ] && ARGS+=(--horizon "$HORIZON")
     "$PY" "$ROOT/validate.py" $TICKERS -t "$STRATEGY" ${ARGS[@]+"${ARGS[@]}"}
     LAST_STATUS=$?
 

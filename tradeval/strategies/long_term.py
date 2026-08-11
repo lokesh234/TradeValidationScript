@@ -14,7 +14,7 @@ import pandas as pd
 
 from .. import indicators as ind
 from ..checks import CheckResult, failed, passed, skipped, threshold_check, warned
-from .base import Strategy, _human
+from .base import Panel, Strategy, _human
 
 
 class LongTermStrategy(Strategy):
@@ -56,6 +56,9 @@ class LongTermStrategy(Strategy):
         return ind.cagr(first, last, years)
 
     # -- checklist ----------------------------------------------------------
+
+    def build_panels(self) -> List[Panel]:
+        return [p for p in (self.stock_info_panel(),) if p]
 
     def build_checks(self) -> List[CheckResult]:
         return [

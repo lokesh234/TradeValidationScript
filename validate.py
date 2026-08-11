@@ -86,6 +86,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     plan.add_argument(
+        "--horizon",
+        help="short term only: how long you plan to hold -- 1m, 3m or 6m. Prompts if omitted.",
+    )
+    plan.add_argument(
+        "--sector",
+        help="short term only: sector to browse for candidates (1-6 or a name)",
+    )
+    plan.add_argument(
         "--peers",
         action="store_true",
         help="earnings only: show how industry peers moved on their own reports "
@@ -141,6 +149,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="report width in columns (default: your terminal width)",
     )
     other.add_argument(
+        "--list-sectors",
+        action="store_true",
+        help="print the sector menu, then exit",
+    )
+    other.add_argument(
+        "--list-sector-companies",
+        metavar="SECTOR",
+        help="print a sector's largest companies as SYMBOL<tab>description, then exit",
+    )
+    other.add_argument(
         "--list-earnings",
         action="store_true",
         help="print this week's earnings candidates as SYMBOL<tab>description, then exit",
@@ -150,14 +168,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def prompt_symbols(existing: List[str], key: str, config: Config) -> List[str]:
-    """Ask for tickers, offering this week's earnings names for a gamble."""
+def prompt_symbols(
+    existing: List[str], key: str, config: Config, sector: Optional[str] = None
+) -> List[str]:
+    """Ask for tickers, offering a shortlist appropriate to the trade type."""
     if existing:
         return existing
 
     candidates = []
     if key == "earnings":
         candidates = show_earnings_menu(config)
+    elif key == "short":
+        candidates = show_sector_menu(sector)
 
     prompt = (
         "\nPick a number, or type ticker(s): " if candidates else "Ticker(s), space separated: "
@@ -176,6 +198,37 @@ def prompt_symbols(existing: List[str], key: str, config: Config) -> List[str]:
             print("  Pick a number from 1 to %d, or type a ticker." % len(candidates))
             continue
         return resolve_symbols(raw.split())
+
+
+def show_sector_menu(sector: Optional[str] = None) -> List:
+    """Pick a sector, then list its largest companies to choose from."""
+    while sector is None:
+        print("\nWhich sector?\n")
+        for line in discover.format_sector_menu():
+            print(line)
+        try:
+            raw = input("\nChoice [1-%d]: " % len(discover.POPULAR_SECTORS)).strip()
+        except EOFError:
+            return []
+        if not raw:
+            continue
+        try:
+            sector = discover.resolve_sector(raw)
+        except ValueError as exc:
+            print("  %s" % exc)
+
+    try:
+        companies = discover.sector_companies(sector)
+    except Exception:
+        companies = []
+    if not companies:
+        print("\nNo companies found for %s." % sector)
+        return []
+
+    print("\n%s -- largest companies:\n" % sector)
+    for number, item in enumerate(companies, start=1):
+        print("  %2d) %s" % (number, discover.format_company(item)))
+    return companies
 
 
 def show_earnings_menu(config: Config) -> List:
@@ -224,6 +277,46 @@ def prompt_trade_type(existing: Optional[str]) -> str:
 
 
 EARNINGS_SLOTS = 4
+
+
+def prompt_horizon(config: Config) -> str:
+    """Ask how long the position is meant to be held."""
+    horizons = config.short_term.horizons
+    keys = list(horizons)
+    print("\nHow long do you plan to hold?\n")
+    for number, key in enumerate(keys, start=1):
+        profile = horizons[key]
+        print(
+            "  %d) %-9s %s%d trading days, %.0f ATR stop, wants %.1fR%s"
+            % (number, profile.label, "", profile.trading_days,
+               profile.stop_atr_multiple, profile.min_reward_risk, "")
+        )
+    while True:
+        try:
+            raw = input("\nChoice [1-%d]: " % len(keys)).strip().lower()
+        except EOFError:
+            return config.short_term.default_horizon
+        if not raw:
+            continue
+        if raw.isdigit() and 1 <= int(raw) <= len(keys):
+            return keys[int(raw) - 1]
+        if raw in horizons:
+            return raw
+        print("  Pick 1-%d, or one of: %s" % (len(keys), ", ".join(keys)))
+
+
+def resolve_horizon(key: str, args: argparse.Namespace, config: Config) -> str:
+    if key != "short":
+        return config.short_term.default_horizon
+    if args.horizon:
+        choice = args.horizon.strip().lower()
+        if choice not in config.short_term.horizons:
+            raise SystemExit(
+                "Unknown --horizon %r. Choose one of: %s"
+                % (args.horizon, ", ".join(config.short_term.horizons))
+            )
+        return choice
+    return prompt_horizon(config)
 
 # Every accepted spelling of a chain side.
 SIDES = {
@@ -469,6 +562,7 @@ def validate_symbol(
     args: argparse.Namespace,
     config: Config,
     buzz_scores: Optional[dict] = None,
+    horizon: Optional[str] = None,
 ) -> Report:
     data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
     side = resolve_option_side(key, args)
@@ -491,6 +585,7 @@ def validate_symbol(
         contracts=resolve_contracts(key, args),
         buzz=(buzz_scores or {}).get(symbol),
         include_peers=bool(args.peers) and key == "earnings",
+        horizon=horizon or config.short_term.default_horizon,
     )
     return STRATEGIES[key](ctx).run()
 
@@ -503,6 +598,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (OSError, ValueError) as exc:
         print("Config error: %s" % exc, file=sys.stderr)
         return 2
+
+    if args.list_sectors:
+        for line in discover.format_sector_menu():
+            print(line)
+        return 0
+
+    if args.list_sector_companies:
+        try:
+            sector = discover.resolve_sector(args.list_sector_companies)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        companies = discover.sector_companies(sector)
+        for item in companies:
+            print("%s\t%s" % (item.symbol, discover.format_company(item)))
+        return 0 if companies else 1
 
     if args.buzz_source:
         print(config.buzz.source)
@@ -550,7 +661,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         # Strategy first: it decides which trade details are worth asking for.
         key = prompt_trade_type(args.trade_type)
-        symbols = prompt_symbols(resolve_symbols(args.symbols), key, config)
+        symbols = prompt_symbols(resolve_symbols(args.symbols), key, config, args.sector)
     except KeyError as exc:
         print(exc, file=sys.stderr)
         return 2
@@ -573,13 +684,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
 
+    try:
+        horizon = resolve_horizon(key, args, config)
+    except SystemExit as exc:
+        print(exc, file=sys.stderr)
+        return 2
+
     buzz_scores = resolve_buzz(symbols, args, config)
 
     reports: List[Report] = []
     failures = 0
     for symbol in symbols:
         try:
-            report = validate_symbol(symbol, key, args, config, buzz_scores)
+            report = validate_symbol(symbol, key, args, config, buzz_scores, horizon)
         except DataError as exc:
             print(palette.red("%s: %s" % (symbol, exc)), file=sys.stderr)
             failures += 1

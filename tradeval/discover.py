@@ -27,6 +27,75 @@ EXCHANGE_TZ = "America/New_York"
 SCREEN_SIZE = 250
 
 
+# The six sectors deep enough to always offer liquid, optionable names.
+POPULAR_SECTORS = [
+    "Technology",
+    "Healthcare",
+    "Financial Services",
+    "Consumer Cyclical",
+    "Energy",
+    "Industrials",
+]
+
+
+@dataclass
+class SectorCompany:
+    """One company offered from a sector listing."""
+
+    symbol: str
+    name: str
+    market_cap: Optional[float]
+
+
+def resolve_sector(choice: str) -> str:
+    """Map a menu number or a name fragment onto one of the six sectors."""
+    raw = choice.strip()
+    if raw.isdigit() and 1 <= int(raw) <= len(POPULAR_SECTORS):
+        return POPULAR_SECTORS[int(raw) - 1]
+    lowered = raw.lower()
+    for sector in POPULAR_SECTORS:
+        if sector.lower() == lowered or sector.lower().startswith(lowered):
+            return sector
+    raise ValueError(
+        "Pick 1-%d, or a sector name (%s)."
+        % (len(POPULAR_SECTORS), ", ".join(POPULAR_SECTORS))
+    )
+
+
+def sector_companies(
+    sector: str, limit: int = 10, min_market_cap: float = 2e9
+) -> List[SectorCompany]:
+    """Largest tradeable US companies in a sector, biggest first."""
+    found: List[SectorCompany] = []
+    seen = set()
+    for row in _screen(sector, min_market_cap):
+        symbol = row.get("symbol")
+        if not symbol or symbol in seen:
+            continue
+        if row.get("exchange") not in TRADEABLE_EXCHANGES:
+            continue
+        seen.add(symbol)
+        found.append(
+            SectorCompany(
+                symbol=str(symbol),
+                name=str(row.get("shortName") or row.get("longName") or symbol),
+                market_cap=row.get("marketCap"),
+            )
+        )
+        if len(found) >= limit:
+            break
+    return found
+
+
+def format_company(item: SectorCompany) -> str:
+    cap = "$%.1fB" % (item.market_cap / 1e9) if item.market_cap else "n/a"
+    return "%-6s %-30s %9s" % (item.symbol, item.name[:30], cap)
+
+
+def format_sector_menu() -> List[str]:
+    return ["  %d) %s" % (n, s) for n, s in enumerate(POPULAR_SECTORS, start=1)]
+
+
 @dataclass
 class Candidate:
     """One company reporting inside the window."""

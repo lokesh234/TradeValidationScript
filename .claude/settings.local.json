@@ -42,7 +42,20 @@
       "Bash(timeout 200 ./trade.sh)",
       "Bash(.venv/bin/python validate.py ZZZZNOTREAL -t long --quiet --no-color)",
       "Bash(.venv/bin/python validate.py AMAT -t earnings --side X)",
-      "Bash(.venv/bin/python validate.py CSCO -t earnings --side C --contracts 1 --buzz --peers --no-color --width 128)"
+      "Bash(.venv/bin/python validate.py CSCO -t earnings --side C --contracts 1 --buzz --peers --no-color --width 128)",
+      "Bash(.venv/bin/python validate.py CSCO -t earnings --side C --contracts 2 --no-color --width 126)",
+      "Bash(.venv/bin/python validate.py RDDT -t earnings --side C --no-color --width 128)",
+      "Bash(.venv/bin/python -m compileall -q validate.py)",
+      "Bash(.venv/bin/python validate.py --list-sectors)",
+      "Bash(.venv/bin/python validate.py --list-sector-companies 5)",
+      "Bash(.venv/bin/python validate.py --list-sector-companies bogus)",
+      "Bash(.venv/bin/python validate.py KO -t long --no-color --width 108 --quiet)",
+      "Bash(.venv/bin/python validate.py CSCO -t earnings --side C --quiet --no-color --width 110)",
+      "Bash(.venv/bin/python validate.py CVX -t short --horizon 1m --quiet --no-color --width 110)",
+      "Bash(.venv/bin/python validate.py KO -t long --quiet --no-color --width 110)",
+      "Bash(git init *)",
+      "Bash(ln -sf ../../scripts/pre-commit .git/hooks/pre-commit)",
+      "Bash(git add *)"
     ]
   }
 }
