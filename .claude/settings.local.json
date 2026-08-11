@@ -55,7 +55,29 @@
       "Bash(.venv/bin/python validate.py KO -t long --quiet --no-color --width 110)",
       "Bash(git init *)",
       "Bash(ln -sf ../../scripts/pre-commit .git/hooks/pre-commit)",
-      "Bash(git add *)"
+      "Bash(git add *)",
+      "Bash(git ls-tree *)",
+      "Bash(git checkout *)",
+      "Bash(git commit *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(brew upgrade *)",
+      "Bash(timeout 180 .venv/bin/python -c ' *)",
+      "Bash(timeout 300 .venv/bin/python validate.py -t short --sector \"\")",
+      "Bash(timeout 300 .venv/bin/python validate.py -t short)",
+      "Bash(timeout 300 .venv/bin/python validate.py -t short --sector 10)",
+      "Bash(timeout 300 ./trade.sh)",
+      "Bash(.venv/bin/python -m py_compile validate.py tradeval/discover.py)",
+      "Bash(timeout 300 .venv/bin/python validate.py NVDA -t short --horizon 3 --no-color)",
+      "Bash(timeout 300 .venv/bin/python validate.py NVDA -t short --horizon 3m --no-color --width 140)",
+      "Bash(timeout 300 .venv/bin/python validate.py OKLO -t long --no-color --width 140)",
+      "Bash(timeout 300 .venv/bin/python validate.py MU -t earnings --no-color --width 140)",
+      "Bash(timeout 300 .venv/bin/python validate.py MU -t short --horizon 1m --no-color --width 140)",
+      "Bash(timeout 300 .venv/bin/python -c ' *)",
+      "Bash(timeout 300 .venv/bin/python validate.py AMAT -t earnings --no-color --width 140)",
+      "Bash(.venv/bin/python *)",
+      "Bash(sed '$d')",
+      "Bash(awk '{print length\": \"$0}' /private/tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/c3b2f5d3-519f-4cdc-9864-7520bf2a39ed/scratchpad/panel.txt)",
+      "Bash(git rev-list *)"
     ]
   }
 }

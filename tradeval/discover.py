@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -37,6 +38,37 @@ POPULAR_SECTORS = [
     "Industrials",
 ]
 
+# Themes cut across Yahoo's sectors, so no screener query returns them: a
+# memory maker and a power producer are both "the AI buildout" but sit in
+# Technology and Utilities. Each theme is therefore a curated basket, looked
+# up by ticker. The market-cap floor does not apply -- the point of a theme is
+# exposure to it, and the purest names are often the smallest.
+THEMES: Dict[str, List[str]] = {
+    # DRAM, NAND, HBM and the tools that make them.
+    "Memory": [
+        "MU", "SNDK", "WDC", "STX", "RMBS",
+        "SIMO", "PENG", "LRCX", "AMAT", "KLAC",
+    ],
+    # GPU capacity rented by the hour, plus the miners that converted to it.
+    "NeoCloud": [
+        "CRWV", "NBIS", "IREN", "APLD", "CORZ",
+        "CIFR", "WULF", "HUT", "GLXY", "BTDR",
+    ],
+    # Transceivers, photonics and the silicon that drives them.
+    "Optics": [
+        "COHR", "LITE", "FN", "CIEN", "MRVL",
+        "CRDO", "ALAB", "AAOI", "IPGP", "POET",
+    ],
+    # Generation, grid build-out and everything between the meter and the rack.
+    "Data Center Energy": [
+        "VST", "CEG", "NRG", "TLN", "GEV",
+        "ETN", "VRT", "PWR", "BE", "OKLO",
+    ],
+}
+
+# Sectors first, then themes; the menu numbers follow this order.
+MENU_CHOICES = POPULAR_SECTORS + list(THEMES)
+
 
 @dataclass
 class SectorCompany:
@@ -48,24 +80,28 @@ class SectorCompany:
 
 
 def resolve_sector(choice: str) -> str:
-    """Map a menu number or a name fragment onto one of the six sectors."""
+    """Map a menu number or a name fragment onto a sector or theme."""
     raw = choice.strip()
-    if raw.isdigit() and 1 <= int(raw) <= len(POPULAR_SECTORS):
-        return POPULAR_SECTORS[int(raw) - 1]
+    if raw.isdigit() and 1 <= int(raw) <= len(MENU_CHOICES):
+        return MENU_CHOICES[int(raw) - 1]
     lowered = raw.lower()
-    for sector in POPULAR_SECTORS:
-        if sector.lower() == lowered or sector.lower().startswith(lowered):
+    for sector in MENU_CHOICES:
+        # A blank choice must not prefix-match its way to the first name.
+        if lowered and (sector.lower() == lowered or sector.lower().startswith(lowered)):
             return sector
     raise ValueError(
-        "Pick 1-%d, or a sector name (%s)."
-        % (len(POPULAR_SECTORS), ", ".join(POPULAR_SECTORS))
+        "Pick 1-%d, or a name (%s)."
+        % (len(MENU_CHOICES), ", ".join(MENU_CHOICES))
     )
 
 
 def sector_companies(
     sector: str, limit: int = 10, min_market_cap: float = 2e9
 ) -> List[SectorCompany]:
-    """Largest tradeable US companies in a sector, biggest first."""
+    """Largest tradeable US companies in a sector or theme, biggest first."""
+    if sector in THEMES:
+        return _theme_companies(THEMES[sector], limit)
+
     found: List[SectorCompany] = []
     seen = set()
     for row in _screen(sector, min_market_cap):
@@ -87,13 +123,73 @@ def sector_companies(
     return found
 
 
+def _positive(value: Any) -> Optional[float]:
+    """Coerce a Yahoo field to a positive float, or None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _shares_outstanding(ticker: Any) -> Optional[float]:
+    """Latest reported share count, for names whose profile carries no cap."""
+    start = dt.date.today() - dt.timedelta(days=730)
+    try:
+        series = ticker.get_shares_full(start=start.isoformat())
+    except Exception:
+        return None
+    if series is None or len(series) == 0:
+        return None
+    return _positive(series.iloc[-1])
+
+
+def _theme_company(symbol: str) -> SectorCompany:
+    """Name and market cap for one basket member; symbol alone if the lookup fails."""
+    name, cap = symbol, None
+    try:
+        ticker = yf.Ticker(symbol)
+        info = ticker.info or {}
+        name = str(info.get("shortName") or info.get("longName") or symbol)
+        cap = _positive(info.get("marketCap"))
+        if cap is None:
+            # A few profiles carry no marketCap at all -- MU and WDC among
+            # them. The streaming quote usually has it; when it does not,
+            # rebuild it from the last price and the reported share count.
+            try:
+                cap = _positive(ticker.fast_info.get("market_cap"))
+            except Exception:
+                cap = None
+        if cap is None:
+            price = _positive(info.get("currentPrice"))
+            shares = _shares_outstanding(ticker)
+            cap = price * shares if price and shares else None
+    except Exception:
+        pass
+    return SectorCompany(symbol=symbol, name=name, market_cap=cap)
+
+
+def _theme_companies(symbols: Sequence[str], limit: int) -> List[SectorCompany]:
+    """Basket members with live names and caps, biggest first.
+
+    A theme costs one lookup per ticker rather than the single screener call a
+    sector needs, so they run in parallel -- this menu is on the critical path
+    to the ticker prompt.
+    """
+    with ThreadPoolExecutor(max_workers=max(1, min(len(symbols), 8))) as pool:
+        found = list(pool.map(_theme_company, symbols))
+    # Unknown caps sort last rather than as zero-cap companies.
+    found.sort(key=lambda c: -(c.market_cap or 0.0))
+    return found[:limit]
+
+
 def format_company(item: SectorCompany) -> str:
     cap = "$%.1fB" % (item.market_cap / 1e9) if item.market_cap else "n/a"
     return "%-6s %-30s %9s" % (item.symbol, item.name[:30], cap)
 
 
 def format_sector_menu() -> List[str]:
-    return ["  %d) %s" % (n, s) for n, s in enumerate(POPULAR_SECTORS, start=1)]
+    return ["  %2d) %s" % (n, s) for n, s in enumerate(MENU_CHOICES, start=1)]
 
 
 @dataclass

@@ -372,13 +372,14 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
 def _render_info_row(
     row: Sequence[str], widths: Sequence[int], palette: Palette, style: Optional[str]
 ) -> str:
-    """Label plain, figure emphasised, trailing note dimmed.
+    """Label plain, figure emphasised, trailing notes dimmed.
 
     Three weights rather than three hues: the eye lands on the number first,
-    the label reads normally, and the note recedes. ``style`` paints the figure
-    when the row carries a verdict of its own.
+    the label reads normally, and the notes recede. ``style`` paints the figure
+    when the row carries a verdict of its own. Column 0 is the label and column
+    1 the figure, so everything past them is supporting text.
     """
-    note_column = len(row) - 1
+    first_note = 2
     # Stop at the last cell with content. Padding an empty trailing cell would
     # bury spaces inside a colour escape where rstrip cannot reach them, and
     # the coloured and plain renderings would drift apart.
@@ -399,7 +400,7 @@ def _render_info_row(
             padded = cell.rjust(widths[index])
         if index == 0:
             parts.append(padded)
-        elif index == note_column and note_column > 1:
+        elif index >= first_note:
             parts.append(palette.grey(padded))
         else:
             painter = getattr(palette, style, None) if style else None

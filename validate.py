@@ -91,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--sector",
-        help="short term only: sector to browse for candidates (1-6 or a name)",
+        help="short term only: sector or theme to browse for candidates (a menu number or a name)",
     )
     plan.add_argument(
         "--peers",
@@ -154,6 +154,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print the sector menu, then exit",
     )
     other.add_argument(
+        "--resolve-sector",
+        metavar="CHOICE",
+        help="print the sector or theme a menu choice names, then exit",
+    )
+    other.add_argument(
         "--list-sector-companies",
         metavar="SECTOR",
         help="print a sector's largest companies as SYMBOL<tab>description, then exit",
@@ -201,13 +206,21 @@ def prompt_symbols(
 
 
 def show_sector_menu(sector: Optional[str] = None) -> List:
-    """Pick a sector, then list its largest companies to choose from."""
+    """Pick a sector or theme, then list its largest companies to choose from."""
+    if sector is not None:
+        # --sector takes the same menu numbers and name fragments the prompt
+        # does, so it has to go through the same resolution.
+        try:
+            sector = discover.resolve_sector(sector)
+        except ValueError as exc:
+            print("  %s" % exc)
+            sector = None
     while sector is None:
         print("\nWhich sector?\n")
         for line in discover.format_sector_menu():
             print(line)
         try:
-            raw = input("\nChoice [1-%d]: " % len(discover.POPULAR_SECTORS)).strip()
+            raw = input("\nChoice [1-%d]: " % len(discover.MENU_CHOICES)).strip()
         except EOFError:
             return []
         if not raw:
@@ -602,6 +615,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.list_sectors:
         for line in discover.format_sector_menu():
             print(line)
+        return 0
+
+    # Validating a menu choice costs nothing; listing its companies costs a
+    # round trip per name, so the shell front end resolves first and fetches once.
+    if args.resolve_sector:
+        try:
+            print(discover.resolve_sector(args.resolve_sector))
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
         return 0
 
     if args.list_sector_companies:

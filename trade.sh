@@ -145,16 +145,17 @@ choose_horizon() {
 # prompt so there is something to choose from.
 choose_sector() {
     SECTOR=""
-    printf '\n%sWhich sector?%s\n\n' "$BOLD" "$OFF"
-    "$PY" "$ROOT/validate.py" --list-sectors 2>/dev/null
-    printf '\n'
+    local menu count
+    menu="$("$PY" "$ROOT/validate.py" --list-sectors 2>/dev/null)"
+    [ -z "$menu" ] && return 1
+    count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
+    printf '\n%sWhich sector?%s\n\n%s\n\n' "$BOLD" "$OFF" "$menu"
     while true; do
-        ask reply "Choice [1-6]"
-        if "$PY" "$ROOT/validate.py" --list-sector-companies "$reply" >/dev/null 2>&1; then
-            SECTOR="$reply"
-            return 0
-        fi
-        printf '  %sPick a number from 1 to 6.%s\n' "$DIM" "$OFF"
+        ask reply "Choice [1-$count]"
+        # Resolving is a local lookup; leave the network fetch to browse_sector.
+        SECTOR="$("$PY" "$ROOT/validate.py" --resolve-sector "$reply" 2>/dev/null)"
+        [ -n "$SECTOR" ] && return 0
+        printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
     done
 }
 
@@ -163,7 +164,7 @@ browse_sector() {
     local out sym line n=0
     out="$("$PY" "$ROOT/validate.py" --list-sector-companies "$SECTOR" 2>/dev/null)" || return 1
     [ -z "$out" ] && return 1
-    printf '\n%sLargest companies in that sector:%s\n\n' "$BOLD" "$OFF"
+    printf '\n%s%s -- largest companies:%s\n\n' "$BOLD" "$SECTOR" "$OFF"
     while IFS="$(printf '\t')" read -r sym line; do
         [ -z "$sym" ] && continue
         n=$((n + 1))

@@ -250,9 +250,28 @@ class MarketData:
         if cap is not None:
             return cap
         try:
-            return _f(self._ticker.fast_info.get("market_cap"))
+            cap = _f(self._ticker.fast_info.get("market_cap"))
+        except Exception:
+            cap = None
+        if cap is not None:
+            return cap
+        # Some profiles carry no cap in either place -- MU and WDC among them.
+        # Shares outstanding times the price we already have is the same
+        # number, so rebuild it rather than blanking the row.
+        shares = self._shares_outstanding()
+        return shares * self.price if shares and self.price else None
+
+    def _shares_outstanding(self) -> Optional[float]:
+        """Share count from the profile, or the latest reported filing."""
+        shares = self.info_value("sharesOutstanding", "impliedSharesOutstanding")
+        if shares is not None:
+            return shares
+        try:
+            start = (dt.date.today() - dt.timedelta(days=730)).isoformat()
+            series = self._ticker.get_shares_full(start=start)
         except Exception:
             return None
+        return _f(series.iloc[-1]) if series is not None and len(series) else None
 
     @cached_property
     def fifty_two_week_range(self) -> "tuple[Optional[float], Optional[float]]":

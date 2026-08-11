@@ -198,18 +198,42 @@ An earnings gamble prints what the street expects from the report you selected:
 
 ```
  STOCK INFO -- with consensus for the 2026-08-13 report
-  Metric                       Consensus          Range / note
-  Market cap                    $416.23B
-  Price                          $524.24      63% of 52w range
-  52-week high                   $739.67      spot 29.1% below
-  52-week low                    $154.47     spot 239.4% above
-  Forward P/E                      30.38        49.22 trailing
-  Expected EPS                      3.39           3.21 - 3.56
-  Expected earnings (quarter)     $2.70B  EPS x 793.96M shares
-  Expected revenue (quarter)      $9.00B       $8.95B - $9.20B
-  Revenue (trailing 12m)         $29.02B
-  Free cash flow                  $5.70B   1.37% of market cap
+  Metric                                             Value                 Range / note                  What's good
+  Market cap                                      $417.31B                                       $10B+ trades liquid
+  Price                                            $525.61             63% of 52w range        upper half = strength
+  52-week high                                     $739.67             spot 28.9% below
+  52-week low                                      $154.47            spot 240.3% above
+  Forward P/E                                        30.46               49.35 trailing            S&P averages ~22x
+  PEG ratio                                           1.19  P/E against expected growth    under 1.0 is cheap growth
+  Expected EPS                                        3.39                  3.21 - 3.56
+  Expected earnings (quarter)                       $2.70B         EPS x 793.96M shares
+  Expected revenue (quarter)                        $9.00B              $8.95B - $9.20B
+  Revenue (trailing 12m)                           $29.02B
+  Free cash flow                                    $5.70B          1.37% of market cap  positive, 5%+ of cap strong
+  Analyst target                                   $633.34             +20.5% from spot       targets skew ~15% high
+  Target range                 $358.00 - $900.00, 86% wide      35 analysts, strong buy   under 40% wide = agreement
+  Revenue growth                                    +11.4%               year over year        10%+ solid, 25%+ fast
+  Earnings growth                                   +31.3%     most recent quarter, YoY  should keep pace with sales
+  Profit margin                                      29.3%                               10%+ healthy, under 0 burns
+  Beta                                                1.62       amplifies market moves  over 2 needs a smaller size
+  Institutional held                                 84.7%                insiders 0.3%             40-80% is normal
 ```
+
+The same panel prints for a short term or long term trade, without the three
+consensus rows.
+
+`What's good` is the range the figure usually lives in, so a number means
+something without knowing the norms already — the S&P trades around 22x
+forward, sell-side targets sit systematically high, a PEG under 1.0 says
+you're paying less than the growth rate. They are rules of thumb, not the
+thresholds the score uses, and rows where "good" depends entirely on the trade
+you're placing (a 52-week high, revenue) are left blank rather than filled with
+something true of nothing.
+
+`PEG ratio` divides the P/E by expected earnings growth: it is the answer to
+"that multiple is high, but is it high for how fast this is growing?" Yahoo
+only publishes it when the company earns money and analysts forecast growth, so
+a loss-maker reads `Not Available` with a note saying what it would need.
 
 The 52-week high and low come from the price history already downloaded, not
 the profile payload, so they survive a thin `info` response. `Price` shows where

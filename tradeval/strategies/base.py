@@ -52,6 +52,26 @@ def _span(low: Optional[float], high: Optional[float], fmt: Optional[str]) -> st
 
 
 
+# What a healthy figure looks like, for the last column of the stock panel.
+# Rules of thumb rather than thresholds the score uses: a number only means
+# something next to the range it usually lives in. Rows where "good" depends
+# entirely on the trade -- a 52-week high, revenue -- are left blank on
+# purpose, so a filled cell is always an actual claim.
+GOOD_MARKET_CAP = "$10B+ trades liquid"
+GOOD_RANGE_POSITION = "upper half = strength"
+GOOD_FORWARD_PE = "S&P averages ~22x"
+GOOD_LOSS_MAKING = "negative = losses expected"
+GOOD_PEG = "under 1.0 is cheap growth"
+GOOD_FREE_CASH_FLOW = "positive, 5%+ of cap strong"
+GOOD_ANALYST_TARGET = "targets skew ~15% high"
+GOOD_TARGET_SPREAD = "under 40% wide = agreement"
+GOOD_REVENUE_GROWTH = "10%+ solid, 25%+ fast"
+GOOD_EARNINGS_GROWTH = "should keep pace with sales"
+GOOD_PROFIT_MARGIN = "10%+ healthy, under 0 burns"
+GOOD_BETA = "over 2 needs a smaller size"
+GOOD_INSTITUTIONAL = "40-80% is normal"
+
+
 @dataclass
 class Panel:
     """A supporting table printed under the checks.
@@ -270,20 +290,40 @@ class Strategy(ABC):
         if fcf is not None and market_cap:
             fcf_note = "%.2f%% of market cap" % (fcf / market_cap * 100.0)
 
+        peg = data.info_value("trailingPegRatio", "pegRatio")
+        forward_pe = data.info_value("forwardPE")
+        # A negative forward P/E is not a cheap one: it means the street models
+        # a loss, and the multiple is meaningless rather than attractive.
+        pe_guide = GOOD_LOSS_MAKING if forward_pe is not None and forward_pe <= 0 else GOOD_FORWARD_PE
+
         rows: List[List[str]] = [
-            ["Market cap", _money(market_cap), ""],
-            ["Price", _num(spot, "$%.2f"), _num(data.range_position_pct(), "%.0f%% of 52w range")],
+            ["Market cap", _money(market_cap), "", GOOD_MARKET_CAP],
+            [
+                "Price",
+                _num(spot, "$%.2f"),
+                _num(data.range_position_pct(), "%.0f%% of 52w range"),
+                GOOD_RANGE_POSITION,
+            ],
             ["52-week high", _num(high, "$%.2f"), _gap_note(spot, high, "below")],
             ["52-week low", _num(low, "$%.2f"), _gap_note(spot, low, "above")],
             [
                 "Forward P/E",
-                _num(data.info_value("forwardPE"), "%.2f"),
+                _num(forward_pe, "%.2f"),
                 _num(data.info_value("trailingPE"), "%.2f trailing"),
+                pe_guide,
+            ],
+            [
+                "PEG ratio",
+                _num(peg, "%.2f"),
+                # Yahoo only publishes a PEG where both halves exist, so say
+                # which one is missing rather than leaving a bare n/a.
+                "P/E against expected growth" if peg is not None else "needs profit and a forecast",
+                GOOD_PEG,
             ],
         ]
         rows.extend(extras or [])
         rows.append(["Revenue (trailing 12m)", _money(data.info_value("totalRevenue")), ""])
-        rows.append(["Free cash flow", _money(fcf), fcf_note])
+        rows.append(["Free cash flow", _money(fcf), fcf_note, GOOD_FREE_CASH_FLOW])
         rows.extend(self._analyst_rows(spot))
         rows.extend(self._quality_rows())
 
@@ -291,7 +331,7 @@ class Strategy(ABC):
             return None
         return Panel(
             title=title,
-            headers=["Metric", "Value", "Range / note"],
+            headers=["Metric", "Value", "Range / note", "What's good"],
             rows=rows,
             label_value_note=True,
             note=note,
@@ -310,7 +350,7 @@ class Strategy(ABC):
         rating = str(self.data.info.get("recommendationKey") or "").replace("_", " ")
 
         if mean is None and high is None and low is None:
-            return [["Analyst target", UNAVAILABLE, ""]]
+            return [["Analyst target", UNAVAILABLE, "", GOOD_ANALYST_TARGET]]
 
         upside = "%+.1f%% from spot" % ((mean / spot - 1.0) * 100.0) if mean and spot else ""
         coverage = []
@@ -325,8 +365,8 @@ class Strategy(ABC):
             spread += ", %.0f%% wide" % ((high - low) / mean * 100.0)
 
         return [
-            ["Analyst target", _num(mean, "$%.2f"), upside],
-            ["Target range", spread, ", ".join(coverage)],
+            ["Analyst target", _num(mean, "$%.2f"), upside, GOOD_ANALYST_TARGET],
+            ["Target range", spread, ", ".join(coverage), GOOD_TARGET_SPREAD],
         ]
 
     def _quality_rows(self) -> List[List[str]]:
@@ -351,11 +391,21 @@ class Strategy(ABC):
             beta_note = "moves with the market"
 
         return [
-            ["Revenue growth", _growth_pct(revenue), "year over year"],
-            ["Earnings growth", _growth_pct(earnings), "most recent quarter, YoY"],
-            ["Profit margin", _pct_of(margin), ""],
-            ["Beta", _num(beta, "%.2f"), beta_note],
-            ["Institutional held", _pct_of(institutions), _pct_of(insiders, "insiders %s")],
+            ["Revenue growth", _growth_pct(revenue), "year over year", GOOD_REVENUE_GROWTH],
+            [
+                "Earnings growth",
+                _growth_pct(earnings),
+                "most recent quarter, YoY",
+                GOOD_EARNINGS_GROWTH,
+            ],
+            ["Profit margin", _pct_of(margin), "", GOOD_PROFIT_MARGIN],
+            ["Beta", _num(beta, "%.2f"), beta_note, GOOD_BETA],
+            [
+                "Institutional held",
+                _pct_of(institutions),
+                _pct_of(insiders, "insiders %s"),
+                GOOD_INSTITUTIONAL,
+            ],
         ]
 
     def build_panels(self) -> List[Panel]:
