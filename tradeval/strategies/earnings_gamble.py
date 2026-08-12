@@ -11,31 +11,11 @@ import datetime as dt
 from functools import cached_property
 from typing import List, Optional
 
-from .. import peers, pricing, spreads
+from .. import peers
 from ..checks import CheckResult, failed, passed, skipped, warned
-from ..data import AtmQuote, OptionQuote
+from ..data import AtmQuote
 from .base import UNAVAILABLE, Panel, Strategy, _human, _money, _num, _span
-
-
-def _scale(value: Optional[float], count: int) -> Optional[float]:
-    """Extend a per-contract figure to the whole position."""
-    return None if value is None else value * count
-
-
-def _money_cell(value: Optional[float]) -> str:
-    """Unsigned dollar amount -- never coloured as a P&L."""
-    return "${:,.0f}".format(value) if value is not None else "-"
-
-
-def _cost(quote: OptionQuote, count: int = 1) -> str:
-    return _money_cell(_scale(quote.contract_cost(), count))
-
-
-def _signed_money(value: Optional[float]) -> str:
-    """Dollar P&L with an explicit sign: +$1,180 / -$402."""
-    if value is None:
-        return "-"
-    return "%s$%s" % ("+" if value >= 0 else "-", "{:,.0f}".format(abs(value)))
+from .options import OptionsPlaybook, _credible_iv, _money_cell, _signed_pct
 
 
 def _buzz_colour(score: float, rules) -> str:
@@ -67,20 +47,7 @@ def _company(name: str) -> str:
     return trimmed
 
 
-def _return_pct(value: Optional[float]) -> str:
-    """Percent return on the premium paid. Whole percents: these run large."""
-    return "%+.0f%%" % value if value is not None else "-"
-
-
-def _signed_pct(value: Optional[float]) -> str:
-    """Percent with an explicit sign so the renderer can colour it."""
-    if value is None:
-        return "n/a"
-    # Rounding a hair below zero would print '-0.0%', which reads as a bug.
-    return "%+.1f%%" % (0.0 if abs(value) < 0.05 else value)
-
-
-class EarningsGambleStrategy(Strategy):
+class EarningsGambleStrategy(OptionsPlaybook, Strategy):
     key = "earnings"
     name = "Earnings Gamble"
     description = "Short-dated directional bet held across a scheduled earnings report."
@@ -88,6 +55,11 @@ class EarningsGambleStrategy(Strategy):
     @property
     def rules(self):
         return self.config.earnings
+
+    @property
+    def share_move_pcts(self) -> List[float]:
+        """A report's gap, not a swing: the same moves the contracts model."""
+        return list(self.rules.profit_move_pcts)
 
     @property
     def horizon(self) -> str:
@@ -110,13 +82,15 @@ class EarningsGambleStrategy(Strategy):
 
     # -- options snapshots --------------------------------------------------
 
+    @property
+    def option_rules(self):
+        """A report is graded against its own thresholds, not the generic ones."""
+        return self.config.earnings
+
     @cached_property
-    def front_quote(self) -> Optional[AtmQuote]:
-        """ATM straddle for the first expiry that captures the report."""
-        if self.event_date is None:
-            return None
-        expiry = self.data.first_expiry_after(self.event_date)
-        return self.data.atm_quote(expiry) if expiry else None
+    def chain_expiry(self) -> Optional[dt.date]:
+        """The first expiry that captures the report."""
+        return self.data.first_expiry_after(self.event_date) if self.event_date else None
 
     @cached_property
     def back_quote(self) -> Optional[AtmQuote]:
@@ -127,14 +101,6 @@ class EarningsGambleStrategy(Strategy):
         target = front.expiry + dt.timedelta(days=21)
         expiry = self.data.first_expiry_after(target)
         return self.data.atm_quote(expiry) if expiry else None
-
-    @cached_property
-    def implied_move_pct(self) -> Optional[float]:
-        """Straddle-implied move for the event expiry, as a percent of spot."""
-        quote = self.front_quote
-        if quote is None or self.data.price <= 0:
-            return None
-        return quote.straddle / self.data.price * 100.0
 
     # -- the contracts you'd actually buy -----------------------------------
 
@@ -147,11 +113,9 @@ class EarningsGambleStrategy(Strategy):
         profile = None if self.ctx.profile_shown else self._estimates_panel()
         panels = [p for p in (profile, self._buzz_panel(), self._peers_panel()) if p]
         if self.ctx.trades_options:
-            panels.extend(self._ladder_panels())
-            if self.ctx.trades_spread:
-                panels.extend(self._spread_panels())
-            else:
-                panels.extend(self._profit_panels())
+            panels.extend(self.option_panels())
+        else:
+            panels.extend(p for p in (self.share_payoff_panel(),) if p)
         return panels
 
     # -- what the position costs, before you are asked to size it -----------
@@ -164,333 +128,22 @@ class EarningsGambleStrategy(Strategy):
         """
         return self._estimates_panel()
 
-    def max_strikes(self) -> Optional[int]:
-        """How deep the chain goes, so the ladder is never asked for more."""
-        quote = self.front_quote
-        return self.data.strikes_available(quote.expiry) if quote else None
-
-    def price_lines(self) -> List[str]:
-        """What one contract or one spread costs, for the sizing prompt.
-
-        Asking how many to buy before showing a price is asking blind, and the
-        answer changes the risk check. These are the same figures the ladder
-        prints later, cut down to the two that decide the size.
-        """
-        quote = self.front_quote
-        if quote is None or not self.ctx.trades_options:
-            return []
-        if self.ctx.trades_spread:
-            return self._spread_price_lines()
-
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes)
-        if ladder is None:
-            return []
-        lines = ["", "%s expiry, cost per contract:" % quote.expiry.isoformat()]
-        for _, quotes in self._visible_sides(*ladder):
-            for leg in quotes:
-                cost = leg.contract_cost()
-                if cost is None:
-                    continue
-                lines.append(
-                    "  %-6s %-5s  %s"
-                    % (
-                        spreads.format_strike(leg.strike),
-                        leg.kind,
-                        "${:,.0f}".format(cost),
-                    )
-                )
-        return lines if len(lines) > 2 else []
-
-    def _spread_price_lines(self) -> List[str]:
-        built = self.spreads
-        if not built:
-            return []
-        lines = [
-            "",
-            "%s expiry, cost per spread:" % self.front_quote.expiry.isoformat(),
-            "  %-11s %8s %11s %11s" % ("Strikes", "Debit", "Max profit", "Reward:risk"),
-        ]
-        for spread in built:
-            if spread.cost is None:
-                continue
-            lines.append(
-                "  %-11s %8s %11s %11s"
-                % (
-                    spread.label,
-                    "${:,.0f}".format(spread.cost),
-                    "${:,.0f}".format(spread.max_profit or 0.0),
-                    "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
-                )
-            )
-        return lines if len(lines) > 3 else []
-
     # -- vertical debit spreads ---------------------------------------------
-
-    @cached_property
-    def spreads(self) -> List[spreads.VerticalSpread]:
-        """Five pairings off the same long leg, walking the short strike out."""
-        kind = self.ctx.spread_kind
-        quote = self.front_quote
-        if kind is None or quote is None:
-            return []
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes + 1)
-        if ladder is None:
-            return []
-        calls, puts = ladder
-        legs = [q for q in (calls if kind == "call" else puts) if q.mid]
-        return spreads.build_debit_spreads(legs, self.ctx.strikes)
-
-    def _spread_panels(self) -> List[Panel]:
-        built = self.spreads
-        if not built:
-            return []
-        panels = [self._spread_table(built)]
-        profit = self._spread_profit_panel(built)
-        if profit:
-            panels.append(profit)
-        return panels
-
-    def _spread_table(self, built: List[spreads.VerticalSpread]) -> Panel:
-        """What each pairing costs and what it can pay."""
-        spot = self.data.price
-        count = self.ctx.contracts
-        implied = self.implied_move_pct
-        rows = []
-        for spread in built:
-            rows.append(
-                [
-                    spread.label,
-                    "%s wide" % spreads.format_strike(spread.width),
-                    _money_cell(_scale(spread.cost, count)),
-                    _money_cell(_scale(spread.max_profit, count)),
-                    _money_cell(_scale(spread.max_loss, count)),
-                    "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
-                    "{:,.2f}".format(spread.breakeven) if spread.breakeven else "-",
-                    _signed_pct(spread.breakeven_move_pct(spot)),
-                    _signed_pct(self._directional(spread.target_move_pct(spot))),
-                ]
-            )
-
-        # A stated floor is the trader's own criterion, so it takes the marker
-        # when there is one. Otherwise mark the widest spread the implied move
-        # still reaches: past that one you are paying for upside the market
-        # does not expect to arrive.
-        floor = self.ctx.min_reward_risk
-        if floor is not None:
-            marked = [i for i, s in enumerate(built) if (s.reward_risk or 0.0) >= floor]
-            marker = "meets %.2f:1" % floor
-        else:
-            reachable = [
-                index
-                for index, spread in enumerate(built)
-                if implied is not None and (spread.target_move_pct(spot) or 0.0) <= implied
-            ]
-            marked = reachable[-1:]
-            marker = "implied move reaches"
-        kind = self.ctx.spread_kind or "call"
-        sizing = "per spread" if count == 1 else "%d spreads" % count
-        self._check_budget_covers_a_spread(built)
-        note = (
-            "Long the strike nearest the money, short each strike further out. "
-            "Max profit needs the stock at or beyond the short strike by expiry; "
-            "max loss is the debit and nothing worse."
-        )
-        if implied is not None:
-            note += "  The options price a move of %.1f%%." % implied
-        return Panel(
-            title="%s DEBIT SPREADS -- %s expiry, %s"
-            % (kind.upper(), self.front_quote.expiry.isoformat(), sizing),
-            headers=[
-                "Strikes", "Width", "Debit", "Max profit", "Max loss",
-                "Reward:risk", "Breakeven", "B/E move", "To max",
-            ],
-            rows=rows,
-            highlight=marked,
-            highlight_label=marker,
-            left_align=[0],
-            note=note,
-        )
-
-    def _spread_profit_panel(self, built: List[spreads.VerticalSpread]) -> Optional[Panel]:
-        """What each pairing is worth the morning after, once IV is crushed."""
-        volatility = self.post_event_iv
-        days_left = self.days_left_after_event
-        if volatility is None or days_left is None:
-            return None
-
-        spot = self.data.price
-        rate = self.rules.risk_free_rate_pct / 100.0
-        count = self.ctx.contracts
-        rows, dim = [], []
-        for move in self._spread_moves(built):
-            # The ladder runs in position-relative terms, so label each row
-            # with what the stock did: a put spread wants the fall.
-            stock_move = move if self.ctx.spread_kind == "call" else -move
-            if stock_move == 0:
-                stock_move = 0.0  # negating zero would print a '-0.0%' row
-            profits = ["%+.1f%% move" % stock_move]
-            returns = ["  return on cost"]
-            values = ["  position value" if count > 1 else "  spread value"]
-            for spread in built:
-                value = spread.value_after_move(spot, move, days_left, volatility, rate)
-                cost = spread.cost
-                profit = None if value is None or cost is None else value - cost
-                pct = None if profit is None or not cost else profit / cost * 100.0
-                profits.append(_signed_money(_scale(profit, count)))
-                returns.append(_return_pct(pct))
-                values.append(_money_cell(_scale(value, count)))
-            rows.append(profits)
-            dim.append(len(rows))
-            rows.append(returns)
-            dim.append(len(rows))
-            rows.append(values)
-
-        crushed_from = self.front_quote.iv if self.front_quote else None
-        crush = ""
-        if crushed_from and days_left > 0:
-            crush = ", IV crushed %.0f%% -> %.0f%%" % (crushed_from, volatility * 100.0)
-        sizing = "per spread" if count == 1 else "%d spreads" % count
-        return Panel(
-            title="PROFIT NEXT DAY -- %s debit spreads, %s%s"
-            % (self.ctx.spread_kind, sizing, crush),
-            headers=["Strikes"] + [s.label for s in built],
-            subheaders=["Cost now"] + [_money_cell(_scale(s.cost, count)) for s in built],
-            rows=rows,
-            dim=dim,
-            color_signed=True,
-            note=(
-                "Both legs are repriced against the crushed volatility, which is "
-                "the point of the structure: what the long leg gives up, the short "
-                "leg hands back. The payoff stops at the short strike, so the wider "
-                "moves pay no more than the narrow ones."
-            ),
-        )
-
-    def _check_budget_covers_a_spread(self, built: List[spreads.VerticalSpread]) -> None:
-        """Say so when the money set aside cannot open even the narrowest pairing."""
-        budget = self.ctx.risk_dollars
-        costs = [s.cost for s in built if s.cost]
-        if not budget or not costs:
-            return
-        count = self.ctx.contracts
-        cheapest = min(costs) * count
-        if budget < cheapest:
-            plural = "a spread" if count == 1 else "%d spreads" % count
-            self.note(
-                "Your $%s budget does not cover %s here -- the narrowest pairing costs "
-                "$%s for that size. Buy fewer, or narrow the width further."
-                % ("{:,.0f}".format(budget), plural, "{:,.0f}".format(cheapest))
-            )
-
-    def _spread_moves(self, built: List[spreads.VerticalSpread]) -> List[float]:
-        """Moves to model, in position-relative percent: negative goes against you.
-
-        Scaled to the move the options are pricing rather than the fixed 5-25%
-        ladder a long contract uses. A spread caps out inside the expected move
-        -- often well inside it -- so those columns would print the same number
-        five times, and none of them would be the loss.
-        """
-        implied = self.implied_move_pct
-        if not implied:
-            targets = [s.target_move_pct(self.data.price) or 0.0 for s in built]
-            implied = (max(targets) * 2.0) if any(targets) else 5.0
-        return [-implied, -implied / 2.0, 0.0, implied / 2.0, implied]
-
-    def _directional(self, move: Optional[float]) -> Optional[float]:
-        """Sign a move the way the position needs it to go."""
-        if move is None:
-            return None
-        return move if self.ctx.spread_kind == "call" else -move
 
     # -- what those contracts pay the morning after -------------------------
 
-    @cached_property
-    def post_event_iv(self) -> Optional[float]:
-        """IV to reprice at once the event premium is gone, as a decimal.
+    @property
+    def payoff_title(self) -> str:
+        return "PROFIT NEXT DAY"
 
-        The back-month expiry is the market's own estimate of this name's
-        non-event volatility, so it is the natural landing point after the
-        crush. Without one, fall back to the front IV and say so.
-        """
-        back = self.back_quote
-        if back is not None and back.iv:
-            return back.iv / 100.0
-        front = self.front_quote
-        return front.iv / 100.0 if front is not None and front.iv else None
+    def payoff_conditions(self, days_left: float, volatility: Optional[float]) -> str:
+        """The crush is the condition that matters here, so name it in the title."""
+        front = self.front_quote.iv if self.front_quote else None
+        if not front or days_left <= 0 or volatility is None:
+            return ""
+        return ", IV crushed %.0f%% -> %.0f%%" % (front, volatility * 100.0)
 
-    @cached_property
-    def days_left_after_event(self) -> Optional[float]:
-        """Days to expiry remaining on the session after the report."""
-        quote = self.front_quote
-        days_to_event = self.days_to_earnings
-        if quote is None or days_to_event is None:
-            return None
-        return max(quote.days_out - (days_to_event + 1), 0.0)
-
-    def _profit_panels(self) -> List[Panel]:
-        quote = self.front_quote
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes) if quote else None
-        volatility = self.post_event_iv
-        days_left = self.days_left_after_event
-        if ladder is None or volatility is None or days_left is None:
-            return []
-
-        rate = self.rules.risk_free_rate_pct / 100.0
-        moves = self.rules.profit_move_pcts
-        spot = self.data.price
-        crushed_from = self.front_quote.iv if self.front_quote else None
-
-        panels = []
-        for kind, quotes in self._visible_sides(*ladder):
-            priced = [q for q in quotes if q.mid]
-            if not priced:
-                continue
-            sign = "+" if kind == "CALLS" else "-"
-            count = self.ctx.contracts
-            rows, dim = [], []
-            for move in moves:
-                profits = ["%s%.0f%% move" % (sign, move)]
-                returns = ["  return on cost"]
-                values = ["  position value" if count > 1 else "  contract price"]
-                for q in priced:
-                    args = (q.kind, spot, q.strike, move, days_left, volatility, rate)
-                    value = pricing.value_after_move(*args)
-                    cost = q.mid * 100.0
-                    profit = None if value is None else value - cost
-                    # Percent return is the same whatever the contract count,
-                    # so it is taken before scaling.
-                    pct = None if profit is None or cost <= 0 else profit / cost * 100.0
-                    profits.append(_signed_money(_scale(profit, count)))
-                    returns.append(_return_pct(pct))
-                    values.append(_money_cell(_scale(value, count)))
-                # Each move: the P&L, the same thing as a percentage, then
-                # what the position is then worth.
-                rows.append(profits)
-                dim.append(len(rows))
-                rows.append(returns)
-                dim.append(len(rows))
-                rows.append(values)
-
-            # IV only matters while there is time value left to crush.
-            crush = ""
-            if crushed_from and days_left > 0:
-                crush = ", IV crushed %.0f%% -> %.0f%%" % (crushed_from, volatility * 100.0)
-            sizing = "per contract" if count == 1 else "%d contracts" % count
-            panels.append(
-                Panel(
-                    title="PROFIT NEXT DAY -- %s, %s%s" % (kind.lower(), sizing, crush),
-                    headers=["Strike"] + ["{:,.2f}".format(q.strike) for q in priced],
-                    subheaders=["Cost now"] + [_cost(q, count) for q in priced],
-                    rows=rows,
-                    dim=dim,
-                    color_signed=True,
-                    pair_key="profit",
-                    note=self._profit_note(days_left) if not panels else "",
-                )
-            )
-        return panels
-
-    def _profit_note(self, days_left: float) -> str:
+    def payoff_note(self, days_left: float) -> str:
         count = self.ctx.contracts
         position = "one long contract" if count == 1 else "%d long contracts" % count
         note = (
@@ -503,6 +156,28 @@ class EarningsGambleStrategy(Strategy):
         if self.back_quote is None or not self.back_quote.iv:
             note += "  No back-month expiry to estimate the crush, so IV is held flat -- these are optimistic."
         return note
+
+    @property
+    def reprice_volatility(self) -> Optional[float]:
+        """IV to reprice at once the event premium is gone, as a decimal.
+
+        The back-month expiry is the market's own estimate of this name's
+        non-event volatility, so it is the natural landing point after the
+        crush. Without one -- or with one the chain cannot mean -- fall back
+        to the front IV, and past that to what the stock has actually done.
+        """
+        back = self.back_quote
+        crushed = _credible_iv(back.iv) if back is not None else None
+        return crushed or self.chain_volatility or self.realised_volatility
+
+    @property
+    def reprice_days_left(self) -> Optional[float]:
+        """Days to expiry remaining on the session after the report."""
+        quote = self.front_quote
+        days_to_event = self.days_to_earnings
+        if quote is None or days_to_event is None:
+            return None
+        return max(quote.days_out - (days_to_event + 1), 0.0)
 
     def _estimates_panel(self) -> Optional[Panel]:
         """The shared profile, plus consensus for the report being traded."""
@@ -530,103 +205,6 @@ class EarningsGambleStrategy(Strategy):
             note="Beating consensus does not guarantee a rally -- the stock trades "
             "against expectations already in the price.",
         )
-
-    def _ladder_panels(self) -> List[Panel]:
-        """The nearest strikes on each side of the money for the event expiry."""
-        quote = self.front_quote
-        if quote is None:
-            return []
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes)
-        if ladder is None:
-            return []
-        sides = self._visible_sides(*ladder)
-        if not sides:
-            return []
-
-        implied = self.implied_move_pct
-        historical = self.data.avg_abs_earnings_move(8)
-        note = (
-            "B/E move is what the stock must do by expiry to return your premium. "
-            "Theta is dollars lost per calendar day per contract; gamma is how fast "
-            "delta moves per $1."
-        )
-        if implied is not None:
-            note += "  Implied %.1f%%" % implied
-            if historical is not None:
-                note += ", typical %.1f%%" % historical
-            note += "."
-
-        # A spread is priced net, so its budget is checked against the spread
-        # costs rather than against a single leg it never buys outright.
-        if not self.ctx.trades_spread:
-            self._check_budget_covers_a_contract([q for _, side in sides for q in side])
-
-        panels = []
-        for index, (kind, quotes) in enumerate(sides):
-            panels.append(
-                Panel(
-                    title="%s -- %s expiry, %d strikes from the money"
-                    % (kind, quote.expiry.isoformat(), len(quotes)),
-                    headers=[
-                        "Strike", "Bid", "Ask", "Mid", "Cost/contract",
-                        "IV%", "Theta/day", "Gamma", "OI", "Vol", "B/E move",
-                    ],
-                    rows=[self._ladder_row(q, quote.days_out) for q in quotes],
-                    highlight=[i for i, q in enumerate(quotes) if q.strike == quote.strike],
-                    pair_key="ladder",
-                    # The note explains both tables; print it once, under the first.
-                    note=note if index == 0 else "",
-                )
-            )
-        return panels
-
-    def _check_budget_covers_a_contract(self, quotes: List[OptionQuote]) -> None:
-        """Warn when the money set aside cannot buy the position you asked for."""
-        budget = self.ctx.risk_dollars
-        costs = [c for c in (q.contract_cost() for q in quotes) if c]
-        if not budget or not costs:
-            return
-        count = self.ctx.contracts
-        cheapest = min(costs) * count
-        if budget < cheapest:
-            plural = "a contract" if count == 1 else "%d contracts" % count
-            self.note(
-                "Your $%s budget does not cover %s near the money -- the cheapest of "
-                "these strikes costs $%s for that size. Buy fewer, go further out of "
-                "the money, use a spread, or raise the budget."
-                % ("{:,.0f}".format(budget), plural, "{:,.0f}".format(cheapest))
-            )
-
-    def _ladder_row(self, quote: OptionQuote, days_out: int) -> List[str]:
-        move = quote.breakeven_move_pct(self.data.price)
-        cost = quote.contract_cost()
-        spot = self.data.price
-        rate = self.rules.risk_free_rate_pct / 100.0
-        # Greeks come from the contract's own implied volatility.
-        vol = (quote.iv / 100.0) if quote.iv else 0.0
-        gamma = pricing.gamma(spot, quote.strike, days_out, vol, rate)
-        theta = pricing.theta(quote.kind, spot, quote.strike, days_out, vol, rate)
-        return [
-            "{:,.2f}".format(quote.strike),
-            "%.2f" % quote.bid if quote.bid else "-",
-            "%.2f" % quote.ask if quote.ask else "-",
-            "%.2f" % quote.mid if quote.mid else "-",
-            "${:,.0f}".format(cost) if cost is not None else "-",
-            "%.0f" % quote.iv if quote.iv else "-",
-            # Theta scaled to dollars a contract loses per calendar day.
-            _signed_money(theta * 100.0) if theta is not None else "-",
-            "%.4f" % gamma if gamma is not None else "-",
-            "{:,}".format(quote.open_interest),
-            "{:,}".format(quote.volume),
-            "%+.1f%%" % move if move is not None else "-",
-        ]
-
-    def _visible_sides(
-        self, calls: List[OptionQuote], puts: List[OptionQuote]
-    ) -> "List[tuple[str, List[OptionQuote]]]":
-        """Chain sides to display, honouring the caller's call/put choice."""
-        pairs = (("CALLS", "call", calls), ("PUTS", "put", puts))
-        return [(label, quotes) for label, kind, quotes in pairs if quotes and self.ctx.shows(kind)]
 
     def _peers_panel(self) -> Optional[Panel]:
         """How the market treated competitors that reported ahead of this one."""
@@ -757,36 +335,6 @@ class EarningsGambleStrategy(Strategy):
         )
         return checks
 
-    def _check_spread_reward_risk(self) -> CheckResult:
-        """Does any pairing pay enough for what it risks?
-
-        The floor is the trader's own, so without one this reports the best
-        available and grades nothing -- a 1.3:1 spread is not a mistake, it is
-        just a different trade from the one someone demanding 2:1 wants.
-        """
-        name = "Spread reward:risk"
-        graded = [(s, s.reward_risk) for s in self.spreads if s.reward_risk]
-        if not graded:
-            return skipped(name, "no pairing has a two-sided price", weight=2.0)
-
-        best_spread, best = max(graded, key=lambda pair: pair[1])
-        floor = self.ctx.min_reward_risk
-        value = "%.2f:1 at %s" % (best, best_spread.label)
-        if floor is None:
-            return skipped(
-                name,
-                "best of %d pairings -- pass --min-reward-risk to grade it" % len(graded),
-                weight=2.0,
-            )
-
-        clearing = [s for s, ratio in graded if ratio >= floor]
-        detail = "%d of %d pairings clear your %.2f:1 floor" % (len(clearing), len(graded), floor)
-        if clearing:
-            return passed(name, detail, value, weight=2.0)
-        if best >= floor * 0.75:
-            return warned(name, detail + " -- the best is close, widen or wait", value, weight=2.0)
-        return failed(name, detail + " -- this chain does not pay enough for the risk", value, weight=2.0)
-
     def _check_expected_move(self) -> CheckResult:
         """Shares gap through stops, so the move has to fit inside the risk.
 
@@ -842,37 +390,6 @@ class EarningsGambleStrategy(Strategy):
         if buzz.score >= rules.warm_score:
             return warned(name, detail + " -- getting attention, expect richer IV", value, weight=1.0)
         return passed(name, detail + " -- not a crowded trade", value, weight=1.0)
-
-    def _derive_premium_from_contracts(self) -> None:
-        """Price the position from the ATM contract when no premium was given."""
-        quote = self.front_quote
-        cost, position = None, None
-        if self.ctx.trades_spread:
-            # A spread risks the net debit, not the long leg's premium. The
-            # narrowest pairing is the cheapest way into the structure, so it
-            # is the floor the sizing is estimated against.
-            built = self.spreads
-            costs = [s.cost for s in built if s.cost]
-            if costs:
-                cost = min(costs)
-                position = "narrowest %s debit spread" % self.ctx.spread_kind
-        elif quote is not None and quote.call_mid and quote.put_mid:
-            # Use the side actually being traded; the straddle is not the bet.
-            per_share = quote.put_mid if self.ctx.option_side == "put" else quote.call_mid
-            cost = per_share * 100.0
-            position = "ATM %s" % ("put" if self.ctx.option_side == "put" else "call")
-        derived = self.ctx.set_derived_premium(cost)
-        if derived is not None:
-            self.note(
-                "Dollars at risk estimated at $%s (%d x $%s, the %s). "
-                "Pass --premium to override."
-                % (
-                    "{:,.0f}".format(derived),
-                    self.ctx.contracts,
-                    "{:,.0f}".format(cost),
-                    position,
-                )
-            )
 
     def _check_event_confirmed(self) -> CheckResult:
         name = "Earnings date confirmed"
@@ -1013,37 +530,6 @@ class EarningsGambleStrategy(Strategy):
             value,
             weight=weight,
         )
-
-    def _check_option_liquidity(self) -> CheckResult:
-        """A wide book eats the edge before the event even happens."""
-        name = "Options liquidity"
-        quote = self.front_quote
-        if quote is None:
-            return skipped(name, "no ATM quote for the event expiry", weight=2.0, critical=True)
-
-        spread, oi = quote.spread_pct, quote.open_interest
-        if spread is None:
-            return warned(
-                name,
-                "no live bid/ask -- market closed or no book; verify before sending an order",
-                "OI %d" % oi,
-                weight=2.0,
-                critical=True,
-            )
-
-        value = "%.1f%% spread, OI %d" % (spread, oi)
-        detail = "ATM %.2f strike, %d DTE" % (quote.strike, quote.days_out)
-        if spread > self.rules.warn_option_spread_pct:
-            return failed(name, detail + " -- book too wide to trade", value, weight=2.0, critical=True)
-        if spread > self.rules.max_option_spread_pct or oi < self.rules.min_open_interest:
-            return warned(
-                name,
-                detail + " -- use limit orders, expect fill slippage",
-                value,
-                weight=2.0,
-                critical=True,
-            )
-        return passed(name, detail, value, weight=2.0, critical=True)
 
     def _check_trend_alignment(self) -> CheckResult:
         """Not required for an event bet, but a tailwind for a directional one."""

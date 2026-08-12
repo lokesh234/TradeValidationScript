@@ -68,29 +68,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--instrument",
-        help="earnings only: O options, S stock, C call debit spread, P put debit spread. "
+        help="O options, S stock, C call debit spread, P put debit spread. "
         "Prompts if omitted.",
     )
     plan.add_argument(
         "--side",
-        help="earnings options only: C for calls, P for puts, B for both. Prompts if omitted.",
+        help="options only: C for calls, P for puts, B for both. Prompts if omitted.",
     )
     plan.add_argument(
         "--contracts",
         type=int,
-        help="earnings options only: how many contracts to buy. Prompts with prices if omitted.",
+        help="options only: how many contracts to buy. Prompts with prices if omitted.",
     )
     plan.add_argument(
         "--strikes",
         type=int,
-        help="earnings options only: strikes to list either side of the money "
+        help="options only: strikes to list either side of the money "
         "(default 5, capped at what the expiry carries). Prompts if omitted.",
+    )
+    plan.add_argument(
+        "--contract",
+        help="options only: trade one contract off the ladder -- a strike (270) or a "
+        "spread pairing (250/260). Prompts if omitted; the whole ladder is priced by default.",
     )
     plan.add_argument(
         "--min-reward-risk",
         type=float,
         metavar="RATIO",
-        help="earnings spreads only: the reward:risk a pairing must clear, e.g. 1.5. "
+        help="spreads only: the reward:risk a pairing must clear, e.g. 1.5. "
         "Prompts with prices if omitted.",
     )
 
@@ -407,9 +412,7 @@ def prompt_instrument() -> str:
 
 
 def resolve_instrument(key: str, args: argparse.Namespace) -> str:
-    """Options or shares. Only an earnings trade has the choice."""
-    if key != "earnings":
-        return "stock"
+    """Shares, contracts or a spread -- every trade type can be taken any way."""
     if args.instrument:
         return resolve_instrument_choice(args.instrument)
     return prompt_instrument()
@@ -520,6 +523,19 @@ def resolve_earnings_date(
     return prompt_earnings_date(data)
 
 
+def whole_number(raw: str) -> Optional[int]:
+    """A positive whole number, however it was punctuated: 1,000 or 1 000.
+
+    People type share counts the way they say them. Rejecting a comma is the
+    kind of pedantry that makes a prompt feel broken.
+    """
+    cleaned = raw.replace(",", "").replace("_", "").replace(" ", "")
+    if not cleaned.isdigit():
+        return None
+    count = int(cleaned)
+    return count if count > 0 else None
+
+
 def prompt_contracts(noun: str = "contracts") -> int:
     while True:
         try:
@@ -529,8 +545,9 @@ def prompt_contracts(noun: str = "contracts") -> int:
             return 1
         if not raw:
             return 1
-        if raw.isdigit() and int(raw) > 0:
-            return int(raw)
+        count = whole_number(raw)
+        if count:
+            return count
         print("  Enter a whole number of %s, or press Enter for 1." % noun)
 
 
@@ -566,8 +583,9 @@ def prompt_strikes(default: int, maximum: Optional[int]) -> int:
             return default
         if not raw:
             return default
-        if raw.isdigit() and int(raw) > 0:
-            return clamp_strikes(int(raw), maximum)
+        count = whole_number(raw)
+        if count:
+            return clamp_strikes(count, maximum)
         print("  Enter a whole number of strikes, or press Enter for %d." % default)
 
 
@@ -589,11 +607,69 @@ def prompt_shares(price: float) -> Optional[int]:
             return None
         if not raw:
             return None
-        if raw.isdigit() and int(raw) > 0:
-            shares = int(raw)
-            print("  %d shares at $%.2f is $%s." % (shares, price, "{:,.0f}".format(shares * price)))
+        shares = whole_number(raw)
+        if shares:
+            print(
+                "  %s shares at $%.2f is $%s."
+                % ("{:,}".format(shares), price, "{:,.0f}".format(shares * price))
+            )
             return shares
         print("  Enter a whole number of shares, or press Enter to skip.")
+
+
+def match_contract(raw: str, labels: List[str]) -> Optional[str]:
+    """Which listed contract the caller means.
+
+    Accepts it however it appears on screen or in the head: the label itself
+    ("1,860"), the same number unpunctuated ("1860" or "1860.00"), or its
+    position in the list ("4"). A strike that looks like a position wins as a
+    strike, since that is the more explicit thing to have typed.
+    """
+    cleaned = raw.strip().replace(",", "").replace("$", "").replace(" ", "")
+    if not cleaned:
+        return None
+    bare = [label.replace(",", "") for label in labels]
+    for label, plain in zip(labels, bare):
+        if cleaned.lower() == plain.lower():
+            return label
+    if cleaned.isdigit() and 1 <= int(cleaned) <= len(labels):
+        return labels[int(cleaned) - 1]
+    try:
+        wanted = float(cleaned)
+    except ValueError:
+        return None
+    for label, plain in zip(labels, bare):
+        try:
+            if abs(float(plain) - wanted) < 1e-9:
+                return label
+        except ValueError:
+            continue
+    return None
+
+
+def numbered_choices(labels: List[str]) -> str:
+    """The list as '1) 1,800   2) 1,820 ...', for picking by position."""
+    return "   ".join("%d) %s" % (index, label) for index, label in enumerate(labels, start=1))
+
+
+def prompt_contract(labels: List[str], noun: str) -> Optional[str]:
+    """Trade one contract off the table, or leave the whole ladder priced."""
+    print("  " + numbered_choices(labels))
+    while True:
+        try:
+            raw = input(
+                "Which %s are you trading? [1-%d, a %s, or Enter to keep them all]: "
+                % (noun, len(labels), noun)
+            ).strip()
+        except EOFError:
+            print()  # close the prompt line so output does not run together
+            return None
+        if not raw:
+            return None
+        picked = match_contract(raw, labels)
+        if picked:
+            return picked
+        print("  " + numbered_choices(labels))
 
 
 def size_position(strategy, args: argparse.Namespace, palette, width: int) -> None:
@@ -605,20 +681,17 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     those answers.
     """
     ctx = strategy.ctx
-    # Only an earnings trade has a chain to price, or a position sized off one.
-    # A short or long trade collects everything it needs before it gets here.
-    if strategy.key != "earnings":
-        return
     wants_shares = not ctx.trades_options and args.size is None
     wants_count = ctx.trades_options and args.contracts is None
     wants_floor = ctx.trades_spread and args.min_reward_risk is None
     wants_strikes = ctx.trades_options and args.strikes is None
+    wants_pick = ctx.trades_options and args.contract is None
 
     # Ladder depth is settled first either way: it decides what the prices
     # below list, and an explicit --strikes still has to clear the chain.
     if ctx.trades_options and not wants_strikes:
         ctx.strikes = clamp_strikes(args.strikes, strategy.max_strikes())
-    if not (wants_shares or wants_count or wants_floor or wants_strikes):
+    if not (wants_shares or wants_count or wants_floor or wants_strikes or wants_pick):
         return
 
     panel = strategy.profile_panel()
@@ -631,13 +704,23 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     if wants_strikes:
         ctx.strikes = prompt_strikes(ctx.strikes, strategy.max_strikes())
 
-    for line in strategy.price_lines():
+    chain = strategy.price_panels()
+    for line in layout_panels(chain, palette, width):
         print(line)
     print("")
+    # The ladder is the same table the report would print; the spread table
+    # is not, since the report's copy marks the pairings that clear the floor.
+    ctx.chain_shown = bool(chain) and not ctx.trades_spread
+
+    if wants_pick:
+        labels = strategy.contract_labels()
+        if labels:
+            ctx.contract = prompt_contract(labels, "spread" if ctx.trades_spread else "strike")
 
     if wants_shares:
         shares = prompt_shares(strategy.data.price)
         if shares:
+            ctx.shares = shares
             ctx.size = shares * strategy.data.price
     if wants_floor:
         ctx.min_reward_risk = prompt_min_reward_risk()
@@ -647,7 +730,7 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
 
 def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:
     """The count from the command line. The prompt happens later, with prices."""
-    if key != "earnings" or instrument == "stock" or args.contracts is None:
+    if instrument == "stock" or args.contracts is None:
         return 1
     return args.contracts
 
@@ -663,10 +746,10 @@ def resolve_event_plan(key: str, args: argparse.Namespace) -> EventPlan:
 
 
 def resolve_option_side(key: str, args: argparse.Namespace, instrument: str = "options") -> str:
-    """Which side of the chain to display. Only earnings trades show one."""
+    """Which side of the chain to display. A spread has already picked one."""
     if instrument in SPREAD_SIDES:
         return SPREAD_SIDES[instrument]
-    if key != "earnings" or instrument == "stock":
+    if instrument == "stock":
         return "both"
     if args.side:
         return resolve_side(args.side)
@@ -821,7 +904,8 @@ def validate_symbol(
         option_side=plan.side,
         contracts=plan.contracts,
         min_reward_risk=args.min_reward_risk,
-        strikes=config.earnings.ladder_strikes,
+        contract=args.contract,
+        strikes=(config.earnings if key == "earnings" else config.options).ladder_strikes,
         buzz=(buzz_scores or {}).get(symbol),
         include_peers=bool(args.peers) and key == "earnings",
         horizon=horizon or config.short_term.default_horizon,

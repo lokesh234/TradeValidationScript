@@ -6,18 +6,23 @@ import os
 import re
 import shutil
 import sys
+from dataclasses import replace
 from typing import List, Optional, Sequence
 
 from .checks import Status
 from .strategies.base import UNAVAILABLE, Panel, Report
 
 MIN_WIDTH = 72
-MAX_WIDTH = 200
+# Wide enough for a tall reference table set as two columns; the halves of
+# the stock panel need a little over 220 between them.
+MAX_WIDTH = 240
 FALLBACK_WIDTH = 100
 # Inline details only pay off once the leftover column is wide enough to hold
 # a typical detail on one line. Below this, the stacked layout uses fewer lines
 # because its continuation runs the full width.
 MIN_INLINE_DETAIL = 52
+# Below this a table is short enough to read in one column anyway.
+MIN_SPLIT_ROWS = 16
 
 
 def detect_width(override: Optional[int] = None) -> int:
@@ -292,67 +297,113 @@ def _stack_panels(blocks: Sequence[Sequence[str]]) -> List[str]:
 
 
 def _pair_panels(panels: Sequence[Panel], width: int) -> List[List[Panel]]:
-    """Group panels into rows of one or two.
+    """Group panels into rows, packing as many across as the width holds.
 
-    Panels sharing a ``pair_key`` (calls and puts) pair up first so a ladder is
-    never set beside an unrelated table. Whatever is left over pairs with its
-    neighbour if both are singletons and the two fit across.
+    Panels sharing a ``pair_key`` belong together -- calls and puts, or the
+    four points a position is marked at -- and fill a row between them before
+    a new one starts. Unkeyed panels only ever pair with another unkeyed
+    neighbour, so a ladder is never set beside an unrelated table.
     """
-    def fits(a: Panel, b: Panel) -> bool:
-        return panel_width(a) + len(PANEL_GAP) + panel_width(b) <= width
-
-    units: List[List[Panel]] = []
-    index = 0
-    while index < len(panels):
-        nxt = panels[index + 1] if index + 1 < len(panels) else None
-        if nxt is not None and panels[index].pair_key and panels[index].pair_key == nxt.pair_key:
-            units.append([panels[index], nxt])
-            index += 2
-        else:
-            units.append([panels[index]])
-            index += 1
-
     rows: List[List[Panel]] = []
     index = 0
-    while index < len(units):
-        unit = units[index]
-        following = units[index + 1] if index + 1 < len(units) else None
-        if (
-            len(unit) == 1
-            and following is not None
-            and len(following) == 1
-            and fits(unit[0], following[0])
-        ):
-            rows.append([unit[0], following[0]])
-            index += 2
-        else:
-            rows.append(unit)
+    while index < len(panels):
+        row = [panels[index]]
+        used = panel_width(panels[index])
+        index += 1
+        while index < len(panels):
+            following = panels[index]
+            related = row[0].pair_key == following.pair_key
+            # Two unkeyed panels may share a row, but only two: past that they
+            # have nothing to do with each other and read as one table.
+            if not related and (row[0].pair_key or len(row) > 1):
+                break
+            needed = used + len(PANEL_GAP) + panel_width(following)
+            if needed > width:
+                break
+            row.append(following)
+            used = needed
             index += 1
-
-    # A keyed pair that does not fit across falls back to one per row.
-    resolved: List[List[Panel]] = []
-    for row in rows:
-        if len(row) == 2 and not fits(row[0], row[1]):
-            resolved.extend([[row[0]], [row[1]]])
-        else:
-            resolved.append(row)
-    return resolved
+        rows.append(row)
+    return rows
 
 
 def layout_panels(panels: Sequence[Panel], palette: Palette, width: int) -> List[str]:
-    """Pack panels two-up where the width allows, otherwise one per row."""
+    """Pack panels across where the width allows, otherwise one per row."""
     out: List[str] = []
-    for row in _pair_panels(panels, width):
+    prepared: List[Panel] = []
+    # A split table's title and description head both halves, so they are held
+    # back here and printed across the full width above the pair.
+    headings = {}
+    for panel in panels:
+        halves = _split_if_wide(panel, width)
+        if len(halves) == 2:
+            headings[halves[0].pair_key] = panel
+        prepared.extend(halves)
+    for row in _pair_panels(prepared, width):
         # Rule between sections. Side-by-side panels are already divided by
         # the '||' gutter, so this only ever separates one row from the next.
         out.append("")
         out.append(palette.cyan("=" * width))
+        source = headings.get(row[0].pair_key) if len(row) > 1 else None
+        if source is not None:
+            out.append(palette.cyan(palette.bold(" " + source.title)))
+            for paragraph in source.lead:
+                out.extend(palette.grey(line) for line in _wrap_text(paragraph, width, "  "))
+            out.append("")
         if len(row) == 1:
             out.extend(_render_panel(row[0], palette, width))
             continue
         blocks = [_render_panel(p, palette, panel_width(p)) for p in row]
         out.extend(_stack_panels(blocks))
     return out
+
+
+def _split_if_wide(panel: Panel, width: int) -> List[Panel]:
+    """Halve a tall table when there is room to set the halves side by side.
+
+    Nothing is dropped and nothing moves: the same rows are read in two
+    columns instead of one, which is worth roughly half the scrolling. A
+    terminal too narrow to hold both halves gets the single table back, so
+    this can only ever improve on the tall version.
+    """
+    if not panel.split_when_wide or len(panel.rows) < MIN_SPLIT_ROWS:
+        return [panel]
+    # Cuts land on section headings so no block is torn in two, and are tried
+    # from the most even outward: an uneven split still beats no split, since
+    # the halves' widths depend on what happens to be in each one.
+    middle = len(panel.rows) / 2.0
+    breaks = [index for index in panel.sections if 0 < index < len(panel.rows)]
+    for cut in sorted(breaks, key=lambda index: abs(index - middle)):
+        left, right = _halves(panel, cut)
+        if panel_width(left) + len(PANEL_GAP) + panel_width(right) <= width:
+            return [left, right]
+    return [panel]
+
+
+def _halves(panel: Panel, cut: int) -> "tuple[Panel, Panel]":
+    """Two panels from one, with the row-indexed fields moved with the rows."""
+
+    def part(rows: Sequence[Sequence[str]], offset: int, title: str, **extra) -> Panel:
+        shift = lambda values: [i - offset for i in values if 0 <= i - offset < len(rows)]
+        return replace(
+            panel,
+            title=title,
+            rows=list(rows),
+            sections=shift(panel.sections),
+            dim=shift(panel.dim),
+            highlight=shift(panel.highlight),
+            row_styles={i - offset: s for i, s in panel.row_styles.items() if 0 <= i - offset < len(rows)},
+            # Halves of one table belong beside each other before anything else.
+            pair_key="split:%s" % panel.title,
+            **extra,
+        )
+
+    # Neither half carries the title or the description: the caller prints
+    # those above both, which is also what lines the two header rows up. The
+    # note closes the table, so it stays with the second half.
+    left = part(panel.rows[:cut], 0, "", lead=[], note="")
+    right = part(panel.rows[cut:], cut, "", lead=[])
+    return left, right
 
 
 def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -> List[str]:
@@ -371,14 +422,20 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
             parts.append(_color_cell(cell, padded, palette) if colorize and i else padded)
         return ("  " + "  ".join(parts)).rstrip()
 
-    out = [palette.cyan(palette.bold(" " + panel.title))]
+    # A half of a split table has no title of its own -- the whole table's is
+    # printed above both halves.
+    out = [palette.cyan(palette.bold(" " + panel.title))] if panel.title else []
     for paragraph in panel.lead:
         out.extend(palette.grey(l) for l in _wrap_text(paragraph, width, "  "))
     if panel.lead:
         out.append("")
-    out.append(palette.grey(line(panel.headers)))
+    headings = palette.bold if panel.bold_headers else palette.grey
+    out.append(headings(line(panel.headers)))
     if panel.subheaders:
-        out.append(palette.grey(line(panel.subheaders)))
+        # What the position costs is a figure, not a column heading: every
+        # P&L below it is measured against this row, so it carries a figure's
+        # weight rather than the header's grey.
+        out.append(palette.bold(line(panel.subheaders)))
     for index, row in enumerate(panel.rows):
         if index in panel.sections:
             # Headings carry the title's colour, a step down from it in weight,

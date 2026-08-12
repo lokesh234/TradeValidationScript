@@ -82,7 +82,10 @@
       "Bash(git branch *)",
       "Bash(git push *)",
       "Bash(git *)",
-      "Bash(awk '/CALLS -- /,/^$/' /private/tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/c3b2f5d3-519f-4cdc-9864-7520bf2a39ed/scratchpad/st500b.txt)"
+      "Bash(awk '/CALLS -- /,/^$/' /private/tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/c3b2f5d3-519f-4cdc-9864-7520bf2a39ed/scratchpad/st500b.txt)",
+      "Bash(grep *)",
+      "Bash(sed -n '/def _spread_panels/,/def _spread_table/p' tradeval/strategies/options.py)",
+      "Bash(sed -n '/def _spread_profit_panel/,/^    def _check_budget_covers_a_spread/p' tradeval/strategies/options.py)"
     ]
   }
 }

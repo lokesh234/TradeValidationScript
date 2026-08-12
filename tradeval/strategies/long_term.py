@@ -15,17 +15,33 @@ import pandas as pd
 from .. import indicators as ind
 from ..checks import CheckResult, failed, passed, skipped, threshold_check, warned
 from .base import Panel, Strategy, _human
+from .options import OptionsPlaybook
+
+# A hold of a year or more needs a contract that lasts at least that long.
+LEAPS_DAYS = 365
 
 
-class LongTermStrategy(Strategy):
+class LongTermStrategy(OptionsPlaybook, Strategy):
     key = "long"
     name = "Long Term"
-    horizon = "1 year or more"
     description = "Buy-and-hold position in a profitable business at a reasonable price."
 
     @property
     def rules(self):
         return self.config.long_term
+
+    @property
+    def horizon(self) -> str:
+        """Shadows the class attribute so the header names the instrument."""
+        return "1 year or more, %s" % self.instrument_label
+
+    # Held for months, so what it is worth part-way through is the
+    # exit this trade is likely to actually take.
+    marks_midway = True
+
+    @property
+    def option_horizon_days(self) -> int:
+        return LEAPS_DAYS
 
     # -- statement helpers --------------------------------------------------
 
@@ -58,9 +74,25 @@ class LongTermStrategy(Strategy):
     # -- checklist ----------------------------------------------------------
 
     def build_panels(self) -> List[Panel]:
-        return [p for p in (self.stock_info_panel(),) if p]
+        profile = None if self.ctx.profile_shown else self.stock_info_panel()
+        panels = [p for p in (profile,) if p]
+        if self.ctx.trades_options:
+            panels.extend(self.option_panels())
+        else:
+            panels.extend(p for p in (self.share_payoff_panel(),) if p)
+        return panels
 
     def build_checks(self) -> List[CheckResult]:
+        if self.ctx.trades_options:
+            # The premium is what the risk cap grades, so price it first.
+            self._derive_premium_from_contracts()
+        checks = self._business_checks()
+        if self.ctx.trades_options:
+            # A LEAP on a good business is still a bet with an expiry date.
+            checks.extend(self.option_checks())
+        return checks
+
+    def _business_checks(self) -> List[CheckResult]:
         return [
             self._check_market_cap(),
             self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),

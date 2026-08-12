@@ -115,6 +115,32 @@ def _default_horizons() -> Dict[str, HorizonProfile]:
 
 
 @dataclass
+class OptionRules:
+    """Trading a thesis in contracts rather than shares.
+
+    An earnings gamble carries its own copy of these, since a report is graded
+    against thresholds an ordinary option trade has no use for. Everything
+    here applies whenever a short or long term trade is taken in options.
+    """
+
+    # A wide book costs more than the thesis is likely to make.
+    max_option_spread_pct: float = 5.0
+    warn_option_spread_pct: float = 10.0
+    min_open_interest: int = 100
+    # Strikes listed either side of the money, and spread pairings built from
+    # them. The chain's own depth is the ceiling.
+    ladder_strikes: int = 5
+    # Underlying moves modelled in the payoff table, in percent.
+    profit_move_pcts: List[float] = field(default_factory=lambda: [5.0, 10.0, 15.0, 20.0, 25.0])
+    # Annual risk-free rate used for the greeks and the repricing.
+    risk_free_rate_pct: float = 4.0
+    # Time value as a share of the premium. Paying for mostly extrinsic value
+    # means the thesis has to arrive before the decay does.
+    warn_extrinsic_pct: float = 60.0
+    max_extrinsic_pct: float = 85.0
+
+
+@dataclass
 class ShortTermRules:
     """Swing trade held one to six months."""
 
@@ -135,6 +161,9 @@ class ShortTermRules:
     max_atr_pct: float = 8.0
     max_account_risk_pct: float = 1.0
     max_position_pct_of_account: float = 25.0
+    # Moves modelled in the share payoff table, in percent. A swing of one to
+    # six months is judged on moves of this size, not on an event's gap.
+    share_move_pcts: List[float] = field(default_factory=lambda: [10.0, 20.0, 30.0, 50.0])
     max_gaps_60d: int = 3
     gap_pct: float = 4.0
 
@@ -171,6 +200,8 @@ class LongTermRules:
     max_payout_ratio_pct: float = 60.0
     max_beta: float = 1.5
     max_position_pct_of_account: float = 10.0
+    # A hold measured in years is judged on moves that take years.
+    share_move_pcts: List[float] = field(default_factory=lambda: [25.0, 50.0, 75.0, 100.0])
 
 
 @dataclass
@@ -244,6 +275,7 @@ def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
 class Config:
     scoring: ScoringThresholds = field(default_factory=ScoringThresholds)
     earnings: EarningsRules = field(default_factory=EarningsRules)
+    options: OptionRules = field(default_factory=OptionRules)
     short_term: ShortTermRules = field(default_factory=ShortTermRules)
     long_term: LongTermRules = field(default_factory=LongTermRules)
     buzz: BuzzRules = field(default_factory=BuzzRules)

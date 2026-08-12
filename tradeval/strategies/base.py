@@ -150,6 +150,13 @@ class Panel:
     dim: List[int] = field(default_factory=list)
     # Label-only rows that head a block of related metrics.
     sections: List[int] = field(default_factory=list)
+    # Long reference tables may be set as two columns when the terminal is
+    # wide enough to hold both halves. The renderer decides; a narrow one
+    # keeps the single table.
+    split_when_wide: bool = False
+    # Headers that are data rather than labels -- the strikes a payoff table
+    # is priced across -- and read as figures, not as column names.
+    bold_headers: bool = False
     # Extra columns to left-align. Column 0 always is; text columns read
     # badly ragged-left when right-aligned with the numbers.
     left_align: List[int] = field(default_factory=list)
@@ -326,6 +333,85 @@ class Strategy(ABC):
 
     # -- shared reference panel --------------------------------------------
 
+    @property
+    def share_move_pcts(self) -> List[float]:
+        """Moves worth modelling for a share position, in percent.
+
+        Scaled to the holding period rather than shared: 50% is a fantasy over
+        a month and unremarkable over five years.
+        """
+        return list(getattr(self.rules, "share_move_pcts", []))
+
+    def share_payoff_panel(self) -> Optional[Panel]:
+        """What the position makes at each move, for the shares actually held.
+
+        Shares have no premium to decay and no strike to clear, so this is
+        arithmetic rather than a model -- which is the point. It answers the
+        question the option tables answer, in the units a share trade is in.
+        """
+        price = self.data.price
+        shares = self.ctx.share_count(price)
+        moves = self.share_move_pcts
+        if not shares or not moves or price <= 0:
+            return None
+
+        entry = self.ctx.entry or price
+        committed = shares * entry
+        # A short position profits on the way down. The columns stay the
+        # stock's move either way -- flipping the headers instead would print a
+        # table where "+20%" means the stock fell.
+        direction = -1.0 if self.ctx.direction == "short" else 1.0
+
+        # Both ways, in the order a payoff runs: worst on the left. A move
+        # only against you is a sales brochure, not a risk table.
+        columns = [(-move, "%+.0f%%" % -move) for move in moves]
+        columns.extend((move, "%+.0f%%" % move) for move in moves)
+        if self.ctx.stop:
+            columns.append(((self.ctx.stop / entry - 1.0) * 100.0, "at stop"))
+        columns.sort(key=lambda column: column[0])
+        headers = [label for _, label in columns]
+
+        pnl, value, account = ["P&L"], ["Position value"], ["% of account"]
+        for move, _ in columns:
+            profit = committed * move / 100.0 * direction
+            # Whole dollars across the row: a table mixing $600.00 with $1.72K
+            # is harder to compare than one that spells both out.
+            pnl.append("%s$%s" % ("+" if profit >= 0 else "-", "{:,.0f}".format(abs(profit))))
+            value.append("${:,.0f}".format(committed + profit))
+            account.append(
+                "%+.1f%%" % (profit / self.ctx.account_size * 100.0)
+                if self.ctx.account_size
+                else ""
+            )
+
+        rows = [pnl, value]
+        if self.ctx.account_size:
+            rows.append(account)
+        return Panel(
+            title="SHARE P&L -- %s shares at $%.2f, $%s committed"
+            % ("{:,}".format(shares), entry, "{:,.0f}".format(committed)),
+            headers=["Move"] + headers,
+            rows=rows,
+            left_align=[0],
+            color_signed=True,
+            note=(
+                "Return on the position is the move itself -- shares have no "
+                "premium to make back. The stop column is where your own stop sits."
+                if self.ctx.stop
+                else "Return on the position is the move itself -- shares have no "
+                "premium to make back. Pass --stop to see the planned loss beside them."
+            ),
+        )
+
+    def profile_panel(self) -> Optional[Panel]:
+        """The table to print before the sizing questions.
+
+        The same one the report would show, so putting it up front costs the
+        report nothing. Strategies with more to say about the company -- an
+        earnings gamble and its consensus rows -- override this.
+        """
+        return self.stock_info_panel()
+
     def stock_info_panel(
         self,
         title: str = "STOCK INFO",
@@ -374,6 +460,7 @@ class Strategy(ABC):
             rows=rows,
             sections=headings,
             label_value_note=True,
+            split_when_wide=True,
             note=note,
         )
 

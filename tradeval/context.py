@@ -28,6 +28,7 @@ class TradeContext:
     target: Optional[float] = None
     premium: Optional[float] = None   # dollars at risk outright, e.g. option premium
     size: Optional[float] = None      # dollars committed to the position
+    shares: Optional[int] = None      # share count, when the trade is in stock
     allow_earnings: bool = False      # hold a swing trade through a report
     # Which scheduled report to trade. None means the soonest one.
     earnings_date: Optional[dt.date] = None
@@ -45,9 +46,14 @@ class TradeContext:
     contracts: int = 1
     # Strikes either side of the money to list, and to build spreads from.
     strikes: int = 5
+    # The one contract being traded, by its label -- a strike ("270") or a
+    # pairing ("250/260"). None prices the whole ladder.
+    contract: Optional[str] = None
     # Set once the profile has been printed for this run -- ahead of the
     # sizing questions -- so the report does not repeat it a screen later.
     profile_shown: bool = False
+    # Same for the option ladder, printed to choose a contract from.
+    chain_shown: bool = False
     # Spreads: the reward:risk the trader will not go below. None leaves the
     # pairings ungraded, since the floor is a preference rather than a fact.
     min_reward_risk: Optional[float] = None
@@ -57,6 +63,15 @@ class TradeContext:
     include_peers: bool = False
 
     SPREADS = {"call_spread": "call", "put_spread": "put"}
+
+    def share_count(self, price: float) -> Optional[int]:
+        """Shares held, from the count given or the dollars committed."""
+        if self.shares:
+            return self.shares
+        if self.size and price > 0:
+            # --size says how many dollars go in; whole shares is what that buys.
+            return int(self.size // price) or None
+        return None
 
     @property
     def trades_options(self) -> bool:

@@ -10,8 +10,11 @@ makes a long-term hold good.
 | # | Type | Horizon | What it grades |
 |---|------|---------|----------------|
 | 1 | **Earnings Gamble** | 0-10 days, event driven | Is the event confirmed, does this name actually move on earnings, and — for a contract trade — is the options market charging more than the move is historically worth. Ask it for [stock or a debit spread](#what-youre-trading) and it grades that instead |
-| 2 | **Short Term** | 2-20 trading days | Trend, momentum, relative strength, how extended the entry is, reward/risk, and whether earnings lands mid-trade |
+| 2 | **Short Term** | 1 to 6 months | Trend, momentum, relative strength, how extended the entry is, reward/risk, and whether earnings lands mid-trade |
 | 3 | **Long Term** | 1 year or more | Profitability, free cash flow, growth, balance sheet, valuation, and entry point |
+
+Any of the three can be traded in **shares, contracts or a debit spread** — see
+[what you're trading](#what-youre-trading).
 
 ## Quick start
 
@@ -26,10 +29,19 @@ strategy you're trading, takes a ticker, and prints the verdict:
 Which strategy are you trading?
 
   1) Earnings Gamble   0-10 days, event driven
-  2) Short Term        2-20 trading days
+  2) Short Term        1 to 6 months
   3) Long Term         1 year or more
 
 Choice [1-3]: 2
+
+What are you trading?
+
+  O) Options            single contracts
+  S) Stock              the shares themselves
+  C) Call debit spread  buy a strike, sell one above
+  P) Put debit spread   buy a strike, sell one below
+
+Choice [O/S/C/P]: S
 Ticker symbol (Short Term): nvda
 Add account and trade details for sizing [y/N]: y
   Account value in $ (Enter to skip): 50000
@@ -45,9 +57,9 @@ to get a summary table. Every detail prompt is optional — press Enter to skip
 one and the checks that need it report SKIP instead of guessing. After a run it
 offers to validate another trade; `q` at the menu quits.
 
-The prompts adapt to the strategy: an earnings gamble asks for option premium, a
-short term trade asks for entry/stop/target and direction, a long term hold just
-asks how much you're putting in.
+The prompts adapt to both answers: an earnings gamble in contracts asks for
+option premium, a short term trade in shares asks for entry/stop/target and
+direction, a long term hold just asks how much you're putting in.
 
 ### This week's earnings candidates
 
@@ -319,7 +331,8 @@ available the whole panel is dropped.
 
 ### What you're trading
 
-An earnings gamble first asks what you're actually buying:
+**Every** trade type asks what you're actually buying — a thesis about a
+company is not the same thing as the instrument you express it in:
 
 ```
 What are you trading?
@@ -333,7 +346,33 @@ Choice [O/S/C/P]: S
 ```
 
 Each is a different trade, so the report changes rather than merely hiding a
-table. **Stock** drops
+table. The thesis is graded the same either way — a company is cheap or it
+isn't, a trend is intact or it isn't — and the instrument adds what it costs
+to own that thesis:
+
+| | Earnings Gamble | Short Term | Long Term |
+|---|---|---|---|
+| **Expiry used** | first one past the report | first one past the hold (1/3/6 months) | first one past a year |
+| **Payoff table** | repriced the morning after, IV crushed | value at expiry | value at expiry |
+| **Contract checks** | implied vs historical, IV crush, liquidity | liquidity, expiry covers the hold, breakeven move | same as short term |
+
+So a 3-month swing traded in calls picks a ~3-month expiry and grades whether
+the move you're forecasting clears the premium; the same swing in shares
+grades none of that and never fetches a chain:
+
+```
+  PASS   Expiry covers the hold  2026-11-20, 101 days out  expiry against a 88 day hold
+  PASS   Breakeven move          3.9% to break even        premium needs 3.9% against your
+                                                           16.3% target -- clears it with room
+```
+
+`Breakeven move` is the one that catches bad option trades: buying a contract
+means paying for a move before you make anything, and if the move you expect
+doesn't cover the premium, the thesis can be right and the trade still lose.
+Given `--target` it grades against your number; without one it falls back to
+the move the options themselves are pricing.
+
+**Stock** drops
 the option ladders and the profit-next-day tables, and with them the three
 checks that only grade a chain — implied vs historical move, IV crush risk and
 options liquidity. That last one is *critical* for a contract trade: leaving it
@@ -368,7 +407,36 @@ How many shares are you buying? [Enter to skip]: 100
   100 shares at $120.43 is $12,043.
 ```
 
-That feeds `Position concentration`, which shares get and contracts don't: a
+It also gets its own payoff table, the share equivalent of what the contracts
+get:
+
+```
+ SHARE P&L -- 100 shares at $86.00, $8,600 committed
+  Move               -50%     -30%     -20%    -10%  at stop    +10%     +20%     +30%     +50%
+  P&L             -$4,300  -$2,580  -$1,720   -$860    -$600   +$860  +$1,720  +$2,580  +$4,300
+  Position value   $4,300   $6,020   $6,880  $7,740   $8,000  $9,460  $10,320  $11,180  $12,900
+  % of account      -8.6%    -5.2%    -3.4%   -1.7%    -1.2%   +1.7%    +3.4%    +5.2%    +8.6%
+```
+
+The moves are scaled to the holding period, because 50% is a fantasy over a
+month and unremarkable over five years: **10/20/30/50%** for a short term
+trade, **25/50/75/100%** for a long term hold, and the same 5-25% gap ladder
+the contracts use for an earnings trade. Tune them with
+`{ "short_term": { "share_move_pcts": [5, 15, 25] } }`.
+
+Each runs **both ways**, worst on the left — a table of gains only is a sales
+brochure, not a risk table — with `at stop` slotted in at its own percentage,
+so your planned loss sits among the moves you'd suffer without one. The
+columns are always the **stock's** move: a short position flips the P&L
+underneath rather than the headers, since a table where `+20%` means the stock
+fell is a table waiting to be misread.
+
+There is no return-on-cost row, because for shares the return *is* the move —
+nothing was paid for time, so there is no premium to make back first. The
+count comes from the prompt, or from `--size` divided by the price.
+
+The share count also feeds `Position concentration`, which shares get and
+contracts don't: a
 contract position's notional *is* its premium, already graded by `Risk per
 trade`, while a share position can be many times its own risk and carries all
 of it through the gap. On a $20k account those 100 shares are 24% against a 15%
@@ -463,32 +531,42 @@ and puts a bearish one. That is not cosmetic: AMAT is below both its 20 EMA and
 Skip the prompt with `--side C` (`P`, `B`, or the long spellings `calls`,
 `puts`, `both` — all case-insensitive).
 
-### How many contracts
+### Picking the contract
 
-The sizing question comes **after** the stock info panel and the chain prices,
-because asking it first is asking blind:
-
-```
-2026-08-14 expiry, cost per contract:
-  120    call   $515
-  121    call   $470
-  122    call   $430
-  123    call   $385
-  124    call   $342
-
-How many contracts are you buying? [1]: 3
-```
-
-A spread lists its pairings instead, and asks for a floor first:
+The sizing questions come **after** the stock info panel and the payoff
+tables, because asking them first is asking blind. What's shown is not a price
+list but the same tables the report ends with, priced at one contract — a list
+of costs tells you what each strike costs, not which one is worth buying:
 
 ```
-2026-08-14 expiry, cost per spread:
-  Strikes        Debit  Max profit Reward:risk
-  120/121          $45         $55      1.22:1
-  120/122          $85        $115      1.35:1
-  120/125         $203        $297      1.47:1
+ PROFIT MIDWAY -- calls, per contract, 50 days of time value left ||  PROFIT AT EXPIRY -- calls, per contract
+  Strike              87.50    90.00    92.50                     ||   Strike              87.50    90.00    92.50
+  Cost now             $340     $239     $160                     ||   Cost now             $340     $239     $160
+  +5% move            +$160    +$104     +$62                     ||   +5% move             -$10    -$159    -$160
+    return on cost     +47%     +44%     +39%                     ||     return on cost      -3%     -66%    -100%
 
+Which strike are you trading? [Enter to keep them all]: 90
+How many contracts are you buying? [1]: 2
+```
+
+Pick one and the payoff tables price **only that contract** for the rest of
+the run, and the risk cap grades the premium you'd actually pay rather than
+the at-the-money contract nobody is buying:
+
+```
+  Strike              90.00                  ||   Strike              90.00
+  Cost now             $478                  ||   Cost now             $478
+  - Dollars at risk estimated at $478 (2 x $239, the 90 call).
+```
+
+Press Enter and the whole ladder stays priced, as before. The option ladder
+itself always shows every strike — it's the chain, not the position — and
+`--contract 90` skips the question. A spread takes a pairing the same way
+(`--contract 250/260`), and asks for its reward:risk floor first:
+
+```
 Minimum reward:risk you will accept? [Enter to skip]: 1.4
+Which spread are you trading? [Enter to keep them all]: 120/125
 How many spreads are you buying? [1]: 2
 ```
 
@@ -661,11 +739,12 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--entry` | Planned entry price. Defaults to the last close. |
 | `--stop` / `--target` | Your stop and profit target — needed to grade reward/risk. |
 | `--direction` | `long` or `short`. Inverts trend, momentum and RS checks. Defaults to `long`, or to whatever `--side` implies. |
-| `--instrument` | Earnings only: `O` single contracts, `S` stock, `C` call debit spread, `P` put debit spread. Each grades a different trade. Prompts if omitted. |
-| `--side` | Earnings options only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
-| `--strikes` | Earnings options only: strikes listed either side of the money. Default 5, capped at what the expiry carries. Prompts if omitted. |
-| `--contracts` | Earnings options only: how many contracts to buy. Prompts with prices if omitted. |
-| `--min-reward-risk` | Earnings spreads only: the reward:risk a pairing must clear, e.g. `1.5`. Prompts with prices if omitted; blank leaves it ungraded. |
+| `--instrument` | Any trade type: `O` single contracts, `S` stock, `C` call debit spread, `P` put debit spread. Each grades a different trade. Prompts if omitted. |
+| `--side` | Options only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
+| `--strikes` | Options only: strikes listed either side of the money. Default 5, capped at what the expiry carries. Prompts if omitted. |
+| `--contracts` | Options only: how many contracts to buy. Prompts with prices if omitted. |
+| `--contract` | Options only: trade one contract off the ladder — a strike (`90`) or a pairing (`250/260`). The payoff tables price only that one. Prompts if omitted; a label that isn't on the expiry says so and prices them all. |
+| `--min-reward-risk` | Spreads only: the reward:risk a pairing must clear, e.g. `1.5`. Prompts with prices if omitted; blank leaves it ungraded. |
 | `--account` | Account value, in dollars. |
 | `--risk` | Percent of the account risked on this trade. |
 | `--premium` | Dollars at risk outright (option premium). Overrides `--risk`. |
@@ -745,6 +824,28 @@ Calls always pair with puts and the two profit tables with each other, so a
 ladder is never set beside an unrelated table; anything left over pairs with
 its neighbour if both fit. The whole earnings report goes from 83 lines at 100
 columns to 62 at 200.
+
+The stock panel is tall enough to be worth **splitting against itself**. Given
+around 205 columns it is set as two columns, cut at a section heading so no
+block is torn in half, with the title and description running full width above
+both:
+
+```
+ STOCK INFO -- with consensus for the 2026-08-12 report
+  Technology / Semiconductors -- 784 employees
+  Cerebras Systems Inc. operates as an artificial intelligence infrastructure company...
+
+  Metric              Value             Range / note      What's good ||   Metric                  Value          Range / note      What's good
+  SIZE AND PRICE                                                      ||   THE BUSINESS
+  Market cap        $52.32B                    $10B+ trades liquid    ||   Revenue (trailing 12m)  $603.88M
+  Price             $234.76  33% of 52w range  upper half = strength  ||   Revenue growth            +94.4%  year over year  10%+ solid, 25%+ fast
+```
+
+That takes it from 52 lines to 31, with nothing dropped. The cut is chosen for
+you: the most even split that fits, falling back to a less even one before
+giving up, and to the single tall table when even that won't fit. Below about
+205 columns you get exactly what you got before, so this can only improve on
+the tall version. The width ceiling is 240 columns.
 
 ## Tuning the rules
 

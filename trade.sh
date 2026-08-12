@@ -177,13 +177,13 @@ EOF
     return 0
 }
 
-# What the trade is made of. Everything the earnings report grades follows from
-# it, so it is asked before the sizing questions -- premium or stop, not both.
+# What the trade is made of. Every strategy can be taken any of these ways, and
+# the answer decides the sizing questions -- premium or stop, not both.
 choose_instrument() {
     INSTRUMENT=""
     printf '\n%sWhat are you trading?%s\n\n' "$BOLD" "$OFF"
-    printf '  O) Options            %ssingle contracts on the report%s\n'      "$DIM" "$OFF"
-    printf '  S) Stock              %sshares held through it%s\n'              "$DIM" "$OFF"
+    printf '  O) Options            %ssingle contracts%s\n'                    "$DIM" "$OFF"
+    printf '  S) Stock              %sthe shares themselves%s\n'               "$DIM" "$OFF"
     printf '  C) Call debit spread  %sbuy a strike, sell one above%s\n'        "$DIM" "$OFF"
     printf '  P) Put debit spread   %sbuy a strike, sell one below%s\n\n'      "$DIM" "$OFF"
     while true; do
@@ -356,7 +356,7 @@ while true; do
     HORIZON=""
     INSTRUMENT=""
     [ "$STRATEGY" = "short" ] && choose_horizon
-    [ "$STRATEGY" = "earnings" ] && choose_instrument
+    choose_instrument
     choose_ticker
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
