@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+.pytest_cache/
 
 # --- secrets: never commit any of this -------------------------------------
 # Credentials belong in ~/.config/tradeval/reddit.json, outside this tree.

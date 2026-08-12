@@ -955,6 +955,35 @@ tradeval/
 Adding a fourth trade type means subclassing `Strategy`, implementing
 `build_checks()`, and registering it in `strategies/__init__.py`.
 
+## Development
+
+```bash
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/pytest
+```
+
+Tests live under `tests/`, mirroring `tradeval/`'s own layout:
+
+```
+tests/
+  conftest.py             shared builders: synthetic price history, a fully
+                          populated MarketData, a fake option chain
+  tradeval/
+    test_*.py             one file per module in tradeval/
+    strategies/
+      test_*.py           one file per strategy, plus the shared base class
+                          and the options-chain mixin
+  test_validate.py        the CLI's argument parsing and pure helpers
+```
+
+Nothing in the suite touches the network. `MarketData` and `Strategy` expose
+most of what they compute as `functools.cached_property`, which only runs the
+first time it is read -- assigning straight to the instance (`data.history =
+some_dataframe`) pre-fills the cache instead, so a fixture can hand a strategy
+a realistic chart or option chain without a live Yahoo Finance connection.
+`scripts/smoke.py` still exists for an end-to-end check against a real,
+current ticker before a release.
+
 ## Caveats
 
 - **Options checks need live quotes.** Bid/ask spreads are meaningless when the
