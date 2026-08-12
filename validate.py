@@ -202,6 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="print a sector's largest companies as SYMBOL<tab>description, then exit",
     )
     other.add_argument(
+        "--profile",
+        metavar="SYMBOL",
+        help="print one company's stock info panel, then exit",
+    )
+    other.add_argument(
         "--list-spending",
         action="store_true",
         help="print the spending-flow menu, then exit",
@@ -1058,6 +1063,23 @@ def main(argv: Optional[List[str]] = None) -> int:
     config.benchmark = args.benchmark
     palette = make_palette(no_color=args.no_color)
     width = detect_width(args.width)
+
+    if args.profile:
+        symbol = resolve_symbols([args.profile])[0]
+        try:
+            data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
+        except (DataError, Exception) as exc:  # noqa: BLE001 -- reported, not handled
+            print("%s: %s" % (symbol, exc), file=sys.stderr)
+            return 1
+        # Any strategy builds the same profile; the long term one asks for
+        # nothing else, so it is the cheapest way to reach it.
+        panel = STRATEGIES["long"](TradeContext(data=data, config=config)).stock_info_panel()
+        if panel is None:
+            print("%s: nothing to show." % symbol, file=sys.stderr)
+            return 1
+        for line in layout_panels([panel], palette, width):
+            print(line)
+        return 0
 
     if args.instrument:
         try:

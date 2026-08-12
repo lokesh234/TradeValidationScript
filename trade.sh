@@ -97,16 +97,59 @@ choose_strategy() {
             3|long|hold|invest|long-term)      STRATEGY="long";     STRATEGY_LABEL="Long Term";      return ;;
             # Browsing picks a ticker rather than a strategy, so the menu comes
             # back around to ask what to do with the one you found.
-            4|browse|browse-around|spend)      browse_spending ;;
+            4|browse|browse-around|spend)      browse_around ;;
             q|quit|exit)                       exit 0 ;;
             *) printf '  %sPick 1 to 4 (or q to quit).%s\n' "$DIM" "$OFF" ;;
         esac
     done
 }
 
+# Two ways to go shopping: the sector and theme baskets a short term trade
+# picks from, or the spending flows. Either one settles TICKERS, which is why
+# the ticker prompt is skipped afterwards.
+browse_around() {
+    while true; do
+        printf '\n%sWhat do you want to look at?%s\n\n' "$BOLD" "$OFF"
+        printf '  1) Sectors and themes        %sthe largest names in one of the ten baskets%s\n' "$DIM" "$OFF"
+        printf '  2) Where the money is going  %sthe biggest spending flows, and who collects them%s\n\n' "$DIM" "$OFF"
+        ask reply "Choice [1-2, or b to go back]"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            1|sector|sectors|theme|themes)
+                choose_sector && browse_sector && pick_candidate && return 0 ;;
+            2|money|flow|flows|spend|spending)
+                browse_flows && return 0 ;;
+            b|back|"") return 1 ;;
+            *) printf '  %sPick 1 or 2 (or b to go back).%s\n' "$DIM" "$OFF" ;;
+        esac
+    done
+}
+
+# Take one of the listed CANDIDATES into TICKERS. Non-zero means go back.
+pick_candidate() {
+    local count=${#CANDIDATES[@]}
+    [ "$count" -gt 0 ] || return 1
+    printf '\n'
+    while true; do
+        ask reply "Pick a number to take one, or b to go back"
+        case "$reply" in
+            b|back|"") return 1 ;;
+            *[!0-9]*) printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF" ;;
+            *)
+                if [ "$reply" -ge 1 ] && [ "$reply" -le "$count" ]; then
+                    TICKERS="${CANDIDATES[$((reply - 1))]}"
+                    printf '  %s-> %s%s\n' "$DIM" "$TICKERS" "$OFF"
+                    # Browsing is for looking: show what was picked before
+                    # asking how to trade it.
+                    "$PY" "$ROOT/validate.py" --profile "$TICKERS"
+                    return 0
+                fi
+                printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF" ;;
+        esac
+    done
+}
+
 # The market's big spending flows, then the companies collecting one of them.
-# Sets TICKERS when a name is picked, so the ticker prompt is skipped.
-browse_spending() {
+browse_flows() {
     local menu count out sym line n=0
     menu="$("$PY" "$ROOT/validate.py" --list-spending 2>/dev/null)"
     [ -z "$menu" ] && { printf '  %sCould not load the spending flows.%s\n' "$DIM" "$OFF"; return 1; }
@@ -137,43 +180,7 @@ EOF
     printf '\n  %sShares overlap down the chain, so they sum past $1,000. A dash is a name\n' "$DIM"
     printf '  that benefits without collecting -- it spends this flow, or earns a fee on it.%s\n' "$OFF"
 
-    printf '\n'
-    while true; do
-        ask reply "Pick a number to take one, or b to go back"
-        case "$reply" in
-            b|back|"") return 1 ;;
-            *[!0-9]*) printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$n" "$OFF" ;;
-            *)
-                if [ "$reply" -ge 1 ] && [ "$reply" -le "$n" ]; then
-                    TICKERS="${CANDIDATES[$((reply - 1))]}"
-                    printf '  %s-> %s%s\n' "$DIM" "$TICKERS" "$OFF"
-                    return 0
-                fi
-                printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$n" "$OFF" ;;
-        esac
-    done
-}
-
-# Fill CANDIDATES with this week's earnings names and print them. Returns
-# non-zero when there is nothing to show, so the caller falls back to typing.
-browse_earnings() {
-    CANDIDATES=()
-    local out sym line
-    out="$("$PY" "$ROOT/validate.py" --list-earnings 2>/dev/null)" || return 1
-    [ -z "$out" ] && return 1
-
-    printf '\n%sReporting this week, largest first:%s\n\n' "$BOLD" "$OFF"
-    local n=0
-    while IFS="$(printf '\t')" read -r sym line; do
-        [ -z "$sym" ] && continue
-        n=$((n + 1))
-        CANDIDATES+=("$sym")
-        printf '  %2d) %s\n' "$n" "$line"
-    done <<EOF
-$out
-EOF
-    [ "$n" -gt 0 ] || return 1
-    return 0
+    pick_candidate
 }
 
 # How long the position is meant to be held. Scales the stop, the payoff
@@ -205,7 +212,10 @@ choose_sector() {
     count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
     printf '\n%sWhich sector?%s\n\n%s\n\n' "$BOLD" "$OFF" "$menu"
     while true; do
-        ask reply "Choice [1-$count]"
+        ask reply "Choice [1-$count, or b to go back]"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            b|back|"") return 1 ;;
+        esac
         # Resolving is a local lookup; leave the network fetch to browse_sector.
         SECTOR="$("$PY" "$ROOT/validate.py" --resolve-sector "$reply" 2>/dev/null)"
         [ -n "$SECTOR" ] && return 0
