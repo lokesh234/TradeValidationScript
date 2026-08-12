@@ -1,0 +1,59 @@
+name: tests
+
+# Anything heading for main gets the suite run against it first: pull requests
+# aimed at main, and pushes straight to main, which is how this repo is
+# usually worked. A green tick here is not the same as a blocked merge --
+# GitHub only refuses the merge if this check is marked required in the
+# branch protection rules for main.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  # For re-running the suite by hand after a dependency moves underneath it.
+  workflow_dispatch:
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      # One failing version should not hide the result of the other.
+      fail-fast: false
+      matrix:
+        # 3.9 is what trade.sh gets from the system python on macOS, so it is
+        # the version the tests actually have to pass on. 3.12 is here to
+        # catch anything that only works because 3.9 is lenient.
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        # requirements-dev.txt pulls in requirements.txt itself.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Run the suite
+        # Nothing in tests/ touches the network, so there is no flakiness to
+        # retry around and no credentials to hand the runner. scripts/smoke.py
+        # is deliberately not run here: it prices a real, current ticker,
+        # which would make this job fail on Yahoo Finance's bad days rather
+        # than on ours.
+        run: python -m pytest -q
