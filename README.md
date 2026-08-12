@@ -999,3 +999,7 @@ current ticker before a release.
   gamble strategy leans on that date heavily.
 - **These are rules, not predictions.** A GO means the setup matches the
   checklist, not that the trade will work.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
