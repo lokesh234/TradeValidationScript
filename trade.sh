@@ -83,19 +83,73 @@ confirm() {  # confirm <prompt> -- defaults to no
 }
 
 choose_strategy() {
-    printf '\n%sWhich strategy are you trading?%s\n\n' "$BOLD" "$OFF"
-    printf '  1) Earnings Gamble   %s0-10 days, event driven%s\n' "$DIM" "$OFF"
-    printf '  2) Short Term        %s1 to 6 months%s\n'           "$DIM" "$OFF"
-    printf '  3) Long Term         %s1 year or more%s\n\n'        "$DIM" "$OFF"
-
     while true; do
-        ask reply "Choice [1-3]"
+        printf '\n%sWhich strategy are you trading?%s\n\n' "$BOLD" "$OFF"
+        printf '  1) Earnings Gamble   %s0-10 days, event driven%s\n' "$DIM" "$OFF"
+        printf '  2) Short Term        %s1 to 6 months%s\n'           "$DIM" "$OFF"
+        printf '  3) Long Term         %s1 year or more%s\n'          "$DIM" "$OFF"
+        printf '  4) Browse Around     %swhere the money is going%s\n\n' "$DIM" "$OFF"
+
+        ask reply "Choice [1-4]"
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             1|earnings|gamble|earnings-gamble) STRATEGY="earnings"; STRATEGY_LABEL="Earnings Gamble"; return ;;
             2|short|swing|short-term)          STRATEGY="short";    STRATEGY_LABEL="Short Term";     return ;;
             3|long|hold|invest|long-term)      STRATEGY="long";     STRATEGY_LABEL="Long Term";      return ;;
+            # Browsing picks a ticker rather than a strategy, so the menu comes
+            # back around to ask what to do with the one you found.
+            4|browse|browse-around|spend)      browse_spending ;;
             q|quit|exit)                       exit 0 ;;
-            *) printf '  %sPick 1, 2 or 3 (or q to quit).%s\n' "$DIM" "$OFF" ;;
+            *) printf '  %sPick 1 to 4 (or q to quit).%s\n' "$DIM" "$OFF" ;;
+        esac
+    done
+}
+
+# The market's big spending flows, then the companies collecting one of them.
+# Sets TICKERS when a name is picked, so the ticker prompt is skipped.
+browse_spending() {
+    local menu count out sym line n=0
+    menu="$("$PY" "$ROOT/validate.py" --list-spending 2>/dev/null)"
+    [ -z "$menu" ] && { printf '  %sCould not load the spending flows.%s\n' "$DIM" "$OFF"; return 1; }
+    count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
+    printf '\n%sWhere the money is going:%s\n\n%s\n\n' "$BOLD" "$OFF" "$menu"
+
+    local flow=""
+    while [ -z "$flow" ]; do
+        ask reply "Which flow? [1-$count, or b to go back]"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            b|back|"") return 1 ;;
+        esac
+        out="$("$PY" "$ROOT/validate.py" --list-spending-winners "$reply" 2>/dev/null)" && flow="$reply"
+        [ -z "$flow" ] && printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
+    done
+
+    CANDIDATES=()
+    printf '\n%sWho collects it, and what they take of every $1,000:%s\n\n' "$BOLD" "$OFF"
+    while IFS="$(printf '\t')" read -r sym line; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        CANDIDATES+=("$sym")
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$out
+EOF
+    [ "$n" -gt 0 ] || return 1
+    printf '\n  %sShares overlap down the chain, so they sum past $1,000. A dash is a name\n' "$DIM"
+    printf '  that benefits without collecting -- it spends this flow, or earns a fee on it.%s\n' "$OFF"
+
+    printf '\n'
+    while true; do
+        ask reply "Pick a number to take one, or b to go back"
+        case "$reply" in
+            b|back|"") return 1 ;;
+            *[!0-9]*) printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$n" "$OFF" ;;
+            *)
+                if [ "$reply" -ge 1 ] && [ "$reply" -le "$n" ]; then
+                    TICKERS="${CANDIDATES[$((reply - 1))]}"
+                    printf '  %s-> %s%s\n' "$DIM" "$TICKERS" "$OFF"
+                    return 0
+                fi
+                printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$n" "$OFF" ;;
         esac
     done
 }
@@ -336,10 +390,16 @@ if [ "$#" -gt 0 ]; then
             setup_reddit
             exit $?
             ;;
+        spend|spending|flows)
+            # Shopping from a spending flow bypasses the menus in this
+            # script, so hand straight over.
+            exec "$PY" "$ROOT/validate.py" --spending
+            ;;
         help|--help|-h)
             "$PY" "$ROOT/validate.py" --help
             printf '\nExtras handled by this script:\n'
             printf '  ./trade.sh              interactive menu\n'
+            printf '  ./trade.sh spend        browse where the money is going\n'
             printf '  ./trade.sh reddit       set up the Reddit buzz score\n'
             exit 0
             ;;
@@ -352,12 +412,14 @@ printf '%s\n%sTrade Validation%s  %sscore a trade idea before you place it%s\n%s
 
 LAST_STATUS=0
 while true; do
+    TICKERS=""
     choose_strategy
     HORIZON=""
     INSTRUMENT=""
     [ "$STRATEGY" = "short" ] && choose_horizon
     choose_instrument
-    choose_ticker
+    # Browsing already settled the ticker, so only ask when it did not.
+    [ -z "$TICKERS" ] && choose_ticker
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
     if [ "$STRATEGY" = "earnings" ]; then

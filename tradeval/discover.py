@@ -77,6 +77,7 @@ class SectorCompany:
     symbol: str
     name: str
     market_cap: Optional[float]
+    price: Optional[float] = None
 
 
 def resolve_sector(choice: str) -> str:
@@ -145,8 +146,8 @@ def _shares_outstanding(ticker: Any) -> Optional[float]:
 
 
 def _theme_company(symbol: str) -> SectorCompany:
-    """Name and market cap for one basket member; symbol alone if the lookup fails."""
-    name, cap = symbol, None
+    """Name, price and market cap for one symbol; symbol alone if it fails."""
+    name, cap, price = symbol, None, None
     try:
         ticker = yf.Ticker(symbol)
         info = ticker.info or {}
@@ -160,24 +161,31 @@ def _theme_company(symbol: str) -> SectorCompany:
                 cap = _positive(ticker.fast_info.get("market_cap"))
             except Exception:
                 cap = None
+        price = _positive(info.get("currentPrice"))
         if cap is None:
-            price = _positive(info.get("currentPrice"))
             shares = _shares_outstanding(ticker)
             cap = price * shares if price and shares else None
     except Exception:
         pass
-    return SectorCompany(symbol=symbol, name=name, market_cap=cap)
+    return SectorCompany(symbol=symbol, name=name, market_cap=cap, price=price)
+
+
+def company_snapshots(symbols: Sequence[str]) -> List[SectorCompany]:
+    """Live name, price and market cap for each symbol, in the order given.
+
+    One lookup per ticker rather than the single screener call a sector needs,
+    so they run in parallel -- these menus sit on the critical path to the
+    ticker prompt.
+    """
+    if not symbols:
+        return []
+    with ThreadPoolExecutor(max_workers=max(1, min(len(symbols), 8))) as pool:
+        return list(pool.map(_theme_company, symbols))
 
 
 def _theme_companies(symbols: Sequence[str], limit: int) -> List[SectorCompany]:
-    """Basket members with live names and caps, biggest first.
-
-    A theme costs one lookup per ticker rather than the single screener call a
-    sector needs, so they run in parallel -- this menu is on the critical path
-    to the ticker prompt.
-    """
-    with ThreadPoolExecutor(max_workers=max(1, min(len(symbols), 8))) as pool:
-        found = list(pool.map(_theme_company, symbols))
+    """Basket members with live names and caps, biggest first."""
+    found = company_snapshots(symbols)
     # Unknown caps sort last rather than as zero-cap companies.
     found.sort(key=lambda c: -(c.market_cap or 0.0))
     return found[:limit]

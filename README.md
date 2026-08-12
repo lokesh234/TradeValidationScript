@@ -61,6 +61,61 @@ The prompts adapt to both answers: an earnings gamble in contracts asks for
 option premium, a short term trade in shares asks for entry/stop/target and
 direction, a long term hold just asks how much you're putting in.
 
+### Where the money is going
+
+`./trade.sh spend` browses the market's largest spending flows and the
+companies standing in front of them — a way to find a ticker by following the
+money rather than by screening for one:
+
+```
+ WHERE THE MONEY IS GOING -- 2026 estimates
+  #  Flow                                        A year                                            Direction
+  1  AI Capex                                    ~$500B a year                                     rising fast
+  2  Power Grid and Clean Energy Infrastructure  ~$250B a year in US utility capex, ~$2T globally  rising, and now demand-led
+  3  GLP-1 and Specialty Pharmaceuticals         ~$80B a year, heading for $150B by 2030           rising, supply-constrained
+  4  Government Net Interest Payments            ~$1T a year in US federal net interest            rising with every refinancing
+
+Which flow? [1-4]: 1
+```
+
+Picking one prices its beneficiaries live and says what each actually sells
+into the flow — the part a ticker list leaves out:
+
+```
+ AI CAPEX -- ~$500B a year, rising fast
+  Symbol  Company                       Price  Market cap  What it sells into the flow
+  NVDA    NVIDIA Corporation          $223.04    $5402.3B  accelerators, the largest single line on the bill
+  TSM     Taiwan Semiconductor Manuf  $429.26    $2226.3B  fabricates the leading-edge die, whoever designed it
+  AVGO    Broadcom Inc.               $419.64    $1996.1B  custom accelerators and the switching silicon around them
+  MU      Micron Technology, Inc.     $922.76    $1042.2B  HBM stacks, committed years ahead of delivery
+  AMAT    Applied Materials, Inc.     $549.10     $436.0B  the tools that build the fabs the die come from
+  ANET    Arista Networks, Inc.       $207.64     $261.9B  the switching fabric between the racks
+  VRT     Vertiv Holdings, LLC        $294.11     $113.2B  power and cooling inside the hall
+  COHR    Coherent Corp.              $357.33      $69.9B  optical interconnect once copper runs out of reach
+  CRWV    CoreWeave, Inc.             $107.53      $58.7B  rents the finished capacity back out by the hour
+
+Pick a number, or type ticker(s): 1
+```
+
+That feeds straight into the normal validation, so the flow is just a
+shortlist with a reason attached.
+
+**Every flow carries its catch**, printed under the table, because a spending
+number on its own is an argument with one side. AI capex is "guided by five
+customers, any of whom can slow it in a single earnings call"; the interest-
+payment names "win on the level of rates, not the size of the bill, so cuts
+reverse the trade even as the deficit keeps growing".
+
+The sizes are rounded annual estimates kept by hand in `tradeval/spending.py`
+and they go stale — they are there to say which way the money runs, not to be
+quoted. **The prices beside the names are live.** Add a flow by appending a
+`SpendingFlow` to that file; each wants a size, a direction, what the money
+buys, the companies it lands on with their role, and the catch.
+
+Skip the menu with `--spending 1` or `--spending "grid"`, and note this
+replaces the usual shortlist for whichever trade type you pick — you can shop
+the AI capex flow for a long term hold or an earnings gamble alike.
+
 ### This week's earnings candidates
 
 Pick the earnings gamble without a ticker and it offers the largest tech names
@@ -751,6 +806,7 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--size` | Dollars deployed into the position, for the concentration check. |
 | `--earnings-date` | Earnings only: which report to trade, `YYYY-MM-DD`. Prompts if omitted. |
 | `--allow-earnings` | Short term only: permit holding through a scheduled report. |
+| `--spending` | Browse the market's big spending flows and their beneficiaries, then pick a ticker from one. Takes a number or a name; bare lists them. |
 | `--benchmark` | Relative-strength benchmark. Default `SPY`. |
 | `--period` | History window to download. Default `3y`. |
 | `--config` | JSON file overriding any threshold. |

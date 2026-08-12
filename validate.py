@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval import buzz, discover, reddit_auth, stocktwits
+from tradeval import buzz, discover, reddit_auth, spending, stocktwits
 from tradeval.config import Config
 from tradeval.context import TradeContext
 from tradeval.data import DataError, MarketData, resolve_symbols
@@ -120,6 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="short term only: how long you plan to hold -- 1m, 3m or 6m. Prompts if omitted.",
     )
     plan.add_argument(
+        "--spending",
+        nargs="?",
+        const="",
+        metavar="FLOW",
+        help="browse the market's big spending flows and the companies collecting "
+        "them, then pick a ticker from one. Takes a number or a name; bare lists them.",
+    )
+    plan.add_argument(
         "--sector",
         help="short term only: sector or theme to browse for candidates (a menu number or a name)",
     )
@@ -194,6 +202,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="print a sector's largest companies as SYMBOL<tab>description, then exit",
     )
     other.add_argument(
+        "--list-spending",
+        action="store_true",
+        help="print the spending-flow menu, then exit",
+    )
+    other.add_argument(
+        "--list-spending-winners",
+        metavar="FLOW",
+        help="print a flow's beneficiaries as SYMBOL<tab>description, then exit",
+    )
+    other.add_argument(
         "--list-earnings",
         action="store_true",
         help="print this week's earnings candidates as SYMBOL<tab>description, then exit",
@@ -203,15 +221,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def browse_spending(palette, width: int, choice: Optional[str] = None) -> List:
+    """Show where the money is going, then who stands to collect it.
+
+    Returns the flow's beneficiaries so they can be picked from like any other
+    candidate list -- a spending flow is a way of finding a ticker, not a
+    separate thing to look at.
+    """
+    flow = None
+    while flow is None:
+        if choice is None:
+            for line in layout_panels([spending.menu_panel()], palette, width):
+                print(line)
+            try:
+                choice = input("\nWhich flow? [1-%d]: " % len(spending.FLOWS)).strip()
+            except EOFError:
+                return []
+        if not choice:
+            choice = None
+            continue
+        try:
+            flow = spending.resolve(choice)
+        except ValueError as exc:
+            print("  %s" % exc)
+            choice = None
+
+    snapshots = spending.flow_snapshots(flow)
+    for line in layout_panels([spending.flow_panel(flow, snapshots)], palette, width):
+        print(line)
+    return snapshots
+
+
 def prompt_symbols(
-    existing: List[str], key: str, config: Config, sector: Optional[str] = None
+    existing: List[str],
+    key: str,
+    config: Config,
+    sector: Optional[str] = None,
+    spend: Optional[str] = None,
+    palette=None,
+    width: int = 0,
 ) -> List[str]:
     """Ask for tickers, offering a shortlist appropriate to the trade type."""
     if existing:
         return existing
 
     candidates = []
-    if key == "earnings":
+    if spend is not None:
+        # An explicit --spending overrides the trade type's usual shortlist:
+        # the caller asked to shop from the flow, whatever they are trading.
+        candidates = browse_spending(palette or make_palette(no_color=True), width or detect_width(), spend or None)
+    elif key == "earnings":
         candidates = show_earnings_menu(config)
     elif key == "short":
         candidates = show_sector_menu(sector)
@@ -941,6 +1000,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         return 0
 
+    if args.list_spending:
+        for line in spending.menu_lines():
+            print(line)
+        return 0
+
+    if args.list_spending_winners:
+        try:
+            flow = spending.resolve(args.list_spending_winners)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        snapshots = {snap.symbol: snap for snap in spending.flow_snapshots(flow)}
+        for winner in flow.winners:
+            print("%s\t%s" % (winner.symbol, spending.format_winner(winner, snapshots.get(winner.symbol))))
+        return 0 if flow.winners else 1
+
     if args.list_sector_companies:
         try:
             sector = discover.resolve_sector(args.list_sector_companies)
@@ -1013,7 +1088,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         # Strategy first: it decides which trade details are worth asking for.
         key = prompt_trade_type(args.trade_type)
-        symbols = prompt_symbols(resolve_symbols(args.symbols), key, config, args.sector)
+        symbols = prompt_symbols(
+            resolve_symbols(args.symbols),
+            key,
+            config,
+            args.sector,
+            args.spending,
+            palette,
+            width,
+        )
     except KeyError as exc:
         print(exc, file=sys.stderr)
         return 2
