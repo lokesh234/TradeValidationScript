@@ -183,6 +183,175 @@ FLOWS: List[SpendingFlow] = [
             "reverse the trade even as the deficit keeps growing."
         ),
     ),
+    SpendingFlow(
+        name="Defence and Rearmament",
+        size="~$2.7T a year globally, ~$1T of it US",
+        direction="rising, budget by budget",
+        what=(
+            "NATO members lifting military spending toward the shares of GDP they "
+            "promised, Europe refilling stockpiles it emptied, and the US shifting "
+            "money from a handful of exquisite platforms toward munitions, drones and "
+            "software. It is the slowest flow on this list -- appropriation to "
+            "contract to delivered revenue runs years -- but it is committed in law "
+            "rather than guided on an earnings call."
+        ),
+        winners=[
+            Beneficiary("LMT", "fighters, missiles and the largest US programme book", 27),
+            Beneficiary("RTX", "missiles and air defence, the part Europe is buying", 17),
+            Beneficiary("NOC", "bombers, and the nuclear leg nobody else builds", 15),
+            Beneficiary("GD", "submarines, combat vehicles and munitions", 14),
+            Beneficiary("LHX", "sensors, comms and the merchant-supplier role", 8),
+            Beneficiary("RNMBY", "European artillery and ammunition, the shortage itself", 5),
+            Beneficiary("HII", "the only US builder of nuclear carriers and subs", 4),
+            Beneficiary("PLTR", "the software layer the budgets are moving toward", 1),
+            Beneficiary("AVAV", "small drones and loitering munitions", 1),
+        ],
+        split=(
+            "Roughly half of a Western defence budget is personnel, fuel and "
+            "maintenance, and never reaches a contractor at all. Non-US buyers spend "
+            "mostly at home, which is why the European half of this flow lands on "
+            "Rheinmetall rather than on the US primes."
+        ),
+        catch=(
+            "Appropriated is not delivered. Programmes convert to revenue over years, "
+            "budgets are annual political documents, and the primes already trade on "
+            "backlog booked long before the cash arrives."
+        ),
+    ),
+    SpendingFlow(
+        name="Semiconductor Fabs and Equipment",
+        size="~$185B a year in chipmaker capex, ~$120B of it equipment",
+        direction="rising, and violently cyclical",
+        what=(
+            "What it costs to build the capacity the previous flows assume exists. "
+            "Foundries and memory makers spend this on cleanrooms and on the tools "
+            "inside them, part-funded by CHIPS-style subsidies in the US, Europe and "
+            "Japan. Distinct from AI capex: that money buys finished accelerators, "
+            "this money buys the machines that make them, one layer further upstream "
+            "and one cycle earlier."
+        ),
+        winners=[
+            Beneficiary("ASML", "lithography, with no second supplier at the leading edge", 170),
+            Beneficiary("AMAT", "deposition and etch, the broadest tool line", 150),
+            Beneficiary("LRCX", "etch and deposition, and the memory cycle's leverage", 95),
+            Beneficiary("KLAC", "process control -- finding the defects before the wafer ships", 65),
+            Beneficiary("ENTG", "the ultrapure materials and filters every step consumes", 19),
+            Beneficiary("TER", "test, after everything else has been built", 16),
+            Beneficiary("ONTO", "inspection and metrology, weighted to advanced packaging", 7),
+            Beneficiary("TSM", "spends the largest share of this, and earns on what it builds"),
+            Beneficiary("INTC", "spends it too, on foundry capacity still short of customers"),
+        ],
+        split=(
+            "About a third of a new fab is the shell, the cleanroom and the utilities, "
+            "built by private contractors. Governments pay part of the bill through "
+            "subsidies, which changes who writes the cheque, not who cashes it."
+        ),
+        catch=(
+            "The most cyclical flow here. Tool orders are placed a year ahead and "
+            "cancelled faster than they are placed, and export controls can remove a "
+            "tenth of the addressable market by decree."
+        ),
+    ),
+    SpendingFlow(
+        name="Digital Advertising",
+        size="~$1.1T a year in total ad spend, ~$800B of it digital",
+        direction="rising, and concentrating",
+        what=(
+            "The money that pays for nearly everything free on the internet. It is an "
+            "operating expense rather than capex, so it turns up in revenue the same "
+            "quarter it is spent, and it moves with the economy rather than ahead of "
+            "it. The two growing shares are retail media -- advertising sold beside a "
+            "checkout -- and connected TV, which is the old television budget arriving "
+            "at a new set of owners."
+        ),
+        winners=[
+            Beneficiary("GOOGL", "search, YouTube and the network, the single largest share", 275),
+            Beneficiary("META", "the feeds, and the best-performing direct-response ads", 170),
+            Beneficiary("AMZN", "retail media -- ads sold against purchase intent", 65),
+            Beneficiary("APP", "the ad engine for mobile apps, and increasingly beyond them", 6),
+            Beneficiary("TTD", "the independent buy side for everything outside the walls", 3),
+            Beneficiary("PINS", "intent-heavy inventory, sold to the same buyers", 3),
+            Beneficiary("RDDT", "attention that only recently started being sold", 2),
+            Beneficiary("TTWO", "in-game inventory, sold mostly through Zynga's mobile titles", 1),
+        ],
+        split=(
+            "Three companies take more than $500 of every $1,000 spent on advertising "
+            "anywhere on earth, billboards and television included. That concentration "
+            "is the flow's shape: everyone else is arguing over the remainder."
+        ),
+        catch=(
+            "Advertising is the first budget cut in a downturn and it recovers late. "
+            "The big three's share is also near its ceiling, so the growth case for "
+            "the rest depends on them not taking any more of it."
+        ),
+    ),
+    SpendingFlow(
+        name="Cybersecurity",
+        size="~$270B a year, compounding at low double digits",
+        direction="rising, and largely non-discretionary",
+        what=(
+            "The rare line of enterprise IT that survives a cost-cutting cycle, "
+            "because the cost of not spending it is a disclosure filing. Budgets are "
+            "consolidating from dozens of point products onto a few platforms, which "
+            "is why the leaders grow faster than the flow does and the rest grow "
+            "slower than their market."
+        ),
+        winners=[
+            Beneficiary("MSFT", "security bundled into software already bought", 90),
+            Beneficiary("PANW", "the broadest platform, assembled by acquisition -- most recently identity", 35),
+            Beneficiary("FTNT", "firewalls and the network edge, sold on price", 24),
+            Beneficiary("CRWD", "the endpoint agent, extended into everything else", 17),
+            Beneficiary("ZS", "the traffic inspection layer between user and app", 11),
+            Beneficiary("OKTA", "identity, which is where the breaches actually start", 10),
+            Beneficiary("CHKP", "the oldest firewall franchise, sold on renewals", 10),
+            Beneficiary("NET", "the network in front of the application", 7),
+            Beneficiary("S", "the endpoint challenger, priced on taking share", 4),
+        ],
+        split=(
+            "Roughly $200 of every $1,000 buys people rather than software: analysts, "
+            "consultants and integrators. Software is the minority of a security "
+            "budget and the whole of this list."
+        ),
+        catch=(
+            "Every name here trades on a multiple that assumes consolidation goes its "
+            "way, and only one of them can be right. A breach at a vendor reprices it "
+            "in a day, and Microsoft gives away what the others must sell."
+        ),
+    ),
+    SpendingFlow(
+        name="Commercial Aerospace and the Aftermarket",
+        size="~$450B a year, on order books sold out into the 2030s",
+        direction="rising, supply-constrained",
+        what=(
+            "Airlines buying aircraft they cannot get delivered and maintaining the "
+            "ones they already fly. The flow is set by how fast two airframers and "
+            "three engine makers can build, not by how much anyone wants to spend. The "
+            "aftermarket -- spare parts and shop visits on the installed base -- is "
+            "the smaller half by revenue and the larger by profit, and it grows when "
+            "deliveries slip."
+        ),
+        winners=[
+            Beneficiary("BA", "one of the two airframers, when it can deliver", 130),
+            Beneficiary("RTX", "engines through Pratt, and half the cabin through Collins", 100),
+            Beneficiary("GE", "the narrowbody engine franchise and its spares annuity", 90),
+            Beneficiary("SAFRY", "the other half of the CFM engine, and landing systems", 65),
+            Beneficiary("TDG", "proprietary parts sold into the aftermarket at aftermarket prices", 19),
+            Beneficiary("HWM", "the forgings and fasteners the whole chain waits on", 18),
+            Beneficiary("HEI", "approved replacement parts, priced under the originals", 9),
+            Beneficiary("WWD", "fuel systems and actuation, on every airframe either builds", 5),
+        ],
+        split=(
+            "Airbus takes the largest single share of this flow and is not listed in "
+            "the US in a form worth pricing here. What the column also misses is "
+            "timing: an engine maker sells the engine at a loss and collects for the "
+            "thirty years it stays on the wing."
+        ),
+        catch=(
+            "Every part of this is supply-chain bound, so a forging shortage or a "
+            "strike moves the year. Boeing carries its own execution risk on top, and "
+            "the aftermarket softens the moment airlines park aircraft."
+        ),
+    ),
 ]
 
 

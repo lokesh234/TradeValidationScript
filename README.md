@@ -70,29 +70,38 @@ money rather than by screening for one:
 ```
  WHERE THE MONEY IS GOING -- 2026 estimates
   #  Flow                                        A year                                            Direction
-  1  AI Capex                                    ~$500B a year                                     rising fast
-  2  Power Grid and Clean Energy Infrastructure  ~$250B a year in US utility capex, ~$2T globally  rising, and now demand-led
-  3  GLP-1 and Specialty Pharmaceuticals         ~$80B a year, heading for $150B by 2030           rising, supply-constrained
-  4  Government Net Interest Payments            ~$1T a year in US federal net interest            rising with every refinancing
+  1  AI Capex                                    ~$500B a year                                             rising fast
+  2  Power Grid and Clean Energy Infrastructure  ~$250B a year in US utility capex, ~$2T globally          rising, and now demand-led
+  3  GLP-1 and Specialty Pharmaceuticals         ~$80B a year, heading for $150B by 2030                   rising, supply-constrained
+  4  Government Net Interest Payments            ~$1T a year in US federal net interest                    rising with every refinancing
+  5  Defence and Rearmament                      ~$2.7T a year globally, ~$1T of it US                     rising, budget by budget
+  6  Semiconductor Fabs and Equipment            ~$185B a year in chipmaker capex, ~$120B of it equipment  rising, and violently cyclical
+  7  Digital Advertising                         ~$1.1T a year in total ad spend, ~$800B of it digital     rising, and concentrating
+  8  Cybersecurity                               ~$270B a year, compounding at low double digits           rising, and largely non-discretionary
+  9  Commercial Aerospace and the Aftermarket    ~$450B a year, on order books sold out into the 2030s     rising, supply-constrained
 
-Which flow? [1-4]: 1
+Which flow? [1-9]: 1
 ```
+
+The nine cover capital being built (AI, the grid, the fabs behind both, aircraft),
+budgets that renew every year whatever the cycle (defence, security, advertising),
+one drug category, and one transfer that buys nothing at all.
 
 Picking one prices its beneficiaries live and says what each actually sells
 into the flow — the part a ticker list leaves out:
 
 ```
  AI CAPEX -- ~$500B a year, rising fast
-  Symbol  Company                       Price  Market cap  What it sells into the flow
-  NVDA    NVIDIA Corporation          $223.04    $5402.3B  accelerators, the largest single line on the bill
-  TSM     Taiwan Semiconductor Manuf  $429.26    $2226.3B  fabricates the leading-edge die, whoever designed it
-  AVGO    Broadcom Inc.               $419.64    $1996.1B  custom accelerators and the switching silicon around them
-  MU      Micron Technology, Inc.     $922.76    $1042.2B  HBM stacks, committed years ahead of delivery
-  AMAT    Applied Materials, Inc.     $549.10     $436.0B  the tools that build the fabs the die come from
-  ANET    Arista Networks, Inc.       $207.64     $261.9B  the switching fabric between the racks
-  VRT     Vertiv Holdings, LLC        $294.11     $113.2B  power and cooling inside the hall
-  COHR    Coherent Corp.              $357.33      $69.9B  optical interconnect once copper runs out of reach
-  CRWV    CoreWeave, Inc.             $107.53      $58.7B  rents the finished capacity back out by the hour
+  Symbol  Company                   Per $1,000    Price  Market cap  What it sells into the flow
+  NVDA    NVIDIA Corporation              $350  $224.07    $5427.2B  accelerators, the largest single line on the bill
+  TSM     Taiwan Semiconductor Man         $90  $431.13    $2236.0B  fabricates the leading-edge die, whoever designed it
+  AVGO    Broadcom Inc.                    $70  $417.75    $1987.5B  custom accelerators and the switching silicon around them
+  MU      Micron Technology, Inc.          $45  $924.40    $1044.0B  HBM stacks, committed years ahead of delivery
+  VRT     Vertiv Holdings, LLC             $35  $292.56     $112.6B  power and cooling inside the hall
+  ANET    Arista Networks, Inc.            $30  $210.54     $265.5B  the switching fabric between the racks
+  AMAT    Applied Materials, Inc.          $25  $550.92     $437.4B  the tools that build the fabs the die come from
+  COHR    Coherent Corp.                   $15  $358.54      $70.1B  optical interconnect once copper runs out of reach
+  CRWV    CoreWeave, Inc.                    -  $107.99      $58.9B  rents the finished capacity back out by the hour
 
 Pick a number, or type ticker(s): 1
 ```
@@ -104,7 +113,8 @@ shortlist with a reason attached.
 number on its own is an argument with one side. AI capex is "guided by five
 customers, any of whom can slow it in a single earnings call"; the interest-
 payment names "win on the level of rates, not the size of the bill, so cuts
-reverse the trade even as the deficit keeps growing".
+reverse the trade even as the deficit keeps growing"; the defence budgets are
+"appropriated, not delivered", and the primes already trade on the backlog.
 
 The sizes are rounded annual estimates kept by hand in `tradeval/spending.py`
 and they go stale — they are there to say which way the money runs, not to be
