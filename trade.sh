@@ -268,6 +268,27 @@ EOF
     return 0
 }
 
+# The companies reporting this week, for an earnings gamble that has not been
+# given a ticker. Same shape as browse_sector: fill CANDIDATES, print them
+# numbered, and leave the choosing to choose_ticker.
+browse_earnings() {
+    CANDIDATES=()
+    local out sym line n=0
+    out="$("$PY" "$ROOT/validate.py" --list-earnings 2>/dev/null)" || return 1
+    [ -z "$out" ] && return 1
+    printf '\n%sReporting this week, largest first:%s\n\n' "$BOLD" "$OFF"
+    while IFS="$(printf '\t')" read -r sym line; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        CANDIDATES+=("$sym")
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$out
+EOF
+    [ "$n" -gt 0 ] || return 1
+    return 0
+}
+
 # What the trade is made of. Every strategy can be taken any of these ways, and
 # the answer decides the sizing questions -- premium or stop, not both.
 choose_instrument() {
