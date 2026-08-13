@@ -16,11 +16,10 @@ and the second as fact.
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-from . import discover
+from . import discover, names
 from .report import Palette
 from .strategies.base import Panel
 
@@ -462,39 +461,13 @@ def flow_snapshots(flow: SpendingFlow) -> List:
     return discover.company_snapshots(flow.symbols)
 
 
-# Yahoo returns the full legal name. The form of incorporation is the same
-# noise on every row, and it is what pushes the actual name out of the column.
-LEGAL_SUFFIX_RE = re.compile(
-    r"[,\s]+(?:incorporated|inc|corporation|corp|company|limited|ltd|plc|co|"
-    r"l\.?\s*l\.?\s*c|n\.?\s*v|s\.?\s*a|a\.?\s*g|s\.?\s*p\.?\s*a)\.?$",
-    re.IGNORECASE,
-)
-# "Eli Lilly and Company" loses its suffix and is left hanging on the "and".
-DANGLING_RE = re.compile(r"[,\s]+(?:and|&)$", re.IGNORECASE)
-
-
 def clean_name(name: Optional[str], width: int = COMPANY_WIDTH) -> str:
     """A company name short enough to scan, with the legal form dropped.
 
     "ASML Holding N.V. - New York Registry Shares" is 43 characters of which
     12 are the company. Truncation alone leaves "ASML Holding N.V. - Ne".
     """
-    text = (name or "").split(" - ")[0].strip()
-    # "Holding N.V." sheds one suffix per pass; "Inc." only needs the one.
-    for _ in range(3):
-        shorter = LEGAL_SUFFIX_RE.sub("", text).strip()
-        if shorter == text or not shorter:
-            break
-        text = shorter
-    text = DANGLING_RE.sub("", text) or text
-    if len(text) <= width:
-        return text
-    cut = text[:width]
-    # Cut on a word boundary -- a name broken mid-word reads as a typo. A cut
-    # that already lands on one keeps its last word rather than dropping it.
-    if text[width] != " ":
-        cut = cut.rsplit(" ", 1)[0] or text[:width]
-    return cut.rstrip(",")
+    return names.shorten(name, width)
 
 
 def share_bar(share: Optional[float], largest: Optional[float], width: int = SHARE_BAR_WIDTH) -> str:

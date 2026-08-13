@@ -88,3 +88,16 @@ def test_weights_reject_a_non_mapping():
 
 def test_weights_allow_zero():
     assert Config.from_dict({"weights": {"PEG ratio": 0}}).weights == {"PEG ratio": 0.0}
+
+
+def test_news_defaults_and_override():
+    assert Config().news.limit == 5
+    cfg = Config.from_dict({"news": {"limit": 0, "window_days": 3}})
+    assert cfg.news.limit == 0
+    assert cfg.news.window_days == 3
+    assert cfg.news.require_mention is True
+
+
+def test_news_unknown_key_raises():
+    with pytest.raises(ValueError, match="Unknown config key: news.headlines"):
+        Config.from_dict({"news": {"headlines": 3}})

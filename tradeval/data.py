@@ -35,6 +35,55 @@ class DataError(Exception):
     """Raised only when the symbol itself is unusable (no price history at all)."""
 
 
+# Ask for more stories than are shown: most of what Yahoo files under a ticker
+# is not about it, so the filter needs something to work with.
+NEWS_FETCH_COUNT = 20
+# Sorts undated stories to the bottom rather than the top.
+_OLDEST = dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+
+def _news_time(value: Any) -> Optional[dt.datetime]:
+    """Yahoo stamps these ISO 8601 in UTC, e.g. 2026-08-12T20:14:19Z."""
+    if not value:
+        return None
+    try:
+        return dt.datetime.strptime(str(value), "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=dt.timezone.utc
+        )
+    except ValueError:
+        return None
+
+
+def _news_article(item: Any) -> Optional["NewsArticle"]:
+    """Parse one story, or None when there is no headline to show.
+
+    The payload nests everything under ``content`` and carries the link under
+    whichever of two keys the story type uses.
+    """
+    if not isinstance(item, dict):
+        return None
+    content = item.get("content") if isinstance(item.get("content"), dict) else item
+    title = str(content.get("title") or "").strip()
+    if not title:
+        return None
+
+    provider = content.get("provider") if isinstance(content.get("provider"), dict) else {}
+    url = ""
+    for key in ("canonicalUrl", "clickThroughUrl"):
+        link = content.get(key)
+        if isinstance(link, dict) and link.get("url"):
+            url = str(link["url"])
+            break
+
+    return NewsArticle(
+        title=title,
+        publisher=str(provider.get("displayName") or "").strip(),
+        published=_news_time(content.get("pubDate") or content.get("displayTime")),
+        url=url,
+        summary=str(content.get("summary") or content.get("description") or "").strip(),
+    )
+
+
 def _f(value: Any) -> Optional[float]:
     """Coerce anything Yahoo hands back to a finite float, or None."""
     if value is None:
@@ -98,6 +147,33 @@ class OptionQuote:
     def contract_cost(self, multiplier: int = 100) -> Optional[float]:
         """Real dollars for one contract: the quoted price times the multiplier."""
         return None if self.mid is None else self.mid * multiplier
+
+
+@dataclass
+class NewsArticle:
+    """One story Yahoo files under a ticker.
+
+    Filed under is not the same as about: Yahoo's per-symbol feed carries
+    market wraps and other companies' results alongside the stock's own news,
+    which is why :mod:`tradeval.news` filters before anything is printed.
+    """
+
+    title: str
+    publisher: str
+    published: Optional[dt.datetime] = None
+    url: str = ""
+    summary: str = ""
+
+    @property
+    def text(self) -> str:
+        """Everything worth searching for a mention of the company."""
+        return "%s %s" % (self.title, self.summary)
+
+    def age_days(self, now: Optional[dt.datetime] = None) -> Optional[float]:
+        if self.published is None:
+            return None
+        now = now or dt.datetime.now(dt.timezone.utc)
+        return max((now - self.published).total_seconds() / 86400.0, 0.0)
 
 
 @dataclass
@@ -394,6 +470,26 @@ class MarketData:
             self._note("Earnings history unavailable from Yahoo")
             return None
         return df.sort_index()
+
+    @cached_property
+    def news(self) -> List[NewsArticle]:
+        """Stories Yahoo files under this ticker, newest first.
+
+        One request, and a failure is not worth a warning: a report is still a
+        report without the headlines beside it.
+        """
+        try:
+            raw = self._ticker.get_news(count=NEWS_FETCH_COUNT)
+        except Exception:
+            return []
+        if not isinstance(raw, list):
+            return []
+
+        articles = [a for a in (_news_article(item) for item in raw) if a]
+        # Yahoo returns them roughly newest first but not reliably, and an
+        # undated story should not be allowed to head the list.
+        articles.sort(key=lambda a: a.published or _OLDEST, reverse=True)
+        return articles
 
     @cached_property
     def calendar(self) -> Any:

@@ -233,3 +233,83 @@ def test_resolve_symbols_normalises_and_dedupes():
     assert resolve_symbols([" nvda ", "NVDA", "amd"]) == ["NVDA", "AMD"]
     assert resolve_symbols([]) == []
     assert resolve_symbols(["", "  "]) == []
+
+
+# -- news ------------------------------------------------------------------
+
+
+def _story(title, pub_date="2026-08-12T20:14:19Z", provider="Barchart", url=True, summary=""):
+    """One item shaped the way Yahoo actually returns it: nested under content."""
+    content = {
+        "title": title,
+        "pubDate": pub_date,
+        "provider": {"displayName": provider},
+        "summary": summary,
+    }
+    if url:
+        content["canonicalUrl"] = {"url": "https://example.com/%s" % title[:8]}
+    return {"id": "x", "content": content}
+
+
+def test_news_article_parses_the_nested_payload():
+    from tradeval.data import _news_article
+
+    article = _news_article(_story("Applied Materials beats", summary="Chip tools."))
+    assert article.title == "Applied Materials beats"
+    assert article.publisher == "Barchart"
+    assert article.published == dt.datetime(2026, 8, 12, 20, 14, 19, tzinfo=dt.timezone.utc)
+    assert article.url.startswith("https://example.com/")
+    assert "Chip tools." in article.text
+
+
+def test_news_article_falls_back_to_click_through_url():
+    from tradeval.data import _news_article
+
+    item = _story("A headline", url=False)
+    item["content"]["clickThroughUrl"] = {"url": "https://example.com/click"}
+    assert _news_article(item).url == "https://example.com/click"
+
+
+def test_news_article_skips_an_item_without_a_headline():
+    from tradeval.data import _news_article
+
+    assert _news_article(_story("")) is None
+    assert _news_article({"content": {}}) is None
+    assert _news_article("not a dict") is None
+
+
+def test_news_article_survives_a_bad_timestamp():
+    from tradeval.data import _news_article
+
+    article = _news_article(_story("A headline", pub_date="yesterday"))
+    assert article is not None and article.published is None
+    assert article.age_days() is None
+
+
+def test_news_sorts_newest_first_and_undated_last(monkeypatch):
+    md = make_market_data()
+    payload = [
+        _story("older", "2026-08-01T00:00:00Z"),
+        _story("undated", "nonsense"),
+        _story("newest", "2026-08-12T00:00:00Z"),
+    ]
+    monkeypatch.setattr(md._ticker, "get_news", lambda count: payload, raising=False)
+    assert [a.title for a in md.news] == ["newest", "older", "undated"]
+
+
+def test_news_degrades_to_empty_when_yahoo_fails(monkeypatch):
+    md = make_market_data()
+
+    def boom(count):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(md._ticker, "get_news", boom, raising=False)
+    assert md.news == []
+    # A report is still a report without headlines, so this is not a warning.
+    assert not any("news" in w.lower() for w in md.warnings)
+
+
+def test_news_ignores_a_non_list_payload(monkeypatch):
+    md = make_market_data()
+    monkeypatch.setattr(md._ticker, "get_news", lambda count: {"unexpected": True}, raising=False)
+    assert md.news == []

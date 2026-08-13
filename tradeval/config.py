@@ -271,6 +271,19 @@ def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
             setattr(target, key, value)
 
 
+@dataclass
+class NewsRules:
+    """Headlines printed beside the profile. Not scored, just context."""
+
+    # Stories shown. 0 removes the panel and the request behind it.
+    limit: int = 5
+    # Older than this and it is history, not news.
+    window_days: int = 14
+    # Yahoo files plenty under a ticker that never mentions it. Off means
+    # print the feed as it comes, which is noisier and occasionally useless.
+    require_mention: bool = True
+
+
 def validate_weights(raw: Any) -> Dict[str, float]:
     """Check a weights mapping before a run spends a network call on it.
 
@@ -308,6 +321,7 @@ class Config:
     short_term: ShortTermRules = field(default_factory=ShortTermRules)
     long_term: LongTermRules = field(default_factory=LongTermRules)
     buzz: BuzzRules = field(default_factory=BuzzRules)
+    news: NewsRules = field(default_factory=NewsRules)
     benchmark: str = "SPY"
     # How much each check counts, keyed by the name the report prints beside
     # it. Empty means every check keeps the weight its strategy gave it.

@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 from .. import dates
 from .. import indicators as ind
+from .. import news
 from ..checks import (
     CheckResult,
     Verdict,
@@ -801,6 +802,43 @@ class Strategy(ABC):
         """Optional reference tables to print under the checks."""
         return []
 
+    def news_panel(self) -> Optional[Panel]:
+        """Recent headlines that name this company.
+
+        Context rather than a check: nothing here is scored, because a
+        headline is not a fact about the business and reading one as a signal
+        is how people end up buying the news.
+        """
+        rules = self.config.news
+        if rules.limit <= 0:
+            return None
+        articles = self.data.news
+        if not articles:
+            return None
+
+        if rules.require_mention:
+            chosen = news.relevant(
+                articles,
+                self.data.symbol,
+                self.data.name,
+                limit=rules.limit,
+                window_days=rules.window_days,
+            )
+        else:
+            chosen = list(articles)[: rules.limit]
+        if not chosen:
+            return None
+
+        return Panel(
+            title="IN THE NEWS -- %s" % self.data.symbol,
+            headers=["When", "Publisher", "Headline"],
+            rows=news.rows(chosen),
+            left_align=[1, 2],
+            note=news.note(
+                self.data.symbol, len(chosen), len(articles), rules.require_mention
+            ),
+        )
+
     def built_checks(self) -> List[CheckResult]:
         """The checklist, built once and kept.
 
@@ -828,6 +866,12 @@ class Strategy(ABC):
         verdict = score_checks(results, self.config.scoring)
         # Built after the checks so panels can reuse anything they cached.
         panels = self.build_panels()
+        headlines = self.news_panel()
+        if headlines is not None:
+            # Straight after the profile, which is what it gives context to.
+            # When the profile went out with the sizing prompt it heads the
+            # report instead, since nothing above it needs explaining.
+            panels.insert(0 if self.ctx.profile_shown else 1, headlines)
         notes = self.notes + [w for w in self.data.warnings if w not in self.notes]
         return Report(
             symbol=self.data.symbol,

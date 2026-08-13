@@ -7,7 +7,7 @@ import datetime as dt
 import pandas as pd
 import pytest
 
-from tests.conftest import make_chain, make_market_data
+from tests.conftest import DEFAULT_INFO, make_chain, make_market_data
 from tradeval.checks import Status
 from tradeval.config import Config
 from tradeval.context import TradeContext
@@ -192,3 +192,73 @@ def test_a_partial_match_stays_quiet():
     """One config is shared across strategies, so unused names are normal."""
     report = _run_with_weights({"Free cash flow": 6.0, "Implied vs historical move": 2.0})
     assert not any("matched no check" in note for note in report.notes)
+
+
+# -- news panel ------------------------------------------------------------
+
+
+def _news(title, hours_ago=2.0, summary=""):
+    from tradeval.data import NewsArticle
+
+    return NewsArticle(
+        title=title,
+        publisher="Barchart",
+        published=dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_ago),
+        summary=summary,
+    )
+
+
+def _strategy_with_news(articles, **news_rules):
+    config = Config()
+    for key, value in news_rules.items():
+        setattr(config.news, key, value)
+    # name is derived from info, so the company is set the way Yahoo sets it.
+    info = dict(DEFAULT_INFO)
+    info["longName"] = "Applied Materials, Inc."
+    data = make_market_data(info=info)
+    data.news = articles
+    ctx = TradeContext(data=data, config=config, instrument="stock")
+    return LongTermStrategy(ctx)
+
+
+def test_news_panel_keeps_only_the_stories_that_name_the_company():
+    strategy = _strategy_with_news([
+        _news("Applied Materials beats on revenue"),
+        _news("Stocks close higher on favorable CPI report"),
+        _news("Super Micro Q4 earnings beat estimates"),
+    ])
+    panel = strategy.news_panel()
+    assert panel is not None
+    assert len(panel.rows) == 1
+    assert "Applied Materials" in panel.rows[0][2]
+    assert "1 of 3 stories cleared that bar" in panel.note
+
+
+def test_news_panel_is_none_when_nothing_is_relevant():
+    strategy = _strategy_with_news([_news("Stocks close higher on CPI")])
+    assert strategy.news_panel() is None
+
+
+def test_news_panel_is_none_when_the_limit_is_zero():
+    """limit 0 removes the panel and the request behind it."""
+    strategy = _strategy_with_news([_news("Applied Materials beats")], limit=0)
+    assert strategy.news_panel() is None
+
+
+def test_news_panel_can_be_left_unfiltered():
+    strategy = _strategy_with_news(
+        [_news("Applied Materials beats"), _news("Stocks close higher on CPI")],
+        require_mention=False,
+    )
+    panel = strategy.news_panel()
+    assert len(panel.rows) == 2
+    assert "unfiltered" in panel.note
+
+
+def test_news_panel_lands_in_the_report_after_the_profile():
+    strategy = _strategy_with_news([_news("Applied Materials beats on revenue")])
+    report = strategy.run()
+    titles = [p.title for p in report.panels]
+    assert "IN THE NEWS -- TEST" in titles
+    # The profile heads the report, and the headlines give it context.
+    assert titles.index("IN THE NEWS -- TEST") == 1

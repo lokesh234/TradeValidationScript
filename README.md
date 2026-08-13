@@ -440,6 +440,45 @@ carries its yield against market cap so you can read the two rows together.
 Anything Yahoo doesn't publish reads `Not Available`, and if none of it is
 available the whole panel is dropped.
 
+#### In the news
+
+Directly under the profile, the recent headlines that actually name the
+company:
+
+```
+ IN THE NEWS -- AMAT
+  When    Publisher                Headline
+  7h ago  Barchart                 Ahead of Applied Materials Earnings, Here's What Barchart Data Says Comes Next for AMAT
+  1d ago  Investopedia             Here's How Much Applied Materials Stock Is Expected to Move After Earnings
+  2d ago  Insider Monkey           Is Lam Research, KLA, or Applied Materials the Best Chip Equipment Buy? Jim Cramer
+  2d ago  Simply Wall St.          Applied Materials (AMAT) Gets A Demand Lift From 44.7% AI Chip Growth
+  2d ago  The Wall Street Journal  Stocks to Watch: Berkshire Hathaway, Applied Materials, Sunrise Energy
+  Headlines Yahoo files under AMAT that actually name it. ... 5 of 20 stories cleared that bar.
+```
+
+**"Actually name it" is the whole feature.** Yahoo's per-symbol feed is a loose
+association: of the twenty stories it filed under AMAT that day, fifteen were a
+market wrap, the CPI print, and other companies' results — Super Micro,
+PodcastOne. Printed unfiltered that is worse than nothing, because it reads as
+news about the stock you're about to trade. A story earns its place by naming
+the ticker as a whole word (so `AMAT` doesn't match `AMATEUR`) or the company
+with the incorporation stripped off, in the headline or the summary. Stories
+that lead with the company sort above ones that mention it in passing.
+
+The panel costs one request, is dropped silently when Yahoo has nothing, and
+scores nothing — a headline is not a fact about the business, and reading one
+as a signal is how people end up buying the news. Tune or switch it off:
+
+```json
+{ "news": { "limit": 5, "window_days": 14, "require_mention": true } }
+```
+
+`limit: 0` removes the panel and the request behind it. `require_mention:
+false` prints the feed as Yahoo sends it, which is noisier and says so in the
+note. One known limit: the match is on the legal name, so a company whose
+headlines use a different brand may under-match — `Alphabet` is found, a story
+that only ever says `Google` is not.
+
 ### What you're trading
 
 **Every** trade type asks what you're actually buying — a thesis about a
@@ -1121,6 +1160,8 @@ tradeval/
   data.py                 Yahoo Finance layer (all network access)
   indicators.py           SMA, EMA, RSI, ATR, CAGR, drawdown
   checks.py               CheckResult / Status / weighted scoring
+  news.py                 which headlines are actually about the ticker
+  names.py                company names with the legal form dropped
   context.py              the proposed trade: prices, sizing, account
   report.py               terminal rendering
   strategies/
