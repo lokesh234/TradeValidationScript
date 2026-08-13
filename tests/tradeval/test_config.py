@@ -53,3 +53,38 @@ def test_load_reads_json_file(tmp_path):
     cfg = Config.load(str(path))
     assert cfg.benchmark == "IWM"
     assert cfg.scoring.go == 80.0
+
+
+# -- custom weights --------------------------------------------------------
+
+
+def test_weights_default_to_empty():
+    assert Config().weights == {}
+
+
+def test_from_dict_reads_a_weights_mapping():
+    cfg = Config.from_dict({"weights": {"Free cash flow": 6, "PEG ratio": 0}})
+    assert cfg.weights == {"Free cash flow": 6.0, "PEG ratio": 0.0}
+
+
+def test_weights_reject_a_negative_value():
+    """A negative weight would pay you for failing the check."""
+    with pytest.raises(ValueError, match="cannot be negative"):
+        Config.from_dict({"weights": {"Free cash flow": -1}})
+
+
+def test_weights_reject_a_non_number():
+    with pytest.raises(ValueError, match="must be a number"):
+        Config.from_dict({"weights": {"Free cash flow": "heavy"}})
+    # bool is an int subclass, and "true" is not a weight.
+    with pytest.raises(ValueError, match="must be a number"):
+        Config.from_dict({"weights": {"Free cash flow": True}})
+
+
+def test_weights_reject_a_non_mapping():
+    with pytest.raises(ValueError, match="must be a mapping"):
+        Config.from_dict({"weights": ["Free cash flow"]})
+
+
+def test_weights_allow_zero():
+    assert Config.from_dict({"weights": {"PEG ratio": 0}}).weights == {"PEG ratio": 0.0}

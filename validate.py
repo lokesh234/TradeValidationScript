@@ -28,8 +28,8 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval import buzz, discover, reddit_auth, spending, stocktwits
-from tradeval.config import Config
+from tradeval import buzz, dates, discover, flow_buzz, reddit_auth, spending, stocktwits
+from tradeval.config import Config, validate_weights
 from tradeval.context import TradeContext
 from tradeval.data import DataError, MarketData, resolve_symbols
 from tradeval.report import (
@@ -38,6 +38,7 @@ from tradeval.report import (
     make_palette,
     render,
     render_summary,
+    weight_text,
 )
 from tradeval.strategies import STRATEGIES, Report, menu_lines, resolve_key
 
@@ -177,6 +178,14 @@ def build_parser() -> argparse.ArgumentParser:
     other.add_argument("--period", default="3y", help="history window to download (default: 3y)")
     other.add_argument("--config", help="JSON file overriding the thresholds in tradeval/config.py")
     other.add_argument(
+        "--weight",
+        action="append",
+        metavar="NAME=VALUE",
+        help='how much one check counts, e.g. --weight "Free cash flow=5". The name '
+        "is the label printed beside the check; 0 keeps the check on show without "
+        "scoring it. Repeatable, and wins over any weight in --config.",
+    )
+    other.add_argument(
         "--allow-earnings",
         action="store_true",
         help="short-term only: permit holding through a scheduled report",
@@ -217,21 +226,39 @@ def build_parser() -> argparse.ArgumentParser:
         help="print a flow's beneficiaries as SYMBOL<tab>description, then exit",
     )
     other.add_argument(
+        "--list-spending-buzz",
+        metavar="FLOW",
+        help="score retail chatter for every name collecting a flow, fold it into "
+        "one score for the flow, then exit (one lookup per name, takes a minute)",
+    )
+    other.add_argument(
         "--list-earnings",
         action="store_true",
         help="print this week's earnings candidates as SYMBOL<tab>description, then exit",
     )
     other.add_argument("--quiet", action="store_true", help="hide the explanation under each check")
     other.add_argument("--no-color", action="store_true", help="disable ANSI colour")
+    other.add_argument(
+        "--color",
+        action="store_true",
+        help="force ANSI colour when the output is not a terminal, e.g. when the "
+        "shell front end reads a listing back through a pipe",
+    )
     return parser
 
 
-def browse_spending(palette, width: int, choice: Optional[str] = None) -> List:
+def browse_spending(
+    palette,
+    width: int,
+    choice: Optional[str] = None,
+    scorer=None,
+) -> List:
     """Show where the money is going, then who stands to collect it.
 
     Returns the flow's beneficiaries so they can be picked from like any other
     candidate list -- a spending flow is a way of finding a ticker, not a
-    separate thing to look at.
+    separate thing to look at. ``scorer`` adds the chatter column, at the cost
+    of a lookup per name.
     """
     flow = None
     while flow is None:
@@ -252,9 +279,24 @@ def browse_spending(palette, width: int, choice: Optional[str] = None) -> List:
             choice = None
 
     snapshots = spending.flow_snapshots(flow)
-    for line in layout_panels([spending.flow_panel(flow, snapshots)], palette, width):
+    chatter = None
+    if scorer is not None:
+        print(
+            "Reading retail chatter for %d names -- this takes a minute."
+            % len(flow.winners),
+            file=sys.stderr,
+        )
+        chatter = flow_buzz.score_flow(flow, scorer=scorer)
+    for line in layout_panels([spending.flow_panel(flow, snapshots, _buzz_column(chatter))], palette, width):
         print(line)
+    if chatter is not None:
+        print(flow_buzz.headline(chatter, palette))
     return snapshots
+
+
+def _buzz_column(chatter) -> Optional[dict]:
+    """The per-symbol scores a flow panel shows, or None to drop the column."""
+    return chatter.scores if chatter is not None and chatter.scores else None
 
 
 def prompt_symbols(
@@ -265,6 +307,7 @@ def prompt_symbols(
     spend: Optional[str] = None,
     palette=None,
     width: int = 0,
+    scorer=None,
 ) -> List[str]:
     """Ask for tickers, offering a shortlist appropriate to the trade type."""
     if existing:
@@ -274,7 +317,12 @@ def prompt_symbols(
     if spend is not None:
         # An explicit --spending overrides the trade type's usual shortlist:
         # the caller asked to shop from the flow, whatever they are trading.
-        candidates = browse_spending(palette or make_palette(no_color=True), width or detect_width(), spend or None)
+        candidates = browse_spending(
+            palette or make_palette(no_color=True),
+            width or detect_width(),
+            spend or None,
+            scorer,
+        )
     elif key == "earnings":
         candidates = show_earnings_menu(config)
     elif key == "short":
@@ -545,7 +593,7 @@ def prompt_earnings_date(data: MarketData) -> Optional[dt.date]:
             day = upcoming[slot]
             days = (day - today).days
             when = "today" if days == 0 else ("in %d day%s" % (days, "" if days == 1 else "s"))
-            print("  %d) %s  (%s)" % (slot + 1, day.isoformat(), when))
+            print("  %d) %s  (%s)" % (slot + 1, dates.format_date(day), when))
         else:
             print("  %d) Not Available" % (slot + 1))
 
@@ -553,14 +601,14 @@ def prompt_earnings_date(data: MarketData) -> Optional[dt.date]:
         print("\nYahoo has no scheduled report for this symbol.")
         return None
     if len(upcoming) == 1:
-        print("\nOnly one scheduled report published -- using %s." % upcoming[0].isoformat())
+        print("\nOnly one scheduled report published -- using %s." % dates.format_date(upcoming[0]))
         return upcoming[0]
 
     while True:
         try:
             raw = input("\nWhich report are you trading? [1-%d]: " % len(upcoming)).strip()
         except EOFError:
-            print("Defaulting to %s." % upcoming[0].isoformat())
+            print("Defaulting to %s." % dates.format_date(upcoming[0]))
             return upcoming[0]
         if not raw:
             continue
@@ -767,14 +815,16 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
 
     if wants_strikes:
         ctx.strikes = prompt_strikes(ctx.strikes, strategy.max_strikes())
+    # Asked before the pairings are built, not after: a floor decides which
+    # pairings are worth building. Answer it and the table walks the short leg
+    # out until the ratio is met, rather than listing widths that never clear it.
+    if wants_floor:
+        ctx.min_reward_risk = prompt_min_reward_risk()
 
     chain = strategy.price_panels()
     for line in layout_panels(chain, palette, width):
         print(line)
     print("")
-    # The ladder is the same table the report would print; the spread table
-    # is not, since the report's copy marks the pairings that clear the floor.
-    ctx.chain_shown = bool(chain) and not ctx.trades_spread
 
     if wants_pick:
         labels = strategy.contract_labels()
@@ -786,10 +836,14 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
         if shares:
             ctx.shares = shares
             ctx.size = shares * strategy.data.price
-    if wants_floor:
-        ctx.min_reward_risk = prompt_min_reward_risk()
     if wants_count:
         ctx.contracts = prompt_contracts("spreads" if ctx.trades_spread else "contracts")
+
+    # Everything the chain tables depend on -- the strike count, the floor --
+    # is settled before they are drawn, so the report's copy would be the same
+    # table a screen later. Nothing asked for after this point changes them:
+    # the pick narrows only the payoff tables, and the count is priced there.
+    ctx.chain_shown = bool(chain)
 
 
 def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:
@@ -913,27 +967,151 @@ def reddit_authorize(path: Optional[str] = None) -> int:
     return 0
 
 
+def parse_weight_flags(raw: Optional[List[str]]) -> dict:
+    """Turn --weight "Free cash flow=5" into {"Free cash flow": 5.0}.
+
+    Split on the last '=' so a check name may contain one, and keep the name
+    exactly as typed apart from surrounding space -- matching is
+    case-insensitive later, but the report echoes what was written.
+    """
+    weights = {}
+    for item in raw or []:
+        name, sep, value = str(item).rpartition("=")
+        if not sep or not name.strip():
+            raise ValueError(
+                '--weight wants NAME=VALUE, e.g. --weight "Free cash flow=5" (got %r)' % item
+            )
+        try:
+            weights[name.strip()] = float(value.strip())
+        except ValueError:
+            raise ValueError("--weight %s: %r is not a number" % (name.strip(), value.strip()))
+    return weights
+
+
+def parse_weight_list(raw: str, count: int) -> dict:
+    """Read "3,2,3,5" -- or "[3,2,3,5]" -- as weights for the first checks.
+
+    Positional, in the order the checks were listed. A short list leaves the
+    rest at their defaults, and an empty slot ("3,,5") skips that one, so a
+    single check deep in the list can be changed without restating the others.
+    Returns {index: weight}.
+    """
+    body = raw.strip().strip("[]").strip()
+    if not body:
+        return {}
+
+    parts = [part.strip() for part in body.split(",")]
+    if len(parts) > count:
+        raise ValueError(
+            "That is %d weights for %d checks. Give at most %d, or fewer to "
+            "leave the rest alone." % (len(parts), count, count)
+        )
+
+    weights = {}
+    for index, part in enumerate(parts):
+        if not part:
+            continue
+        try:
+            weight = float(part)
+        except ValueError:
+            raise ValueError("%r is not a number. Use e.g. 3,2,3,5" % part)
+        if weight < 0:
+            raise ValueError(
+                "%s is negative -- a weight cannot be. Use 0 to show a check "
+                "without scoring it." % part
+            )
+        weights[index] = weight
+    return weights
+
+
+def prompt_custom_weights(results: List, palette) -> dict:
+    """Offer to reweight the checklist, and take the weights as one list.
+
+    The checks are shown numbered with what they currently count, because a
+    weight only means anything relative to the others on the sheet.
+    """
+    if not confirm_weights():
+        return {}
+
+    print("\n  How much each check counts. Blank keeps what it has.\n")
+    width = max(len(r.name) for r in results)
+    for number, result in enumerate(results, start=1):
+        print(
+            "  %2d) %s  %s"
+            % (number, result.name.ljust(width), palette.grey(weight_text(result.weight)))
+        )
+
+    while True:
+        try:
+            raw = input(
+                "\nWeights in that order, comma separated [e.g. 3,2,3,5 -- Enter to keep all]: "
+            )
+        except EOFError:
+            print()
+            return {}
+        try:
+            chosen = parse_weight_list(raw, len(results))
+        except ValueError as exc:
+            print("  %s" % exc)
+            continue
+        if not chosen:
+            return {}
+
+        weights = {results[index].name: weight for index, weight in chosen.items()}
+        changed = [
+            "%s %s -> %s"
+            % (results[index].name, weight_text(results[index].weight), weight_text(weight))
+            for index, weight in sorted(chosen.items())
+            if weight != results[index].weight
+        ]
+        print("  %s" % ("; ".join(changed) if changed else "No change to any weight."))
+        return weights
+
+
+def confirm_weights() -> bool:
+    """Ask whether the default weights are being kept. Default is yes, keep."""
+    try:
+        raw = input("\nDo you want to set your own check weights? [y/N]: ").strip().lower()
+    except EOFError:
+        print()
+        return False
+    return raw in ("y", "yes")
+
+
+def buzz_scorer(args: argparse.Namespace, config: Config):
+    """The configured chatter source as a callable over a list of symbols.
+
+    Handed to anything that scores -- a ticker, or every name collecting a
+    spending flow -- so the source is chosen in one place. Reddit reads one
+    corpus and scores every ticker off it; StockTwits reads a stream per name.
+    """
+
+    def score(symbols: List[str]) -> dict:
+        source = (config.buzz.source or "stocktwits").lower()
+        if source == "stocktwits":
+            return stocktwits.score_symbols(symbols, config.buzz)
+
+        if source == "reddit":
+            credentials = buzz.RedditCredentials.load(args.reddit_credentials)
+            if credentials is None:
+                print(
+                    "Reddit credentials not found -- run: ./trade.sh reddit",
+                    file=sys.stderr,
+                )
+            return buzz.score_symbols(symbols, config.buzz, credentials)
+
+        reason = "unknown buzz source %r (use stocktwits or reddit)" % source
+        print(reason, file=sys.stderr)
+        return {s: buzz.BuzzScore.unavailable(s, reason) for s in symbols}
+
+    return score
+
+
 def resolve_buzz(symbols: List[str], args: argparse.Namespace, config: Config) -> dict:
     """Score retail hype for every symbol, from whichever source is configured."""
     if not args.buzz:
         return {}
-
-    source = (config.buzz.source or "stocktwits").lower()
-    if source == "stocktwits":
-        return stocktwits.score_symbols(symbols, config.buzz)
-
-    if source == "reddit":
-        credentials = buzz.RedditCredentials.load(args.reddit_credentials)
-        if credentials is None:
-            print(
-                "Reddit credentials not found -- run: ./trade.sh reddit",
-                file=sys.stderr,
-            )
-        return buzz.score_symbols(symbols, config.buzz, credentials)
-
-    reason = "unknown buzz source %r (use stocktwits or reddit)" % source
-    print(reason, file=sys.stderr)
-    return {s: buzz.BuzzScore.unavailable(s, reason) for s in symbols}
+    return buzz_scorer(args, config)(symbols)
 
 
 def validate_symbol(
@@ -946,6 +1124,7 @@ def validate_symbol(
     plan: Optional[EventPlan] = None,
     palette=None,
     width: int = 0,
+    ask_weights: bool = False,
 ) -> Report:
     data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
     plan = plan or resolve_event_plan(key, args)
@@ -978,6 +1157,13 @@ def validate_symbol(
     # Sizing is asked here, after the chain is priced and before the checks
     # that spend those answers.
     size_position(strategy, args, palette or make_palette(no_color=True), width or detect_width())
+    if ask_weights:
+        # After the checks are built, because the offer is to reweight what is
+        # actually on this sheet -- which checks run depends on the strategy
+        # and on whether it is being traded in shares, contracts or a spread.
+        config.weights = prompt_custom_weights(
+            strategy.built_checks(), palette or make_palette(no_color=True)
+        )
     return strategy.run()
 
 
@@ -986,9 +1172,16 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     try:
         config = Config.load(args.config) if args.config else Config()
+        # Typed on the command line, so it wins over the file it was run with.
+        config.weights = validate_weights({**config.weights, **parse_weight_flags(args.weight)})
     except (OSError, ValueError) as exc:
         print("Config error: %s" % exc, file=sys.stderr)
         return 2
+
+    # Built before the listing handlers, not after: the shell front end reads
+    # those back through a pipe, where colour has to be asked for explicitly.
+    palette = make_palette(force_color=args.color, no_color=args.no_color)
+    width = detect_width(args.width)
 
     if args.list_sectors:
         for line in discover.format_sector_menu():
@@ -1006,7 +1199,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.list_spending:
-        for line in spending.menu_lines():
+        for line in spending.menu_lines(palette):
             print(line)
         return 0
 
@@ -1017,9 +1210,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(exc, file=sys.stderr)
             return 2
         snapshots = {snap.symbol: snap for snap in spending.flow_snapshots(flow)}
+        largest = spending.largest_share(flow)
         for winner in flow.winners:
-            print("%s\t%s" % (winner.symbol, spending.format_winner(winner, snapshots.get(winner.symbol))))
+            print(
+                "%s\t%s"
+                % (
+                    winner.symbol,
+                    spending.format_winner(
+                        winner, snapshots.get(winner.symbol), palette, largest
+                    ),
+                )
+            )
         return 0 if flow.winners else 1
+
+    if args.list_spending_buzz:
+        try:
+            flow = spending.resolve(args.list_spending_buzz)
+        except ValueError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+        chatter = flow_buzz.score_flow(flow, config.buzz, buzz_scorer(args, config))
+        for line in flow_buzz.format_lines(chatter, flow, palette):
+            print(line)
+        return 0 if chatter.available else 1
 
     if args.list_sector_companies:
         try:
@@ -1061,8 +1274,6 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0 if candidates else 1
 
     config.benchmark = args.benchmark
-    palette = make_palette(no_color=args.no_color)
-    width = detect_width(args.width)
 
     if args.profile:
         symbol = resolve_symbols([args.profile])[0]
@@ -1118,6 +1329,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.spending,
             palette,
             width,
+            # Chatter for a whole flow is a lookup per name, so it is only read
+            # when the run asked for buzz at all.
+            buzz_scorer(args, config) if args.buzz else None,
         )
     except KeyError as exc:
         print(exc, file=sys.stderr)
@@ -1155,13 +1369,23 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     buzz_scores = resolve_buzz(symbols, args, config)
 
+    # Offered once, on the first symbol, and only when there is someone there
+    # to answer and no weights were given already. The answer then applies to
+    # every symbol in the run -- reweighting the same checklist per ticker
+    # would make the summary table meaningless.
+    ask_weights = (
+        not config.weights and sys.stdin.isatty() and not args.quiet
+    )
+
     reports: List[Report] = []
     failures = 0
     for symbol in symbols:
         try:
             report = validate_symbol(
-                symbol, key, args, config, buzz_scores, horizon, plan, palette, width
+                symbol, key, args, config, buzz_scores, horizon, plan, palette, width,
+                ask_weights=ask_weights,
             )
+            ask_weights = False
         except DataError as exc:
             print(palette.red("%s: %s" % (symbol, exc)), file=sys.stderr)
             failures += 1

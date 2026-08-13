@@ -11,7 +11,7 @@ import datetime as dt
 from functools import cached_property
 from typing import List, Optional
 
-from .. import peers
+from .. import dates, peers
 from ..checks import CheckResult, failed, passed, skipped, warned
 from ..data import AtmQuote
 from .base import UNAVAILABLE, Panel, Strategy, _human, _money, _num, _span
@@ -184,7 +184,7 @@ class EarningsGambleStrategy(OptionsPlaybook, Strategy):
         estimate = self.data.earnings_estimate
         shares = self.data.info_value("sharesOutstanding")
         net_income = estimate.net_income(shares)
-        when = "the %s report" % self.event_date.isoformat() if self.event_date else "the next report"
+        when = "the %s report" % dates.long_date(self.event_date) if self.event_date else "the next report"
 
         extras = [
             ["Expected EPS", _num(estimate.eps_avg, "%.2f"), _span(estimate.eps_low, estimate.eps_high, "%.2f")],
@@ -326,8 +326,8 @@ class EarningsGambleStrategy(OptionsPlaybook, Strategy):
             checks.append(self.check_concentration(self.rules.max_position_pct_of_account, weight=2.0))
         checks.extend(
             [
-                self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
-                self.check_position_size(self.rules.max_account_risk_pct, weight=3.0, critical=True),
+                self.check_liquidity(self.rules.min_dollar_volume, weight=1.0),
+                self.check_position_size(self.rules.max_account_risk_pct, weight=3.0),
                 self._check_trend_alignment(),
                 self._check_not_extended(),
                 self._check_buzz(),
@@ -400,21 +400,19 @@ class EarningsGambleStrategy(OptionsPlaybook, Strategy):
                 "no upcoming report on Yahoo's calendar -- there is no event to trade",
                 "unknown",
                 weight=3.0,
-                critical=True,
             )
         days = self.days_to_earnings or 0
-        value = "%s (%+d days)" % (earnings.isoformat(), days)
+        value = "%s (%+d days)" % (dates.long_date(earnings), days)
         detail = "next report within the %d-day window" % self.rules.max_days_to_earnings
         if 0 <= days <= self.rules.max_days_to_earnings:
-            return passed(name, detail, value, weight=3.0, critical=True)
+            return passed(name, detail, value, weight=3.0)
         if days < 0:
-            return failed(name, "the report has already happened", value, weight=3.0, critical=True)
+            return failed(name, "the report has already happened", value, weight=3.0)
         return failed(
             name,
             "report is %d days out -- too far to be an earnings trade yet" % days,
             value,
             weight=3.0,
-            critical=True,
         )
 
     def _check_timing(self) -> CheckResult:
@@ -506,7 +504,7 @@ class EarningsGambleStrategy(OptionsPlaybook, Strategy):
             return skipped(name, "back-month IV is zero", weight=weight)
 
         value = "front %.0f%% / back %.0f%% = %.2fx" % (front.iv, back.iv, ratio)
-        detail = "front-expiry IV relative to the %s baseline" % back.expiry.isoformat()
+        detail = "front-expiry IV relative to the %s baseline" % dates.long_date(back.expiry)
         hedged = " -- the short leg is crushed with the long one" if spread else ""
         if ratio < self.rules.iv_backwardation_warn:
             return passed(name, detail + " -- little event premium to lose", value, weight=weight)

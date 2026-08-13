@@ -15,6 +15,7 @@ from tradeval.report import (
     plain_len,
     render,
     render_summary,
+    weight_text,
 )
 from tradeval.strategies.base import Panel, Report
 
@@ -91,6 +92,51 @@ def test_render_plain_and_coloured_are_the_same_length_per_line():
     coloured = render(report, make_palette(force_color=True), width=120)
     stripped = ANSI_RE.sub("", coloured)
     assert plain == stripped
+
+
+def test_weight_text_drops_the_decimal_on_whole_numbers():
+    assert weight_text(3.0) == "x3"
+    assert weight_text(1) == "x1"
+    assert weight_text(2.5) == "x2.5"
+
+
+def test_render_shows_each_check_weight():
+    report = _report(
+        results=[
+            CheckResult("Heavy", Status.FAIL, "detail", weight=3.0, value="1.00"),
+            CheckResult("Light", Status.FAIL, "detail", weight=1.0, value="2.00"),
+            # A skipped check keeps its weight on show: it is what the coverage
+            # figure is missing.
+            CheckResult("Missing", Status.SKIP, "detail", weight=2.0),
+        ],
+    )
+    text = render(report, Palette(enabled=False), width=120)
+    assert "x3 Heavy" in text
+    assert "x1 Light" in text
+    assert "x2 Missing" in text
+
+
+def test_render_verdict_gives_the_weights_a_denominator():
+    report = _report(
+        verdict=Verdict(label="NO-GO", score=40.0, counted_weight=26.0, skipped_weight=5.0)
+    )
+    text = render(report, Palette(enabled=False), width=120)
+    assert "26 of 31 weight scored" in text
+
+
+def test_render_weight_column_widens_for_a_fractional_weight():
+    """A wider weight must not push the columns out of true."""
+    report = _report(
+        results=[
+            CheckResult("A", Status.PASS, "detail a", weight=2.5, value="1.00"),
+            CheckResult("B", Status.PASS, "detail b", weight=1.0, value="2.00"),
+        ],
+    )
+    lines = [l for l in render(report, Palette(False), width=120).splitlines() if " A " in l or " B " in l]
+    assert len(lines) == 2
+    # The narrower weight is padded to the wider one, so both names start in
+    # the same column. (" A " rather than "A" -- PASS carries an A of its own.)
+    assert lines[0].index(" A ") == lines[1].index(" B ")
 
 
 def test_render_shows_veto_and_low_confidence():

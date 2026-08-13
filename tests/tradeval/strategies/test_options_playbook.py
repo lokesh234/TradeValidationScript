@@ -153,6 +153,120 @@ def test_derive_premium_does_not_override_explicit_premium():
     assert strategy.ctx.premium == 42.0
 
 
+def test_spread_panels_carry_no_single_leg_ladder():
+    """The ladder prices an outright contract, which is not the trade.
+
+    Its cost, breakeven move and theta all describe buying the long leg on its
+    own -- a debit is a fraction of that -- so a spread gets the spread table
+    and nothing else.
+    """
+    strategy = _strategy(instrument="call_spread", option_side="call")
+    _with_chain(strategy)
+    titles = [panel.title for panel in strategy.option_panels()]
+    assert titles, "a spread should still produce its own tables"
+    assert not any("CALLS --" in title for title in titles)
+    assert any("DEBIT SPREADS" in title for title in titles)
+
+
+def test_outright_options_still_get_the_ladder():
+    strategy = _strategy(instrument="options", option_side="call")
+    _with_chain(strategy)
+    assert any("CALLS --" in panel.title for panel in strategy.option_panels())
+
+
+def _spread_table(strategy):
+    return next(p for p in strategy.option_panels() if "DEBIT SPREADS" in p.title)
+
+
+def test_spread_table_has_no_max_loss_column():
+    """For a debit spread max loss is the debit, in every row, by definition."""
+    strategy = _strategy(instrument="call_spread", option_side="call")
+    _with_chain(strategy)
+    panel = _spread_table(strategy)
+    assert "Debit" in panel.headers
+    assert "Max loss" not in panel.headers
+    assert "max loss is the debit" in panel.note
+
+
+def test_spread_table_is_per_spread_whatever_the_contract_count():
+    """The payoff tables carry the sizing; doing it twice prints it twice."""
+    one = _strategy(instrument="call_spread", option_side="call", contracts=1)
+    many = _strategy(instrument="call_spread", option_side="call", contracts=7)
+    _with_chain(one)
+    _with_chain(many)
+    single, scaled = _spread_table(one), _spread_table(many)
+    assert single.rows == scaled.rows
+    assert single.title == scaled.title
+    assert "per spread" in scaled.title
+
+    # The payoff table below it is still sized to the position.
+    payoff = next(p for p in many.option_panels() if "PROFIT" in p.title)
+    assert "7 contracts" in payoff.title
+
+
+def test_spread_table_is_not_reprinted_once_it_has_been_shown():
+    """The prompt that picked a pairing already put this table on screen.
+
+    chain_shown gates the pairing table the same way it gates an outright
+    ladder; only the payoff tables, priced against answers given after the
+    table was drawn, come through regardless.
+    """
+    strategy = _strategy(instrument="call_spread", option_side="call", chain_shown=True)
+    _with_chain(strategy)
+    titles = [panel.title for panel in strategy.option_panels()]
+    assert titles, "the payoff tables should still come through"
+    assert not any("DEBIT SPREADS" in title for title in titles)
+    assert any("PROFIT" in title for title in titles)
+
+
+def test_spread_marker_stays_off_when_every_pairing_is_within_the_implied_move():
+    strategy = _strategy(instrument="call_spread", option_side="call")
+    _with_chain(strategy)
+    built = strategy.spreads
+    assert built
+    # An implied move far past the widest pairing leaves no boundary inside
+    # the table, so marking the widest row would invent one.
+    marked, _, outruns = strategy._spread_marker(built, strategy.data.price, implied=500.0)
+    assert marked == []
+    assert outruns is True
+
+    # And the table says it in words instead. cached_property, so assigning
+    # here is what the chain would have produced on a high-IV name.
+    strategy.implied_move_pct = 500.0
+    panel = _spread_table(strategy)
+    assert panel.highlight == []
+    assert "the ladder runs out before the move does" in panel.note
+
+
+def test_spread_marker_lands_on_the_last_pairing_the_move_reaches():
+    strategy = _strategy(instrument="call_spread", option_side="call")
+    _with_chain(strategy)
+    built = strategy.spreads
+    spot = strategy.data.price
+    targets = [s.target_move_pct(spot) for s in built]
+    # Halfway between the second and third pairing: the boundary now falls
+    # inside the table, which is the only time the marker means anything.
+    implied = (targets[1] + targets[2]) / 2.0
+    marked, marker, outruns = strategy._spread_marker(built, spot, implied)
+    assert marked == [1]
+    assert marker == "implied move reaches"
+    assert outruns is False
+
+
+def test_spread_marker_prefers_a_stated_reward_risk_floor():
+    """A floor beats the implied move, and marks one row rather than all of them.
+
+    The pairings were already chosen to clear the floor, so the useful mark is
+    the narrowest of them: the least width that buys the ratio.
+    """
+    strategy = _strategy(instrument="call_spread", option_side="call", min_reward_risk=0.01)
+    _with_chain(strategy)
+    marked, marker, outruns = strategy._spread_marker(strategy.spreads, strategy.data.price, 500.0)
+    assert marked == [0]
+    assert marker == "least width that meets 0.01:1"
+    assert outruns is False
+
+
 def test_check_spread_reward_risk_needs_a_floor_to_grade():
     strategy = _strategy(instrument="call_spread", option_side="call")
     _with_chain(strategy, strikes_above=5)

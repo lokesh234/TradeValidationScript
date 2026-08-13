@@ -429,6 +429,32 @@ def build_corpus(
 # -- scoring ---------------------------------------------------------------
 
 
+# What a 0-100 score is called, loudest first. Shared so a single ticker and a
+# whole spending flow are described on the same scale.
+SCORE_LABELS = ((80, "Extreme"), (60, "Hot"), (40, "Warm"), (20, "Quiet"))
+
+
+def score_label(score: float) -> str:
+    """The name for a 0-100 buzz score."""
+    for threshold, name in SCORE_LABELS:
+        if score >= threshold:
+            return name
+    return "Silent"
+
+
+def lean_label(bullish: int, bearish: int) -> str:
+    """Crude bull/bear tilt from tagged or inferred sentiment counts."""
+    total = bullish + bearish
+    if not total:
+        return "n/a"
+    share = bullish / total * 100.0
+    if share >= 65:
+        return "bullish %.0f%%" % share
+    if share <= 35:
+        return "bearish %.0f%%" % (100 - share)
+    return "mixed"
+
+
 @dataclass
 class BuzzScore:
     """Hype for one ticker, 0-100, with the parts that produced it."""
@@ -457,23 +483,12 @@ class BuzzScore:
     def label(self) -> str:
         if not self.available:
             return "Not Available"
-        for threshold, name in ((80, "Extreme"), (60, "Hot"), (40, "Warm"), (20, "Quiet")):
-            if self.score >= threshold:
-                return name
-        return "Silent"
+        return score_label(self.score)
 
     @property
     def lean(self) -> str:
         """Crude bull/bear tilt from keyword counts."""
-        total = self.bullish + self.bearish
-        if not total:
-            return "n/a"
-        share = self.bullish / total * 100.0
-        if share >= 65:
-            return "bullish %.0f%%" % share
-        if share <= 35:
-            return "bearish %.0f%%" % (100 - share)
-        return "mixed"
+        return lean_label(self.bullish, self.bearish)
 
 
 def ticker_pattern(symbol: str) -> "re.Pattern":

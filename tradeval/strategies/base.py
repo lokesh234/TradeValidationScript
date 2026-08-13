@@ -9,8 +9,18 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Dict, List, Optional
 
+from .. import dates
 from .. import indicators as ind
-from ..checks import CheckResult, Verdict, failed, passed, score_checks, skipped, warned
+from ..checks import (
+    CheckResult,
+    Verdict,
+    apply_weights,
+    failed,
+    passed,
+    score_checks,
+    skipped,
+    warned,
+)
 from ..context import TradeContext
 
 
@@ -202,6 +212,7 @@ class Strategy(ABC):
         self.data = ctx.data
         self.config = ctx.config
         self.notes: List[str] = []
+        self._checks: Optional[List[CheckResult]] = None
 
     # -- shared indicator values ------------------------------------------
 
@@ -253,7 +264,7 @@ class Strategy(ABC):
 
     # -- checks every strategy reuses --------------------------------------
 
-    def check_liquidity(self, min_dollar_volume: float, weight: float, critical: bool) -> CheckResult:
+    def check_liquidity(self, min_dollar_volume: float, weight: float, critical: bool = False) -> CheckResult:
         name = "Liquidity"
         dollar_volume = self.data.avg_dollar_volume(20)
         if dollar_volume is None:
@@ -291,7 +302,7 @@ class Strategy(ABC):
             return warned(name, detail + " -- pulling back inside an uptrend", value, weight)
         return failed(name, detail + " -- broad market downtrend", value, weight)
 
-    def check_position_size(self, max_risk_pct: float, weight: float, critical: bool) -> CheckResult:
+    def check_position_size(self, max_risk_pct: float, weight: float, critical: bool = False) -> CheckResult:
         """Is the dollar risk inside your own cap?"""
         name = "Risk per trade"
         risk_pct = self.ctx.risk_pct_of_account
@@ -678,7 +689,7 @@ class Strategy(ABC):
                 when = "tomorrow"
             else:
                 when = "in %d days" % days
-            rows.append(["Next earnings", report.isoformat(), when, ""])
+            rows.append(["Next earnings", dates.format_date(report), when, ""])
         return rows
 
     def _balance_sheet_rows(self) -> List[List[str]]:
@@ -790,8 +801,30 @@ class Strategy(ABC):
         """Optional reference tables to print under the checks."""
         return []
 
+    def built_checks(self) -> List[CheckResult]:
+        """The checklist, built once and kept.
+
+        The weights prompt has to show what there is to weight, which means
+        building the checks before ``run`` would. Building twice would repeat
+        the notes a check emits and re-derive the premium behind them, so the
+        first build is the one everything uses.
+        """
+        if self._checks is None:
+            self._checks = self.build_checks()
+        return self._checks
+
     def run(self) -> Report:
-        results = self.build_checks()
+        results = self.built_checks()
+        results, unmatched = apply_weights(results, self.config.weights)
+        # Only worth saying when nothing matched. A config shared across the
+        # three strategies names checks that only some of them run, so a
+        # partial miss is normal; a total miss means the names are wrong.
+        if unmatched and len(unmatched) == len(self.config.weights):
+            self.note(
+                "Custom weights matched no check here: %s. The name is the label "
+                "printed beside the check, e.g. \"Free cash flow\"."
+                % ", ".join('"%s"' % name for name in unmatched)
+            )
         verdict = score_checks(results, self.config.scoring)
         # Built after the checks so panels can reuse anything they cached.
         panels = self.build_panels()

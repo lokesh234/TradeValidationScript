@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Sequence
 
@@ -54,6 +54,40 @@ class Verdict:
         if self.total_weight <= 0:
             return 0.0
         return self.counted_weight / self.total_weight * 100.0
+
+
+def apply_weights(
+    results: Sequence[CheckResult],
+    weights: Optional[dict] = None,
+) -> "tuple[List[CheckResult], List[str]]":
+    """Overlay custom weights onto built checks, matched by name.
+
+    Done here rather than inside the checks because a check sets its weight in
+    every branch it can return from -- six literals for one number, and a
+    config would have to reach all six. The weight rides on the result, so one
+    pass over the finished list is enough and no strategy has to know.
+
+    Matching is case-insensitive on the check's name, which is the label the
+    report prints beside it. Returns the names that matched nothing too, so a
+    typo can be reported rather than left looking like a weight that did
+    nothing.
+    """
+    if not weights:
+        return list(results), []
+
+    wanted = {str(name).strip().lower(): value for name, value in weights.items()}
+    matched = set()
+    out: List[CheckResult] = []
+    for result in results:
+        key = result.name.strip().lower()
+        if key in wanted:
+            matched.add(key)
+            out.append(replace(result, weight=float(wanted[key])))
+        else:
+            out.append(result)
+
+    unmatched = [str(name) for name in weights if str(name).strip().lower() not in matched]
+    return out, unmatched
 
 
 def score_checks(

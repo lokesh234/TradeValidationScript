@@ -15,7 +15,7 @@ from functools import cached_property
 from typing import List, Optional
 
 from .. import indicators as ind
-from .. import pricing, spreads
+from .. import dates, pricing, spreads
 from ..checks import CheckResult, failed, passed, skipped, warned
 from ..data import AtmQuote, OptionQuote
 from .base import Panel
@@ -215,10 +215,18 @@ class OptionsPlaybook:
                 "No %s on the %s expiry, so every contract is priced. Available: %s."
                 % (pick, self.chain_expiry, ", ".join(self.contract_labels()) or "none")
             )
-        # The ladder does not change once it has been shown, so a run that
-        # already printed it to choose from does not print it again.
+        # A spread gets no single-leg ladder. Four of its columns price an
+        # outright contract -- cost, breakeven move, theta and the ATM marker
+        # -- and none of them describe the trade: the debit on a 10-wide is a
+        # twentieth of the long leg's premium, and the spread table below
+        # already carries the cost, the breakeven and the payoff.
+        #
+        # Otherwise the ladder does not change once it has been shown, so a run
+        # that already printed it to choose from does not print it again.
+        if self.ctx.trades_spread:
+            return self._spread_panels(include_table=not self.ctx.chain_shown)
         panels = [] if self.ctx.chain_shown else list(self._ladder_panels())
-        panels.extend(self._spread_panels() if self.ctx.trades_spread else self._profit_panels())
+        panels.extend(self._profit_panels())
         return panels
 
     @property
@@ -254,7 +262,7 @@ class OptionsPlaybook:
         if quote is None or horizon_days is None:
             return skipped(name, "no chain for this trade", weight=2.0)
 
-        value = "%s, %d days out" % (quote.expiry.isoformat(), quote.days_out)
+        value = "%s, %d days out" % (dates.long_date(quote.expiry), quote.days_out)
         detail = "expiry against a %d day hold" % horizon_days
         if quote.days_out >= horizon_days:
             return passed(name, detail, value, weight=2.0)
@@ -366,30 +374,55 @@ class OptionsPlaybook:
 
     @cached_property
     def spreads(self) -> List[spreads.VerticalSpread]:
-        """Five pairings off the same long leg, walking the short strike out."""
+        """Pairings off one long leg, walking the short strike out.
+
+        A stated reward:risk floor widens the search: the ratio climbs with
+        width, so the pairings that clear a floor usually sit further out than
+        the default window reaches. The chain is read to its full depth in that
+        case so the short leg has somewhere to walk to.
+        """
         kind = self.ctx.spread_kind
         quote = self.front_quote
         if kind is None or quote is None:
             return []
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes + 1)
+        floor = self.ctx.min_reward_risk
+        depth = self.ctx.strikes + 1
+        if floor is not None:
+            depth = max(depth, self.max_strikes() or depth)
+        ladder = self.data.option_ladder(quote.expiry, depth)
         if ladder is None:
             return []
         calls, puts = ladder
         legs = [q for q in (calls if kind == "call" else puts) if q.mid]
-        return spreads.build_debit_spreads(legs, self.ctx.strikes)
+        return spreads.build_debit_spreads(legs, self.ctx.strikes, floor)
 
-    def _spread_panels(self) -> List[Panel]:
+    def _spread_panels(self, include_table: bool = True) -> List[Panel]:
+        """The pairings and their payoffs.
+
+        ``include_table`` drops the pairing table when it is already on screen
+        -- the run that printed it to choose from does not print it again. The
+        payoff tables always come, since they are priced against answers given
+        after that table was drawn.
+        """
         built = self.spreads
         if not built:
             return []
-        panels = [self._spread_table(built)]
+        panels = [self._spread_table(built)] if include_table else []
         panels.extend(self._spread_profit_panels(built))
         return panels
 
     def _spread_table(self, built: List[spreads.VerticalSpread]) -> Panel:
-        """What each pairing costs and what it can pay."""
+        """What each pairing costs and what it can pay, one spread at a time.
+
+        Deliberately not scaled by the contract count. This table describes the
+        structures available; the payoff tables below describe the position you
+        are actually taking, and print the sizing in their own titles. Doing the
+        multiplication in both places prints the same arithmetic twice.
+
+        Max loss is not a column either: for a debit spread it is the debit, in
+        every row, by definition -- the note says so once instead.
+        """
         spot = self.data.price
-        count = self.ctx.contracts
         implied = self.implied_move_pct
         rows = []
         for spread in built:
@@ -397,9 +430,8 @@ class OptionsPlaybook:
                 [
                     spread.label,
                     "%s wide" % spreads.format_strike(spread.width),
-                    _money_cell(_scale(spread.cost, count)),
-                    _money_cell(_scale(spread.max_profit, count)),
-                    _money_cell(_scale(spread.max_loss, count)),
+                    _money_cell(spread.cost),
+                    _money_cell(spread.max_profit),
                     "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
                     "{:,.2f}".format(spread.breakeven) if spread.breakeven else "-",
                     _signed_pct(spread.breakeven_move_pct(spot)),
@@ -407,37 +439,31 @@ class OptionsPlaybook:
                 ]
             )
 
-        # A stated floor is the trader's own criterion, so it takes the marker
-        # when there is one. Otherwise mark the widest spread the implied move
-        # still reaches: past that one you are paying for upside the market
-        # does not expect to arrive.
-        floor = self.ctx.min_reward_risk
-        if floor is not None:
-            marked = [i for i, s in enumerate(built) if (s.reward_risk or 0.0) >= floor]
-            marker = "meets %.2f:1" % floor
-        else:
-            reachable = [
-                index
-                for index, spread in enumerate(built)
-                if implied is not None and (spread.target_move_pct(spot) or 0.0) <= implied
-            ]
-            marked = reachable[-1:]
-            marker = "implied move reaches"
+        marked, marker, outruns = self._spread_marker(built, spot, implied)
         kind = self.ctx.spread_kind or "call"
-        sizing = "per spread" if count == 1 else "%d spreads" % count
         self._check_budget_covers_a_spread(built)
         note = (
             "Long the strike nearest the money, short each strike further out. "
             "Max profit needs the stock at or beyond the short strike by expiry; "
-            "max loss is the debit and nothing worse."
+            "max loss is the debit and nothing worse. Figures are per spread -- "
+            "the payoff tables below carry the sizing."
         )
+        note += self._floor_note(built)
         if implied is not None:
             note += "  The options price a move of %.1f%%." % implied
+        if outruns:
+            # Nothing here is priced as out of reach, which is worth saying
+            # plainly rather than leaving a marker to imply a limit that the
+            # table never actually hits.
+            note += (
+                "  Every pairing above is inside that move -- the ladder runs out "
+                "before the move does, so --strikes buys wider ones."
+            )
         return Panel(
-            title="%s DEBIT SPREADS -- %s expiry, %s"
-            % (kind.upper(), self.front_quote.expiry.isoformat(), sizing),
+            title="%s DEBIT SPREADS -- %s expiry, per spread"
+            % (kind.upper(), dates.format_date(self.front_quote.expiry)),
             headers=[
-                "Strikes", "Width", "Debit", "Max profit", "Max loss",
+                "Strikes", "Width", "Debit", "Max profit",
                 "Reward:risk", "Breakeven", "B/E move", "To max",
             ],
             rows=rows,
@@ -446,6 +472,59 @@ class OptionsPlaybook:
             left_align=[0],
             note=note,
         )
+
+    def _floor_note(self, built: List[spreads.VerticalSpread]) -> str:
+        """Say what a stated reward:risk floor did to the list, if anything."""
+        floor = self.ctx.min_reward_risk
+        if floor is None:
+            return ""
+        best = max((s.reward_risk or 0.0) for s in built)
+        if best < floor:
+            # The search walked the whole chain and came back empty, which is
+            # worth saying outright: the table is what exists, not what was asked
+            # for, and the reward:risk check grades it a miss.
+            return (
+                "  No pairing on this expiry clears %.2f:1 -- the best of these "
+                "reaches %.2f:1, so the width is not there to buy." % (floor, best)
+            )
+        return (
+            "  Only pairings clearing your %.2f:1 floor are listed; the short leg "
+            "was walked out until they did." % floor
+        )
+
+    def _spread_marker(
+        self, built: List[spreads.VerticalSpread], spot: float, implied: Optional[float]
+    ) -> "tuple[List[int], str, bool]":
+        """Which pairings to mark, what to call the marker, and why it may be absent.
+
+        A stated floor is the trader's own criterion, so it takes the marker
+        when there is one. Otherwise the marker goes on the widest pairing the
+        implied move still reaches: past that one you are paying for upside the
+        market does not expect to arrive.
+
+        That only means something when the boundary falls inside the table. If
+        every pairing is within the implied move there is no such line, and
+        marking the widest row would invent one -- it would read as a pick when
+        it only means the ladder ended early. Returns that case as a flag so the
+        note can say it in words instead.
+        """
+        floor = self.ctx.min_reward_risk
+        if floor is not None:
+            qualifying = [i for i, s in enumerate(built) if (s.reward_risk or 0.0) >= floor]
+            # The pairings were chosen to clear the floor, so marking every one
+            # of them says nothing. The narrowest is the answer to the question
+            # a floor asks: the least width that buys the ratio.
+            return qualifying[:1], "least width that meets %.2f:1" % floor, False
+        if implied is None:
+            return [], "", False
+        reachable = [
+            index
+            for index, spread in enumerate(built)
+            if (spread.target_move_pct(spot) or 0.0) <= implied
+        ]
+        if len(reachable) == len(built):
+            return [], "", True
+        return reachable[-1:], "implied move reaches", False
 
     def _spread_profit_panels(self, built: List[spreads.VerticalSpread]) -> List[Panel]:
         """What each pairing is worth at each point the position is marked."""
@@ -584,7 +663,7 @@ class OptionsPlaybook:
             panels.append(
                 Panel(
                     title="%s -- %s expiry, %d strikes from the money"
-                    % (kind, quote.expiry.isoformat(), len(quotes)),
+                    % (kind, dates.format_date(quote.expiry), len(quotes)),
                     headers=[
                         "Strike", "Bid", "Ask", "Mid", "Cost/contract",
                         "IV%", "Theta/day", "Gamma", "OI", "Vol", "B/E move",
@@ -724,9 +803,18 @@ class OptionsPlaybook:
             )
 
         clearing = [s for s, ratio in graded if ratio >= floor]
-        detail = "%d of %d pairings clear your %.2f:1 floor" % (len(clearing), len(graded), floor)
         if clearing:
-            return passed(name, detail, value, weight=2.0)
+            # The listed pairings were selected to clear the floor, so a count
+            # of them proves nothing. The width it took to get there does.
+            narrowest = min(clearing, key=lambda s: s.width)
+            return passed(
+                name,
+                "clears your %.2f:1 floor from %s outward -- %s wide is the least that does"
+                % (floor, narrowest.label, spreads.format_strike(narrowest.width)),
+                value,
+                weight=2.0,
+            )
+        detail = "no pairing on this expiry clears your %.2f:1 floor" % floor
         if best >= floor * 0.75:
             return warned(name, detail + " -- the best is close, widen or wait", value, weight=2.0)
         return failed(name, detail + " -- this chain does not pay enough for the risk", value, weight=2.0)
@@ -737,7 +825,7 @@ class OptionsPlaybook:
         name = "Options liquidity"
         quote = self.front_quote
         if quote is None:
-            return skipped(name, "no ATM quote for the event expiry", weight=2.0, critical=True)
+            return skipped(name, "no ATM quote for the event expiry", weight=2.0)
 
         spread, oi = quote.spread_pct, quote.open_interest
         if spread is None:
@@ -746,22 +834,20 @@ class OptionsPlaybook:
                 "no live bid/ask -- market closed or no book; verify before sending an order",
                 "OI %d" % oi,
                 weight=2.0,
-                critical=True,
             )
 
         value = "%.1f%% spread, OI %d" % (spread, oi)
         detail = "ATM %.2f strike, %d DTE" % (quote.strike, quote.days_out)
         if spread > self.option_rules.warn_option_spread_pct:
-            return failed(name, detail + " -- book too wide to trade", value, weight=2.0, critical=True)
+            return failed(name, detail + " -- book too wide to trade", value, weight=2.0)
         if spread > self.option_rules.max_option_spread_pct or oi < self.option_rules.min_open_interest:
             return warned(
                 name,
                 detail + " -- use limit orders, expect fill slippage",
                 value,
                 weight=2.0,
-                critical=True,
             )
-        return passed(name, detail, value, weight=2.0, critical=True)
+        return passed(name, detail, value, weight=2.0)
 
 
     def payoff_stages(self) -> "List[tuple]":

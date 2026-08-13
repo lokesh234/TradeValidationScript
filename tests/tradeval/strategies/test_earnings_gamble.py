@@ -36,7 +36,8 @@ def test_check_event_confirmed_within_window():
     strategy.event_date = dt.date.today() + dt.timedelta(days=5)
     result = strategy._check_event_confirmed()
     assert result.status is Status.PASS
-    assert result.critical is True
+    # Nothing vetoes any more, not even a report that already happened.
+    assert result.critical is False
 
 
 def test_check_event_confirmed_no_date_fails():

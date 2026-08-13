@@ -83,6 +83,48 @@ def test_build_debit_spreads_pairs_first_leg_with_each_following():
     assert [s.short_leg.strike for s in spreads] == [105, 110]
 
 
+def _rising_ratio_chain():
+    """Strikes whose reward:risk climbs with width, as a real chain's does.
+
+    Premium decays the further out of the money the short leg goes, so the
+    debit grows more slowly than the width. Long 100 at 5.00 gives ratios of
+    0.67, 1.50, 2.41, 3.35 and 4.26 as the short leg walks out.
+    """
+    mids = [5.0, 2.0, 1.0, 0.6, 0.4, 0.25, 0.15]
+    return [_quote("call", 100 + i * 5, mid) for i, mid in enumerate(mids)]
+
+
+def test_build_debit_spreads_walks_out_to_meet_a_stated_floor():
+    quotes = _rising_ratio_chain()
+    # The default window stops at 110, and neither pairing clears 2:1.
+    plain = build_debit_spreads(quotes, count=2)
+    assert [s.short_leg.strike for s in plain] == [105, 110]
+    assert all(s.reward_risk < 2.0 for s in plain)
+
+    widened = build_debit_spreads(quotes, count=2, min_reward_risk=2.0)
+    assert widened, "the floor is met further out, so pairings should exist"
+    assert all(s.reward_risk >= 2.0 for s in widened)
+    # It reached past where the plain window ended to find them.
+    assert widened[0].short_leg.strike > plain[-1].short_leg.strike
+
+
+def test_build_debit_spreads_returns_at_most_count_even_when_widened():
+    quotes = _rising_ratio_chain()
+    assert len(build_debit_spreads(quotes, count=2, min_reward_risk=1.0)) == 2
+
+
+def test_build_debit_spreads_falls_back_when_no_pairing_meets_the_floor():
+    """An unreachable floor shows what the chain has, not an empty table."""
+    quotes = _rising_ratio_chain()
+    built = build_debit_spreads(quotes, count=2, min_reward_risk=99.0)
+    assert [s.short_leg.strike for s in built] == [105, 110]
+
+
+def test_build_debit_spreads_ignores_the_floor_when_none_is_given():
+    quotes = _rising_ratio_chain()
+    assert build_debit_spreads(quotes, count=3) == build_debit_spreads(quotes, count=3, min_reward_risk=None)
+
+
 def test_build_debit_spreads_needs_at_least_two_quotes():
     assert build_debit_spreads([_quote("call", 100, 5.0)]) == []
     assert build_debit_spreads([]) == []

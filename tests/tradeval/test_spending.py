@@ -7,6 +7,8 @@ from unittest.mock import patch
 import pytest
 
 from tradeval import spending
+from tradeval.buzz import BuzzScore
+from tradeval.report import ANSI_RE, Palette
 from tradeval.spending import Beneficiary, SpendingFlow
 
 
@@ -52,9 +54,10 @@ def test_flow_panel_without_snapshots_uses_dashes():
     flow = spending.FLOWS[0]
     panel = spending.flow_panel(flow, snapshots=None)
     assert len(panel.rows) == len(flow.winners)
+    price, cap = panel.headers.index("Price"), panel.headers.index("Market cap")
     for row in panel.rows:
-        assert row[3] == "-"  # price
-        assert row[4] == "-"  # market cap
+        assert row[price] == "-"
+        assert row[cap] == "-"
 
 
 def test_flow_panel_with_snapshots_fills_price_and_cap():
@@ -65,8 +68,23 @@ def test_flow_panel_with_snapshots_fills_price_and_cap():
     snap = _Snapshot("AAA", "Company A", 12.5, 3.4e9)
     panel = spending.flow_panel(flow, snapshots=[snap])
     assert panel.rows[0][0] == "AAA"
-    assert panel.rows[0][3] == "$12.50"
-    assert panel.rows[0][4] == "$3.4B"
+    assert panel.rows[0][panel.headers.index("Price")] == "$12.50"
+    assert panel.rows[0][panel.headers.index("Market cap")] == "$3.4B"
+    # The bar is drawn against the flow's own biggest collector, so the only
+    # name in this one fills it.
+    assert panel.rows[0][3] == "#" * spending.SHARE_BAR_WIDTH
+
+
+def test_flow_panel_adds_a_buzz_column_only_when_scored():
+    flow = SpendingFlow(
+        name="Test", size="$1", direction="up", what="stuff",
+        winners=[Beneficiary("AAA", "role", share=100)],
+    )
+    assert "Buzz" not in spending.flow_panel(flow).headers
+
+    scored = spending.flow_panel(flow, buzz={"AAA": BuzzScore("AAA", score=61.0, mentions=12)})
+    assert scored.headers.index("Buzz") == len(scored.headers) - 2
+    assert scored.rows[0][scored.headers.index("Buzz")] == " 61 Hot"
 
 
 class _Snapshot:
@@ -91,3 +109,74 @@ def test_menu_lines_and_format_winner():
     winner = Beneficiary("AAA", "the role", share=50)
     line = spending.format_winner(winner, None)
     assert "AAA" in line and "$50" in line
+
+
+def test_menu_lines_carry_colour_only_when_asked():
+    plain = spending.menu_lines()
+    assert not any("\033[" in line for line in plain)
+    assert all("\033[" in line for line in spending.menu_lines(Palette(True)))
+
+
+def test_format_winner_pads_before_colouring():
+    """Escape codes inside a width would be counted as part of it."""
+    winner = Beneficiary("AAA", "the role", share=50)
+    plain = spending.format_winner(winner, None, Palette(False), largest=100)
+    colored = spending.format_winner(winner, None, Palette(True), largest=100)
+    assert ANSI_RE.sub("", colored) == plain
+
+
+def test_format_winner_bar_scales_against_the_biggest_collector():
+    big = spending.format_winner(Beneficiary("AAA", "role", share=100), None, largest=100)
+    small = spending.format_winner(Beneficiary("BBB", "role", share=10), None, largest=100)
+    assert "#" * spending.SHARE_BAR_WIDTH in big
+    # Any real share earns at least one cell, so a small collector is never
+    # indistinguishable from one that collects nothing.
+    assert "#....." in small
+    none = spending.format_winner(Beneficiary("CCC", "role"), None, largest=100)
+    assert "#" not in none
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("Applied Materials, Inc.", "Applied Materials"),
+        ("ASML Holding N.V. - New York Registry Shares", "ASML Holding"),
+        ("Taiwan Semiconductor Manufacturing Company Limited", "Taiwan Semiconductor"),
+        ("Rheinmetall AG", "Rheinmetall"),
+        # Dropping the suffix leaves the name hanging on a conjunction.
+        ("Eli Lilly and Company", "Eli Lilly"),
+        ("GE Aerospace", "GE Aerospace"),
+        # A separator is required, so a name ending in these letters survives.
+        ("Cisco Systems, Inc.", "Cisco Systems"),
+        (None, ""),
+    ],
+)
+def test_clean_name_drops_the_legal_form(raw, expected):
+    assert spending.clean_name(raw) == expected
+
+
+def test_clean_name_never_exceeds_the_column():
+    for flow in spending.FLOWS:
+        for winner in flow.winners:
+            assert len(spending.clean_name("A Very Long Company Name Indeed Limited")) <= 20
+    assert spending.clean_name("Supercalifragilistic") == "Supercalifragilistic"
+    # No space to break on: cut rather than overflow the column.
+    assert len(spending.clean_name("Supercalifragilisticexpialidocious")) == 20
+
+
+def test_largest_share_ignores_names_that_collect_nothing():
+    flow = SpendingFlow(
+        name="Test", size="$1", direction="up", what="stuff",
+        winners=[Beneficiary("AAA", "role", share=40), Beneficiary("BBB", "role")],
+    )
+    assert spending.largest_share(flow) == 40
+    assert spending.largest_share(
+        SpendingFlow(name="T", size="$1", direction="up", what="s",
+                     winners=[Beneficiary("AAA", "role")])
+    ) is None
+
+
+def test_format_buzz_reports_without_grading():
+    assert spending.format_buzz(None).strip() == "-"
+    assert spending.format_buzz(BuzzScore.unavailable("AAA", "no data")).strip() == "n/a"
+    assert spending.format_buzz(BuzzScore("AAA", score=61.0)) == " 61 Hot"

@@ -271,6 +271,35 @@ def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
             setattr(target, key, value)
 
 
+def validate_weights(raw: Any) -> Dict[str, float]:
+    """Check a weights mapping before a run spends a network call on it.
+
+    A weight is how much a check counts toward the score, so it has to be a
+    number and it cannot be negative -- a negative one would pay you for
+    failing. Zero is allowed and useful: the check still runs and prints, it
+    just stops counting.
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise ValueError("weights must be a mapping of check name to number, got %s" % type(raw).__name__)
+
+    clean: Dict[str, float] = {}
+    for name, value in raw.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(
+                "weights.%s must be a number, got %r -- the name is the label "
+                "printed beside the check in the report" % (name, value)
+            )
+        if value < 0:
+            raise ValueError(
+                "weights.%s cannot be negative (use 0 to show the check without "
+                "scoring it)" % name
+            )
+        clean[str(name)] = float(value)
+    return clean
+
+
 @dataclass
 class Config:
     scoring: ScoringThresholds = field(default_factory=ScoringThresholds)
@@ -280,6 +309,9 @@ class Config:
     long_term: LongTermRules = field(default_factory=LongTermRules)
     buzz: BuzzRules = field(default_factory=BuzzRules)
     benchmark: str = "SPY"
+    # How much each check counts, keyed by the name the report prints beside
+    # it. Empty means every check keeps the weight its strategy gave it.
+    weights: Dict[str, float] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str) -> "Config":
@@ -303,6 +335,9 @@ class Config:
         unknown = set(raw) - {f.name for f in fields(cls)}
         if unknown:
             raise ValueError("Unknown config section(s): %s" % ", ".join(sorted(unknown)))
+        # Checked here rather than where it is used: a bad weight should fail
+        # before the run spends a network call finding out.
+        cfg.weights = validate_weights(cfg.weights)
         return cfg
 
     def to_dict(self) -> Dict[str, Any]:

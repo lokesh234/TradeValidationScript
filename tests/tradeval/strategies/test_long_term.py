@@ -34,7 +34,8 @@ def test_check_market_cap_bands():
     data4 = make_market_data(info={})
     result = _strategy(data=data4)._check_market_cap()
     assert result.status is Status.SKIP
-    assert result.critical is True
+    # Nothing vetoes any more; the weighted score alone decides.
+    assert result.critical is False
 
 
 def test_check_profitability_losing_money_fails():
@@ -71,7 +72,7 @@ def test_check_balance_sheet_flags_high_leverage():
     data = make_market_data(info={"debtToEquity": 250.0, "currentRatio": 1.5})
     result = _strategy(data=data)._check_balance_sheet()
     assert result.status is Status.FAIL
-    assert result.critical is True
+    assert result.critical is False
 
 
 def test_check_balance_sheet_pass_when_healthy():
@@ -157,3 +158,37 @@ def test_run_end_to_end_for_stock_and_options():
         report = LongTermStrategy(ctx).run()
         assert report.results
         assert report.verdict.label in ("GO", "CAUTION", "NO-GO")
+
+
+# -- custom weights --------------------------------------------------------
+
+
+def _run_with_weights(weights):
+    config = Config()
+    config.weights = weights
+    ctx = TradeContext(data=make_market_data(), config=config, instrument="stock")
+    return LongTermStrategy(ctx).run()
+
+
+def test_custom_weights_reach_the_report_and_the_score():
+    plain = _run_with_weights({})
+    heavy = _run_with_weights({"Free cash flow": 6.0})
+
+    by_name = {r.name: r for r in heavy.results}
+    assert by_name["Free cash flow"].weight == 6.0
+    # Weighting one check up moves the total, so the score is measured against
+    # a different denominator than the default run's.
+    assert heavy.verdict.total_weight > plain.verdict.total_weight
+    assert not any("matched no check" in note for note in heavy.notes)
+
+
+def test_a_weight_naming_no_check_is_called_out():
+    report = _run_with_weights({"Fre cash flow": 6.0})
+    assert any("matched no check" in note for note in report.notes)
+    assert any("Fre cash flow" in note for note in report.notes)
+
+
+def test_a_partial_match_stays_quiet():
+    """One config is shared across strategies, so unused names are normal."""
+    report = _run_with_weights({"Free cash flow": 6.0, "Implied vs historical move": 2.0})
+    assert not any("matched no check" in note for note in report.notes)

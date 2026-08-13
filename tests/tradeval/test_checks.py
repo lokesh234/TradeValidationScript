@@ -5,6 +5,7 @@ from __future__ import annotations
 from tradeval.checks import (
     Status,
     ScoringThresholds,
+    apply_weights,
     failed,
     passed,
     score_checks,
@@ -118,3 +119,52 @@ def test_threshold_check_lower_is_better():
 def test_check_result_default_value_is_blank():
     assert passed("n", "d").value == ""
     assert skipped("n", "d").value == "n/a"
+
+
+# -- custom weights --------------------------------------------------------
+
+
+def test_apply_weights_overrides_by_name():
+    results = [passed("Free cash flow", "d", weight=3.0), passed("PEG ratio", "d", weight=1.0)]
+    out, unmatched = apply_weights(results, {"Free cash flow": 6.0})
+    assert [r.weight for r in out] == [6.0, 1.0]
+    assert unmatched == []
+
+
+def test_apply_weights_matches_case_insensitively():
+    results = [passed("Free cash flow", "d", weight=3.0)]
+    out, unmatched = apply_weights(results, {"FREE CASH FLOW": 5})
+    assert out[0].weight == 5.0
+    assert unmatched == []
+
+
+def test_apply_weights_reports_names_that_matched_nothing():
+    """A typo should be visible, not look like a weight that did nothing."""
+    results = [passed("Free cash flow", "d", weight=3.0)]
+    out, unmatched = apply_weights(results, {"Fre cash flow": 5})
+    assert out[0].weight == 3.0
+    assert unmatched == ["Fre cash flow"]
+
+
+def test_apply_weights_leaves_the_originals_alone():
+    results = [passed("Free cash flow", "d", weight=3.0)]
+    apply_weights(results, {"Free cash flow": 6.0})
+    assert results[0].weight == 3.0
+
+
+def test_apply_weights_without_overrides_is_a_passthrough():
+    results = [passed("A", "d", weight=2.0)]
+    out, unmatched = apply_weights(results, {})
+    assert [r.weight for r in out] == [2.0]
+    assert unmatched == []
+    assert apply_weights(results, None)[0][0].weight == 2.0
+
+
+def test_zero_weight_keeps_the_check_but_drops_it_from_the_score():
+    results = [passed("Kept", "d", weight=2.0), failed("Ignored", "d", weight=1.0)]
+    out, _ = apply_weights(results, {"Ignored": 0})
+    verdict = score_checks(out)
+    # The failure is still in the list and still printed; it just stops counting.
+    assert len(out) == 2
+    assert verdict.score == 100.0
+    assert verdict.total_weight == 2.0

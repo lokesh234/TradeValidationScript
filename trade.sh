@@ -18,8 +18,13 @@ PY="$VENV/bin/python"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
     BOLD=$'\033[1m'; DIM=$'\033[90m'; CYAN=$'\033[36m'; RED=$'\033[31m'; OFF=$'\033[0m'
+    # Listings are read back through a pipe, where validate.py sees no terminal
+    # and drops its colour. This asks for it anyway, because the terminal it
+    # eventually reaches is this one.
+    COLOR="--color"
 else
     BOLD=""; DIM=""; CYAN=""; RED=""; OFF=""
+    COLOR="--no-color"
 fi
 
 die() { printf '%s%s%s\n' "$RED" "$1" "$OFF" >&2; exit 1; }
@@ -125,14 +130,24 @@ browse_around() {
 }
 
 # Take one of the listed CANDIDATES into TICKERS. Non-zero means go back.
+# Given a flow number, the prompt also offers to score the retail chatter for
+# the whole flow -- which only means anything when the list came from one.
 pick_candidate() {
+    local flow="${1:-}" extra=""
     local count=${#CANDIDATES[@]}
     [ "$count" -gt 0 ] || return 1
+    [ -n "$flow" ] && extra=", c for the chatter"
     printf '\n'
     while true; do
-        ask reply "Pick a number to take one, or b to go back"
-        case "$reply" in
+        ask reply "Pick a number to take one${extra}, or b to go back"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             b|back|"") return 1 ;;
+            c|chatter|buzz)
+                if [ -n "$flow" ]; then
+                    show_flow_buzz "$flow"
+                else
+                    printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
+                fi ;;
             *[!0-9]*) printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF" ;;
             *)
                 if [ "$reply" -ge 1 ] && [ "$reply" -le "$count" ]; then
@@ -151,7 +166,7 @@ pick_candidate() {
 # The market's big spending flows, then the companies collecting one of them.
 browse_flows() {
     local menu count out sym line n=0
-    menu="$("$PY" "$ROOT/validate.py" --list-spending 2>/dev/null)"
+    menu="$("$PY" "$ROOT/validate.py" --list-spending $COLOR 2>/dev/null)"
     [ -z "$menu" ] && { printf '  %sCould not load the spending flows.%s\n' "$DIM" "$OFF"; return 1; }
     count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
     printf '\n%sWhere the money is going:%s\n\n%s\n\n' "$BOLD" "$OFF" "$menu"
@@ -162,7 +177,7 @@ browse_flows() {
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             b|back|"") return 1 ;;
         esac
-        out="$("$PY" "$ROOT/validate.py" --list-spending-winners "$reply" 2>/dev/null)" && flow="$reply"
+        out="$("$PY" "$ROOT/validate.py" --list-spending-winners "$reply" $COLOR 2>/dev/null)" && flow="$reply"
         [ -z "$flow" ] && printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
     done
 
@@ -180,7 +195,19 @@ EOF
     printf '\n  %sShares overlap down the chain, so they sum past $1,000. A dash is a name\n' "$DIM"
     printf '  that benefits without collecting -- it spends this flow, or earns a fee on it.%s\n' "$OFF"
 
-    pick_candidate
+    pick_candidate "$flow"
+}
+
+# What retail is saying about the names collecting a flow, folded into one
+# score for the flow itself. A lookup per name, so it is asked for, never
+# printed by default.
+show_flow_buzz() {
+    printf '\n%sWhat retail is saying about this flow:%s\n\n' "$BOLD" "$OFF"
+    printf '  %sReading a stream per name -- this takes a minute.%s\n\n' "$DIM" "$OFF"
+    "$PY" "$ROOT/validate.py" --list-spending-buzz "$1" $COLOR \
+        || printf '  %sNo chatter could be read for this flow.%s\n' "$DIM" "$OFF"
+    printf '\n  %sChatter is a crowding signal, not a verdict: loud argues against an\n' "$DIM"
+    printf '  earnings gamble and says nothing about a long-term hold.%s\n' "$OFF"
 }
 
 # How long the position is meant to be held. Scales the stop, the payoff

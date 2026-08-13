@@ -88,7 +88,9 @@ def test_check_earnings_blackout_inside_short_horizon_fails_without_override():
     strategy.days_to_earnings = 3
     result = strategy._check_earnings_blackout()
     assert result.status is Status.FAIL
-    assert result.critical is True
+    # Nothing vetoes any more: this weighs into the score like every other
+    # check rather than forcing NO-GO on its own.
+    assert result.critical is False
 
 
 def test_check_earnings_blackout_allow_earnings_overrides():

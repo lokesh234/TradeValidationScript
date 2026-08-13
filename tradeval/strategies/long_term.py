@@ -95,7 +95,7 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
     def _business_checks(self) -> List[CheckResult]:
         return [
             self._check_market_cap(),
-            self.check_liquidity(self.rules.min_dollar_volume, weight=1.0, critical=False),
+            self.check_liquidity(self.rules.min_dollar_volume, weight=1.0),
             self._check_profitability(),
             self._check_free_cash_flow(),
             self._check_revenue_growth(),
@@ -119,14 +119,14 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
         name = "Company size"
         cap = self.data.market_cap
         if cap is None:
-            return skipped(name, "market cap unavailable", weight=1.0, critical=True)
+            return skipped(name, "market cap unavailable", weight=1.0)
         value = "$%s" % _human(cap)
         detail = "market cap vs a $%s floor" % _human(self.rules.min_market_cap)
         if cap >= self.rules.min_market_cap:
-            return passed(name, detail, value, weight=1.0, critical=True)
+            return passed(name, detail, value, weight=1.0)
         if cap >= self.rules.warn_market_cap:
-            return warned(name, detail + " -- small cap, expect volatility", value, weight=1.0, critical=True)
-        return failed(name, detail + " -- micro cap, not a hold-and-forget name", value, weight=1.0, critical=True)
+            return warned(name, detail + " -- small cap, expect volatility", value, weight=1.0)
+        return failed(name, detail + " -- micro cap, not a hold-and-forget name", value, weight=1.0)
 
     # -- business quality ---------------------------------------------------
 
@@ -135,7 +135,7 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
         margin = self.data.info_value("operatingMargins")
         income = self.data.latest(self.data.income_statement, "Net Income", "Net Income Common Stockholders")
         if margin is None and income is None:
-            return skipped(name, "no income statement data", weight=3.0, critical=True)
+            return skipped(name, "no income statement data", weight=3.0)
 
         margin_pct = margin * 100.0 if margin is not None else None
         parts = []
@@ -146,15 +146,15 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
         value = ", ".join(parts)
 
         if income is not None and income <= 0:
-            return failed(name, "the business is losing money", value, weight=3.0, critical=True)
+            return failed(name, "the business is losing money", value, weight=3.0)
         if margin_pct is None:
-            return warned(name, "profitable, but no margin data to judge quality", value, weight=3.0, critical=True)
+            return warned(name, "profitable, but no margin data to judge quality", value, weight=3.0)
         detail = "operating margin vs a %.0f%% floor" % self.rules.min_operating_margin_pct
         if margin_pct >= self.rules.min_operating_margin_pct:
-            return passed(name, detail, value, weight=3.0, critical=True)
+            return passed(name, detail, value, weight=3.0)
         if margin_pct > 0:
-            return warned(name, detail + " -- thin margins leave no cushion", value, weight=3.0, critical=True)
-        return failed(name, detail + " -- operations lose money", value, weight=3.0, critical=True)
+            return warned(name, detail + " -- thin margins leave no cushion", value, weight=3.0)
+        return failed(name, detail + " -- operations lose money", value, weight=3.0)
 
     def _check_free_cash_flow(self) -> CheckResult:
         """Earnings are an opinion; cash is a fact."""
@@ -241,7 +241,7 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
                 current_ratio = assets / liabilities
 
         if debt_equity is None and current_ratio is None:
-            return skipped(name, "no balance sheet data", weight=3.0, critical=True)
+            return skipped(name, "no balance sheet data", weight=3.0)
 
         parts = []
         if debt_equity is not None:
@@ -260,10 +260,10 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
         tight = current_ratio is not None and current_ratio < self.rules.min_current_ratio
 
         if levered or illiquid:
-            return failed(name, detail + " -- carrying real balance sheet risk", value, weight=3.0, critical=True)
+            return failed(name, detail + " -- carrying real balance sheet risk", value, weight=3.0)
         if stretched or tight:
-            return warned(name, detail + " -- more leverage than ideal", value, weight=3.0, critical=True)
-        return passed(name, detail, value, weight=3.0, critical=True)
+            return warned(name, detail + " -- more leverage than ideal", value, weight=3.0)
+        return passed(name, detail, value, weight=3.0)
 
     def _check_interest_coverage(self) -> CheckResult:
         name = "Interest coverage"

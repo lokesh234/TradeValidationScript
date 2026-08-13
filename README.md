@@ -92,19 +92,27 @@ into the flow — the part a ticker list leaves out:
 
 ```
  AI CAPEX -- ~$500B a year, rising fast
-  Symbol  Company                   Per $1,000    Price  Market cap  What it sells into the flow
-  NVDA    NVIDIA Corporation              $350  $224.07    $5427.2B  accelerators, the largest single line on the bill
-  TSM     Taiwan Semiconductor Man         $90  $431.13    $2236.0B  fabricates the leading-edge die, whoever designed it
-  AVGO    Broadcom Inc.                    $70  $417.75    $1987.5B  custom accelerators and the switching silicon around them
-  MU      Micron Technology, Inc.          $45  $924.40    $1044.0B  HBM stacks, committed years ahead of delivery
-  VRT     Vertiv Holdings, LLC             $35  $292.56     $112.6B  power and cooling inside the hall
-  ANET    Arista Networks, Inc.            $30  $210.54     $265.5B  the switching fabric between the racks
-  AMAT    Applied Materials, Inc.          $25  $550.92     $437.4B  the tools that build the fabs the die come from
-  COHR    Coherent Corp.                   $15  $358.54      $70.1B  optical interconnect once copper runs out of reach
-  CRWV    CoreWeave, Inc.                    -  $107.99      $58.9B  rents the finished capacity back out by the hour
+  Symbol               Company  Per $1,000            Price  Market cap  What it sells into the flow
+  NVDA                  NVIDIA        $350  ######  $223.40    $5410.9B  accelerators, the largest single line on the bill
+  TSM     Taiwan Semiconductor         $90  ##....  $428.20    $2220.9B  fabricates the leading-edge die, whoever designed it
+  AVGO                Broadcom         $70  ##....  $415.25    $1975.6B  custom accelerators and the switching silicon around them
+  MU         Micron Technology         $45  #.....  $911.78    $1029.8B  HBM stacks, committed years ahead of delivery
+  VRT          Vertiv Holdings         $35  #.....  $286.72     $110.4B  power and cooling inside the hall
+  ANET         Arista Networks         $30  #.....  $209.42     $264.1B  the switching fabric between the racks
+  AMAT       Applied Materials         $25  #.....  $547.83     $435.0B  the tools that build the fabs the die come from
+  COHR                Coherent         $15  #.....  $354.31      $69.3B  optical interconnect once copper runs out of reach
+  CRWV               CoreWeave           -          $108.06      $59.0B  rents the finished capacity back out by the hour
 
 Pick a number, or type ticker(s): 1
 ```
+
+The bar is each name's cut against the flow's biggest collector, because the
+concentration is the point: one name takes $350 of every $1,000 of AI capex and
+the rest are arguing over the remainder, which is easier to see than to read
+off a column of figures. A name with no bar collects nothing from the flow — it
+spends the money, or has no revenue yet. Company names are printed without
+their legal form, so the column holds the name rather than "ASML Holding N.V. -
+Ne".
 
 That feeds straight into the normal validation, so the flow is just a
 shortlist with a reason attached.
@@ -125,6 +133,44 @@ buys, the companies it lands on with their role, and the catch.
 Skip the menu with `--spending 1` or `--spending "grid"`, and note this
 replaces the usual shortlist for whichever trade type you pick — you can shop
 the AI capex flow for a long term hold or an earnings gamble alike.
+
+#### What retail is saying about a flow
+
+Press `c` at the pick prompt (or add `--buzz` to `--spending`) to score the
+StockTwits chatter for every name in the flow and fold it into one score for
+the flow itself. No API key needed:
+
+```
+  ASML     $170   20 Silent      59 messages  leaning bullish 83%
+  AMAT     $150   40 Warm        79 messages  leaning bullish 72%
+  LRCX      $95   26 Quiet       25 messages  leaning bullish 86%
+  KLAC      $65   17 Silent      25 messages  leaning bullish 94%
+  ENTG      $19    3 Silent       1 message   leaning bullish 100%
+  TER       $16   35 Quiet       17 messages  leaning bullish 93%
+  ONTO       $7   13 Silent      20 messages  leaning bullish 100%
+  TSM         -   36 Quiet      120 messages  leaning bullish 89%
+  INTC        -   76 Hot        120 messages  leaning bullish 88%
+
+  FLOW           26 Quiet    466 messages, leaning bullish 86% -- weighted by what each name collects, 7 of 9 names
+```
+
+**The fold is weighted by what each name collects**, which is what makes the
+flow score different from an average of nine tickers. Intel is the loudest name
+on that list at 76, and it collects nothing from this flow — it spends it. The
+equipment makers who actually take the money are quiet, so the flow reads 26.
+An unweighted average would have said 30 and pointed at the wrong thing. Names
+with a dash in the share column are scored and listed but left out of the
+headline, the same line the tables themselves draw.
+
+**It reports, it does not grade.** Loud is a reason to stay away from an
+earnings gamble — the move is already priced into the options — and says very
+little about a long term hold, so there is no colour and no verdict on the
+number. The [per-ticker buzz check](#retail-buzz-score) does grade it, because
+there the strategy is known.
+
+Costs one lookup per name, roughly a minute for a nine-name flow, so it is
+never read unless asked for. Set `{ "buzz": { "source": "reddit" } }` and the
+flow is scored off Reddit instead, in one pass over a shared corpus.
 
 ### This week's earnings candidates
 
@@ -168,7 +214,7 @@ Tune it in config:
 the default source is StockTwits, which serves per-ticker streams publicly:
 
 ```
-  PASS   Retail buzz   31/100 Quiet   82 messages on stocktwits over 165h (0.50/hour), leaning mixed
+  PASS   x1 Retail buzz   31/100 Quiet   82 messages on stocktwits over 165h (0.50/hour), leaning mixed
 
  RETAIL BUZZ -- stocktwits, last 165 hours
   Volume         18         weight 4 -- 0.50 messages/hour
@@ -426,9 +472,9 @@ the move you're forecasting clears the premium; the same swing in shares
 grades none of that and never fetches a chain:
 
 ```
-  PASS   Expiry covers the hold  2026-11-20, 101 days out  expiry against a 88 day hold
-  PASS   Breakeven move          3.9% to break even        premium needs 3.9% against your
-                                                           16.3% target -- clears it with room
+  PASS   x2 Expiry covers the hold  20th November, 2026, 101 days out  expiry against a 88 day hold
+  PASS   x3 Breakeven move          3.9% to break even        premium needs 3.9% against your
+                                                              16.3% target -- clears it with room
 ```
 
 `Breakeven move` is the one that catches bad option trades: buying a contract
@@ -440,8 +486,9 @@ the move the options themselves are pricing.
 **Stock** drops
 the option ladders and the profit-next-day tables, and with them the three
 checks that only grade a chain — implied vs historical move, IV crush risk and
-options liquidity. That last one is *critical* for a contract trade: leaving it
-in would let a wide book veto a share position that never touches the book.
+options liquidity. That last one carries real weight on a contract trade:
+leaving it in would let a wide book drag down a share position that never
+touches the book.
 
 In their place comes **Stop vs expected move**. The straddle still prices the
 event even when you are not buying it — it is the market's own estimate of the
@@ -449,9 +496,9 @@ gap you are about to hold overnight, and a stop tighter than that gets jumped
 rather than filled:
 
 ```
-  FAIL   Stop vs expected move  2.9% stop vs 8.2% implied  stop distance against the move the
-                                                           options price in -- the gap jumps
-                                                           this stop, size for the loss
+  FAIL   x2 Stop vs expected move  2.9% stop vs 8.2% implied  stop distance against the move the
+                                                              options price in -- the gap jumps
+                                                              this stop, size for the loss
 ```
 
 A stop wider than the implied move passes, one inside half of it fails, and
@@ -521,20 +568,42 @@ walking the short leg outward is the decision actually being made — how much
 width to buy, and how much of the move to sell away:
 
 ```
- CALL DEBIT SPREADS -- 2026-08-14 expiry, per spread
-  Strikes   Width  Debit  Max profit  Max loss  Reward:risk  Breakeven  B/E move  To max
-  120/121  1 wide    $45         $55       $45       1.22:1     120.45     +0.0%   +0.5%
-  120/122  2 wide    $85        $115       $85       1.35:1     120.85     +0.3%   +1.3%
-  120/123  3 wide   $130        $170      $130       1.31:1     121.30     +0.7%   +2.1%
-  120/124  4 wide   $173        $227      $173       1.32:1     121.72     +1.1%   +3.0%
-  120/125  5 wide   $203        $297      $203       1.47:1     122.03     +1.3%   +3.8%  <- implied move reaches
+ CALL DEBIT SPREADS -- 14th August, 2026 [2026-08-14] expiry, per spread
+  Strikes   Width  Debit  Max profit  Reward:risk  Breakeven  B/E move  To max
+  120/121  1 wide    $45         $55       1.22:1     120.45     +0.0%   +0.5%
+  120/122  2 wide    $85        $115       1.35:1     120.85     +0.3%   +1.3%
+  120/123  3 wide   $130        $170       1.31:1     121.30     +0.7%   +2.1%
+  120/124  4 wide   $173        $227       1.32:1     121.72     +1.1%   +3.0%
+  120/125  5 wide   $203        $297       1.47:1     122.03     +1.3%   +3.8%
+  Long the strike nearest the money, short each strike further out. ... Figures are
+  per spread -- the payoff tables below carry the sizing. The options price a move of
+  8.1%. Every pairing above is inside that move -- the ladder runs out before the move
+  does, so --strikes buys wider ones.
 ```
 
 `To max` is the move that reaches the short strike, where the payoff stops.
-The marker flags the widest pairing the implied move still reaches — past it
-you are paying for upside the options market doesn't expect to arrive. Max loss
-is the debit and nothing worse: the long leg covers the short one, so there is
-no assignment risk to size for.
+**Max loss is not a column**: for a debit spread it is the debit, in every row,
+by definition — the long leg covers the short one, so there is no assignment
+risk to size for. Printing it twice said one fact three times.
+
+**Figures are per spread whatever `--contracts` says.** This table describes
+the structures on offer; the payoff tables below describe the position you are
+taking and print `2 contracts` in their own titles. Multiplying in both places
+prints the same arithmetic twice.
+
+A `<- implied move reaches` marker appears on the widest pairing the implied
+move still covers — past it you are paying for upside the options market
+doesn't expect to arrive. It only appears when that boundary falls **inside**
+the table. When every pairing is within the implied move, as above, there is no
+such line and marking the widest row would invent one; the note says the ladder
+ran out first instead, which is the actual signal.
+
+**A spread gets no single-leg ladder.** Half of that table prices an outright
+contract — its cost, breakeven move and theta all describe buying the long leg
+on its own, and a debit is a fraction of that. On a $260 stock with a $118 call,
+the ladder reads `$11,812` a contract while the 260/270 spread costs `$187` and
+breaks even on a 0.7% move rather than a 46% one. Everything a pairing actually
+costs is in the table above.
 
 The profit table reprices **both legs** against the crushed volatility, which
 is the whole point of the structure — what the long leg gives up, the short leg
@@ -635,12 +704,30 @@ Which spread are you trading? [Enter to keep them all]: 120/125
 How many spreads are you buying? [1]: 2
 ```
 
-The floor is your own rule, so leaving it blank grades nothing — the
-`Spread reward:risk` check reports the best pairing and skips. Give one and it
-grades: `1 of 5 pairings clear your 1.40:1 floor`, with the qualifying rows
-marked in the table. Nothing clearing it at all fails the check, since a chain
-that doesn't pay for its risk is a trade not worth taking. `2:1` and `2` are
-both accepted; `--min-reward-risk 1.4` skips the question.
+The floor is asked **before** the pairings are built, because it decides which
+pairings are worth building. Reward:risk climbs with width — the short leg
+sells more of the move the further out it goes — so a floor the near strikes
+can't clear is often met a few strikes out. Given one, the short leg keeps
+walking past the default window until enough pairings meet it:
+
+```
+ CALL DEBIT SPREADS -- 17th December, 2027 [2027-12-17] expiry, per spread
+  Strikes     Width   Debit  Max profit  Reward:risk  Breakeven  B/E move  To max
+  540/780  240 wide  $6,750     $17,250       2.56:1     607.50    +10.8%  +42.3%  <- least width that meets 2.50:1
+  540/800  260 wide  $7,162     $18,838       2.63:1     611.62    +11.6%  +45.9%
+  540/820  280 wide  $7,532     $20,468       2.72:1     615.33    +12.3%  +49.6%
+```
+
+Without the floor that same expiry lists 540/560 through 540/620 at 1.86:1 to
+1.97:1 — none of them close. The marker goes on the **narrowest** pairing that
+clears it, which is the answer a floor actually asks for: the least width that
+buys the ratio.
+
+Leaving it blank grades nothing — the `Spread reward:risk` check reports the
+best pairing and skips. Nothing on the chain clearing it fails the check and
+says so in the table, since a chain that doesn't pay for its risk is a trade
+not worth taking. `2:1` and `2` are both accepted; `--min-reward-risk 1.4`
+skips the question.
 
 The profit tables then show the whole position rather than a single contract —
 cost, P&L and value all scale, and the heading says `3 contracts` so you can't
@@ -651,14 +738,14 @@ premium, so `contracts x ATM cost` is the real money at stake, and that fills
 in the `Risk per trade` check without you working it out:
 
 ```
-  FAIL ! Risk per trade             13.83% ($6.91K)
+  FAIL   x3 Risk per trade             13.83% ($6.91K)
  Notes
   - Dollars at risk estimated at $6,915 (3 x $2,305, the ATM call).
     Pass --premium to override.
 ```
 
 Three AMAT calls is 13.8% of a $50k account against the 2% cap for a binary
-event — a critical failure that vetoes the trade. An explicit `--premium`
+event — the heaviest failure on the sheet at `x3`. An explicit `--premium`
 always wins over the estimate. Skip the prompt with `--contracts 3`.
 
 ### The option ladder
@@ -685,7 +772,7 @@ Then the strikes themselves, on the side you chose, for the expiry that
 captures the report:
 
 ```
- CALLS -- 2026-08-14 expiry, 5 strikes from the money
+ CALLS -- 14th August, 2026 [2026-08-14] expiry, 5 strikes from the money
   Strike    Bid    Ask    Mid  Cost/contract  IV%  Theta/day   Gamma  OI  Vol  B/E move
   522.50  21.20  24.90  23.05         $2,305  107      -$293  0.0068  50   12     +4.5%  <- ATM
   525.00  21.00  23.65  22.32         $2,232  109      -$299  0.0067  89   20     +4.8%
@@ -817,12 +904,15 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--earnings-date` | Earnings only: which report to trade, `YYYY-MM-DD`. Prompts if omitted. |
 | `--allow-earnings` | Short term only: permit holding through a scheduled report. |
 | `--spending` | Browse the market's big spending flows and their beneficiaries, then pick a ticker from one. Takes a number or a name; bare lists them. |
+| `--buzz` | Score retail chatter out of 100. With `--spending`, scores the whole flow — one lookup per name. |
 | `--benchmark` | Relative-strength benchmark. Default `SPY`. |
 | `--period` | History window to download. Default `3y`. |
 | `--config` | JSON file overriding any threshold. |
+| `--weight` | How much one check counts: `--weight "Free cash flow=5"`. Repeatable; `0` shows the check without scoring it. Wins over `--config`. |
 | `--width` | Report width in columns. Defaults to your terminal width. |
 | `--quiet` | Hide the explanation line under each check. |
 | `--no-color` | Disable ANSI colour (also honours `NO_COLOR`). |
+| `--color` | Force ANSI colour when stdout is not a terminal. `trade.sh` uses it for the listings it reads back through a pipe. |
 
 Exit codes: `0` something is tradeable, `1` a symbol failed to load, `3` every
 symbol came back NO-GO. `trade.sh` passes these through, so it composes in a
@@ -838,20 +928,33 @@ python3 -m venv .venv
 ## Reading the output
 
 ```
-  PASS   Trend structure            217.55 / 20EMA 208.81 / 50SMA 206.14
-           stacked bullish: price over 20EMA over 50SMA
-  FAIL ! Options liquidity          16.9% spread, OI 31
-           ATM 522.50 strike, 4 DTE -- book too wide to trade
+  PASS   x2 Trend structure           217.55 / 20EMA 208.81 / 50SMA 206.14
+             stacked bullish: price over 20EMA over 50SMA
+  FAIL   x2 Options liquidity         16.9% spread, OI 31
+             ATM 522.50 strike, 4 DTE -- book too wide to trade
 ```
 
 - **PASS / WARN / FAIL** earn 100% / 50% / 0% of the check's weight.
+- **`x2` is that weight.** Checks are not equal: profitability and the balance
+  sheet carry `x3` in a long-term hold, the PEG ratio `x1`. It is there so you
+  can tell which of six failures actually sank the verdict — a `x3` FAIL costs
+  three times what a `x1` FAIL does. The verdict line gives the denominator:
+  `data coverage 84% (26 of 31 weight scored)`.
 - **SKIP** means the data wasn't available. Skipped checks are excluded from the
   score rather than counted against you, and the report shows what percent of
   the weight actually had data. Below 65% coverage it's flagged low confidence.
-- A `!` marks a **critical** check. A failed critical check vetoes the trade
-  outright, no matter how high the score is — that's why you can see `NO-GO` at
-  76/100.
+  A skipped check still shows its weight — it is what the coverage figure is
+  missing.
+- **Nothing vetoes.** No single check can force a NO-GO on its own; the
+  weighted score decides, and every failure argues its case in proportion to
+  its weight. Read the heavy failures, not just the count of them.
 - Default cutoffs: **GO** at 75+, **CAUTION** at 60-75, **NO-GO** below.
+
+Dates are written `19th March, 2027 [2027-03-19]` — the long form because an
+expiry is something you compare against a calendar in your head, the bracketed
+ISO because it is what you type back into `--earnings-date` and what the chain
+is keyed by. The narrow check-value column drops the bracket and keeps the long
+form, since the full pair would push the explanation onto its own line.
 
 Colour is consistent throughout the report: **bold is a figure**, grey is the
 explanation of it, and colour is a verdict — the status badge, or the sign of a
@@ -865,8 +968,8 @@ a single line, with the explanation sitting beside the value instead of beneath
 it:
 
 ```
-  PASS   Historical reaction size    6.1% avg        average absolute move over the last 8 reports
-  FAIL   Reaction consistency        2/4 over 2.0%   recent moves: -14.1%, +1.2%, +8.1%, -0.9% -- ...
+  PASS   x3 Historical reaction size    6.1% avg        average absolute move over the last 8 reports
+  FAIL   x1 Reaction consistency        2/4 over 2.0%   recent moves: -14.1%, +1.2%, +8.1%, -0.9% -- ...
 ```
 
 That takes the earnings checklist from 23 lines to 14 at 140 columns, and 12 at
@@ -881,7 +984,7 @@ its explanation to the next line rather than losing digits.
 Tables pair up side by side too, divided by `||`, when two fit across:
 
 ```
- ESTIMATES -- what the street expects from ...   ||  CALLS -- 2026-08-14 expiry, 5 strikes ...
+ ESTIMATES -- what the street expects from ...   ||  CALLS -- 14th August, 2026 [2026-08-14] ...
   Metric                       Consensus         ||   Strike    Bid    Ask    Mid  Cost/contract
   Forward P/E                      30.56         ||   522.50  21.20  24.90  23.05      $2,305
 ```
@@ -932,6 +1035,81 @@ instead of editing the file:
 
 Unknown keys are rejected rather than silently ignored, so typos surface
 immediately.
+
+### Your own weights
+
+The `x3` beside each check is how much it counts, and the defaults are one
+opinion about what matters. Every interactive run offers to change them:
+
+```
+Do you want to set your own check weights? [y/N]: y
+
+  How much each check counts. Blank keeps what it has.
+
+   1) Company size            x1
+   2) Liquidity               x1
+   3) Profitability           x3
+   4) Free cash flow          x3
+   5) Revenue growth          x2
+   ...
+
+Weights in that order, comma separated [e.g. 3,2,3,5 -- Enter to keep all]: 3,2,3,5
+  Company size x1 -> x3; Liquidity x1 -> x2; Free cash flow x3 -> x5
+```
+
+The list is **positional**, so `3,2,3,5` sets the first four and leaves the rest
+alone. `[3,2,3,5]` works too. An empty slot skips one — `3,,5` changes the first
+and third and leaves the second where it was. Give more numbers than there are
+checks and it says so and asks again.
+
+The offer comes after the checks are built, because which checks run depends on
+the strategy *and* on whether you're trading shares, contracts or a spread — so
+the list you're weighting is the one you're actually about to be scored on. It's
+asked once per run and applies to every ticker in it; reweighting the checklist
+per symbol would make the summary table meaningless. It's skipped entirely when
+stdin isn't a terminal, when `--quiet` is set, or when weights were already
+given by flag or config.
+
+For something you want to keep, override by name — the name is the label
+printed beside the check:
+
+```json
+{
+  "weights": {
+    "Free cash flow": 6,
+    "Valuation (P/E)": 4,
+    "PEG ratio": 0
+  }
+}
+```
+
+Or for a single run, without a file:
+
+```bash
+.venv/bin/python validate.py HOOD -t long --weight "Free cash flow=6" --weight "PEG ratio=0"
+```
+
+```
+  PASS   x3 Profitability           operating margin 43.9%, net income $1.88B
+  WARN   x6 Free cash flow          $1.58B latest, 2/4 years positive
+  FAIL   x4 Valuation (P/E)         trailing 42.0, forward 29.8
+  FAIL   x0 PEG ratio               2.15
+ NO-GO     [################..............]  52 / 100
+          6 pass, 3 warn, 5 fail, 3 skipped  |  data coverage 86% (30 of 35 weight scored)
+```
+
+**Zero is the useful one**: the check still runs and still prints, it just
+stops counting — that's how you retire a check you don't believe in without
+losing sight of it. Negative weights are rejected, since one would pay you for
+failing. The denominator on the verdict line moves with your weights, so the
+score stays a percentage of what you decided to measure.
+
+Weights apply wherever the name appears, which for the shared checks
+(`Liquidity`, `Risk per trade`) means all three strategies. Naming a check that
+this report doesn't run is fine and silent — one config is meant to cover all
+three — but if **none** of your names match anything, the report says so rather
+than leaving a typo looking like a weight that did nothing. `--weight` wins
+over `--config` when both name the same check.
 
 ## Layout
 

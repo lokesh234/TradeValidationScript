@@ -9,6 +9,7 @@ import sys
 from dataclasses import replace
 from typing import List, Optional, Sequence
 
+from . import dates
 from .checks import Status
 from .strategies.base import UNAVAILABLE, Panel, Report
 
@@ -119,7 +120,7 @@ def render(
     out.append(
         palette.grey(
             " %s  |  %s  |  data as of %s"
-            % (report.strategy_name, report.horizon, report.as_of.isoformat())
+            % (report.strategy_name, report.horizon, dates.long_date(report.as_of))
         )
     )
     out.append(palette.cyan(bar))
@@ -142,14 +143,27 @@ def render(
     return "\n".join(out)
 
 
+def weight_text(weight: float) -> str:
+    """A check's weight as it is printed: x3, or x2.5 where it is fractional.
+
+    The score is weighted, so a FAIL on a 3 costs three times what a FAIL on a
+    1 does. Without this the reader has no way to tell which of six failures
+    was the one that sank the verdict.
+    """
+    if float(weight).is_integer():
+        return "x%d" % int(weight)
+    return "x%g" % weight
+
+
 def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) -> List[str]:
     """One line per check where the width allows, two where it doesn't."""
     results = report.results
     name_w = min(max((len(r.name) for r in results), default=20), 32)
     value_w = min(max((len(r.value) for r in results), default=0), 30)
+    weight_w = max((len(weight_text(r.weight)) for r in results), default=2)
 
-    # "  PASS ! " before the name, then two spaces between each column.
-    detail_col = 9 + name_w + 2 + value_w + 2
+    # "  PASS ! x3 " before the name, then two spaces between each column.
+    detail_col = 9 + weight_w + 1 + name_w + 2 + value_w + 2
     detail_room = width - detail_col
     inline = verbose and detail_room >= MIN_INLINE_DETAIL
 
@@ -157,6 +171,10 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
     for result in results:
         badge = palette.status(result.status, "%-4s" % result.status.value)
         flag = palette.red("!") if (result.critical and result.status is Status.FAIL) else " "
+        # Grey, because the weight is a fact about the checklist rather than
+        # about this stock. A skipped check keeps its weight on show: it is
+        # what the coverage figure is missing.
+        weight = palette.grey("%*s" % (weight_w, weight_text(result.weight)))
         detail = result.detail if verbose else ""
         # An over-long value would push the detail out of its column, so that
         # row drops the detail to its own line rather than breaking alignment.
@@ -168,8 +186,8 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
         # ljust never truncates, so a long value overflows rather than losing
         # digits.
         if fits:
-            head = "  %s %s %s  %s  " % (
-                badge, flag, result.name.ljust(name_w),
+            head = "  %s %s %s %s  %s  " % (
+                badge, flag, weight, result.name.ljust(name_w),
                 _check_value(result, result.value.ljust(value_w), palette),
             )
             lines = _wrap_text(detail, width, " " * detail_col)
@@ -179,15 +197,15 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
 
         if result.value:
             out.append(
-                "  %s %s %s  %s"
-                % (badge, flag, result.name.ljust(name_w), _check_value(result, result.value, palette))
+                "  %s %s %s %s  %s"
+                % (badge, flag, weight, result.name.ljust(name_w), _check_value(result, result.value, palette))
             )
         else:
-            out.append("  %s %s %s" % (badge, flag, result.name))
+            out.append("  %s %s %s %s" % (badge, flag, weight, result.name))
 
         if detail:
             # Keep the detail in its column when there is one to keep it in.
-            indent = " " * (detail_col if inline else 11)
+            indent = " " * (detail_col if inline else 12 + weight_w)
             out.extend(palette.grey(line) for line in _wrap_text(detail, width, indent))
     return out
 
@@ -201,6 +219,11 @@ def _check_value(result, text: str, palette: Palette) -> str:
     if result.status is Status.SKIP or result.value.strip() in ("", "n/a"):
         return palette.grey(text)
     return palette.bold(text)
+
+
+def _weight_figure(weight: float) -> str:
+    """A weight total without a trailing .0 on the common whole-number case."""
+    return "%d" % weight if float(weight).is_integer() else "%g" % weight
 
 
 def _render_verdict(report: Report, palette: Palette) -> List[str]:
@@ -217,14 +240,19 @@ def _render_verdict(report: Report, palette: Palette) -> List[str]:
     lines = [
         " %s  %s  %s"
         % (color(palette.bold("%-8s" % verdict.label)), color(meter), palette.bold("%.0f / 100" % verdict.score)),
+        # The weights beside each check need a denominator to be read against,
+        # and the coverage figure is exactly that ratio spelled out.
         palette.grey(
-            "          %d pass, %d warn, %d fail, %d skipped  |  data coverage %.0f%%"
+            "          %d pass, %d warn, %d fail, %d skipped  |  data coverage %.0f%% "
+            "(%s of %s weight scored)"
             % (
                 counts[Status.PASS],
                 counts[Status.WARN],
                 counts[Status.FAIL],
                 counts[Status.SKIP],
                 verdict.coverage_pct,
+                _weight_figure(verdict.counted_weight),
+                _weight_figure(verdict.total_weight),
             )
         ),
     ]

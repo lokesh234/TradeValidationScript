@@ -13,7 +13,10 @@ from unittest.mock import patch
 import pytest
 
 import validate
+from tradeval.buzz import BuzzScore
+from tradeval.checks import failed, passed
 from tradeval.config import Config
+from tradeval.report import Palette
 
 
 def test_build_parser_defaults():
@@ -168,9 +171,158 @@ def test_main_resolve_sector_invalid_choice_exits_nonzero(capsys):
     assert validate.main(["--resolve-sector", "not-a-sector"]) == 2
 
 
+def test_parse_weight_flags_reads_name_and_value():
+    assert validate.parse_weight_flags(['Free cash flow=5']) == {"Free cash flow": 5.0}
+    assert validate.parse_weight_flags(None) == {}
+    assert validate.parse_weight_flags([]) == {}
+
+
+def test_parse_weight_flags_splits_on_the_last_equals():
+    """A check name is free text, so the value is whatever follows the last '='."""
+    assert validate.parse_weight_flags(["Debt = equity=2"]) == {"Debt = equity": 2.0}
+
+
+def test_parse_weight_flags_rejects_malformed_input():
+    with pytest.raises(ValueError, match="NAME=VALUE"):
+        validate.parse_weight_flags(["Free cash flow"])
+    with pytest.raises(ValueError, match="NAME=VALUE"):
+        validate.parse_weight_flags(["=5"])
+    with pytest.raises(ValueError, match="not a number"):
+        validate.parse_weight_flags(["Free cash flow=heavy"])
+
+
+def test_main_rejects_a_bad_weight_before_any_network_call(capsys):
+    assert validate.main(["NVDA", "-t", "long", "--weight", "Free cash flow=-2"]) == 2
+    assert "cannot be negative" in capsys.readouterr().err
+
+
+def test_main_rejects_a_malformed_weight_flag(capsys):
+    assert validate.main(["NVDA", "-t", "long", "--weight", "nonsense"]) == 2
+    assert "NAME=VALUE" in capsys.readouterr().err
+
+
+def _weight_results():
+    return [
+        passed("Company size", "d", weight=1.0),
+        passed("Liquidity", "d", weight=1.0),
+        failed("Profitability", "d", weight=3.0),
+        failed("Free cash flow", "d", weight=3.0),
+        passed("Revenue growth", "d", weight=2.0),
+    ]
+
+
+def test_parse_weight_list_reads_a_positional_array():
+    assert validate.parse_weight_list("3,2,3,5", 5) == {0: 3.0, 1: 2.0, 2: 3.0, 3: 5.0}
+    # Brackets are how most people would write a list, so accept them.
+    assert validate.parse_weight_list("[3,2]", 5) == {0: 3.0, 1: 2.0}
+    assert validate.parse_weight_list("  ", 5) == {}
+
+
+def test_parse_weight_list_skips_empty_slots():
+    """A gap keeps that check's default, so one deep in the list can change alone."""
+    assert validate.parse_weight_list("3,,5", 5) == {0: 3.0, 2: 5.0}
+
+
+def test_parse_weight_list_rejects_more_weights_than_checks():
+    with pytest.raises(ValueError, match="4 weights for 3 checks"):
+        validate.parse_weight_list("1,2,3,4", 3)
+
+
+def test_parse_weight_list_rejects_junk_and_negatives():
+    with pytest.raises(ValueError, match="not a number"):
+        validate.parse_weight_list("3,heavy", 5)
+    with pytest.raises(ValueError, match="negative"):
+        validate.parse_weight_list("3,-1", 5)
+
+
+def test_prompt_custom_weights_declining_keeps_the_defaults():
+    with patch("builtins.input", side_effect=["n"]):
+        assert validate.prompt_custom_weights(_weight_results(), Palette(False)) == {}
+    # Enter alone is the same as no.
+    with patch("builtins.input", side_effect=[""]):
+        assert validate.prompt_custom_weights(_weight_results(), Palette(False)) == {}
+
+
+def test_prompt_custom_weights_maps_the_array_onto_the_checks_in_order():
+    with patch("builtins.input", side_effect=["y", "3,2,3,5"]):
+        weights = validate.prompt_custom_weights(_weight_results(), Palette(False))
+    assert weights == {
+        "Company size": 3.0,
+        "Liquidity": 2.0,
+        "Profitability": 3.0,
+        "Free cash flow": 5.0,
+    }
+    # Nothing was said about the fifth, so it keeps its default.
+    assert "Revenue growth" not in weights
+
+
+def test_prompt_custom_weights_reasks_after_a_bad_list(capsys):
+    with patch("builtins.input", side_effect=["y", "1,2,3,4,5,6", "0,,4"]):
+        weights = validate.prompt_custom_weights(_weight_results(), Palette(False))
+    assert weights == {"Company size": 0.0, "Profitability": 4.0}
+    assert "6 weights for 5 checks" in capsys.readouterr().out
+
+
+def test_prompt_custom_weights_survives_a_closed_stdin():
+    with patch("builtins.input", side_effect=EOFError):
+        assert validate.prompt_custom_weights(_weight_results(), Palette(False)) == {}
+
+
+def test_prompt_custom_weights_shows_what_changed(capsys):
+    with patch("builtins.input", side_effect=["y", "3,2,3"]):
+        validate.prompt_custom_weights(_weight_results(), Palette(False))
+    summary = capsys.readouterr().out.strip().splitlines()[-1]
+    assert "Company size x1 -> x3" in summary
+    assert "Liquidity x1 -> x2" in summary
+    # Restating a check's own weight is not a change, so it is not reported.
+    assert "Profitability" not in summary
+
+
 def test_main_list_spending_exits_zero(capsys):
     assert validate.main(["--list-spending"]) == 0
     assert "AI Capex" in capsys.readouterr().out
+
+
+def test_main_list_spending_colours_only_when_asked(capsys):
+    validate.main(["--list-spending"])
+    assert "\033[" not in capsys.readouterr().out
+    # The shell front end reads this back through a pipe, where the palette
+    # sees no terminal and would otherwise drop the colour.
+    validate.main(["--list-spending", "--color"])
+    assert "\033[" in capsys.readouterr().out
+
+
+def test_main_list_spending_buzz_folds_the_flow(capsys):
+    def fake(symbols, rules):
+        return {s: BuzzScore(symbol=s, score=50.0, mentions=3) for s in symbols}
+
+    with patch("tradeval.stocktwits.score_symbols", side_effect=fake):
+        assert validate.main(["--list-spending-buzz", "6"]) == 0
+    out = capsys.readouterr().out
+    assert "ASML" in out
+    assert "FLOW" in out and "50 Warm" in out
+
+
+def test_main_list_spending_buzz_unknown_flow_exits_two(capsys):
+    assert validate.main(["--list-spending-buzz", "not-a-flow"]) == 2
+
+
+def test_main_list_spending_buzz_exits_nonzero_when_nothing_read(capsys):
+    def fake(symbols, rules):
+        return {s: BuzzScore.unavailable(s, "stream refused") for s in symbols}
+
+    with patch("tradeval.stocktwits.score_symbols", side_effect=fake):
+        assert validate.main(["--list-spending-buzz", "6"]) == 1
+    assert "stream refused" in capsys.readouterr().out
+
+
+def test_buzz_scorer_follows_the_configured_source():
+    args = validate.build_parser().parse_args(["--buzz"])
+    config = Config()
+    config.buzz.source = "reddit"
+    with patch("tradeval.buzz.score_symbols", return_value={"AAA": "stub"}) as mocked:
+        assert validate.buzz_scorer(args, config)(["AAA"]) == {"AAA": "stub"}
+    mocked.assert_called_once()
 
 
 def test_main_buzz_source_prints_configured_source(capsys):

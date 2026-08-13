@@ -15,14 +15,21 @@ and the second as fact.
 
 from __future__ import annotations
 
+import math
+import re
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from . import discover
+from .report import Palette
 from .strategies.base import Panel
 
 # The figures below are annual estimates as of this date, not live data.
 AS_OF = "2026 estimates"
+
+# Columns for the plain-text listing the shell front end prints.
+COMPANY_WIDTH = 20
+SHARE_BAR_WIDTH = 6
 
 
 @dataclass
@@ -396,28 +403,44 @@ def format_share(share: Optional[float]) -> str:
     return "$%.0f" % share if share else "-"
 
 
-def flow_panel(flow: SpendingFlow, snapshots: Optional[List] = None) -> Panel:
+def flow_panel(
+    flow: SpendingFlow,
+    snapshots: Optional[List] = None,
+    buzz: Optional[Dict[str, object]] = None,
+) -> Panel:
     """One flow: what it buys, and the companies standing in front of it."""
     prices = {snap.symbol: snap for snap in (snapshots or [])}
+    largest = largest_share(flow)
     rows = []
     for winner in flow.winners:
         snap = prices.get(winner.symbol)
-        rows.append(
-            [
-                winner.symbol,
-                snap.name[:24] if snap and snap.name else "",
-                format_share(winner.share),
-                "$%.2f" % snap.price if snap and snap.price else "-",
-                "$%.1fB" % (snap.market_cap / 1e9) if snap and snap.market_cap else "-",
-                winner.role,
-            ]
-        )
+        row = [
+            winner.symbol,
+            clean_name(snap.name if snap else None, 24),
+            format_share(winner.share),
+            share_bar(winner.share, largest),
+            "$%.2f" % snap.price if snap and snap.price else "-",
+            "$%.1fB" % (snap.market_cap / 1e9) if snap and snap.market_cap else "-",
+        ]
+        if buzz is not None:
+            row.append(format_buzz(buzz.get(winner.symbol)))
+        row.append(winner.role)
+        rows.append(row)
+
+    headers = ["Symbol", "Company", "Per $1,000", "", "Price", "Market cap"]
+    if buzz is not None:
+        headers.append("Buzz")
+    headers.append("What it sells into the flow")
+
     note = "%s  The catch: %s" % (flow.what, flow.catch) if flow.catch else flow.what
     return Panel(
         title="%s -- %s, %s" % (flow.name.upper(), flow.size, flow.direction),
-        headers=["Symbol", "Company", "Per $1,000", "Price", "Market cap", "What it sells into the flow"],
+        headers=headers,
         rows=rows,
-        left_align=[1, 5],
+        # The bar reads as a picture of the column beside it, not as a figure,
+        # so it hangs off the share rather than being right-aligned away from
+        # it. Buzz is padded to align on its own figure, so it goes left too.
+        left_align=[3, len(headers) - 1] + ([len(headers) - 2] if buzz is not None else []),
         note="%s  %s" % (note, split_note(flow)),
     )
 
@@ -439,16 +462,136 @@ def flow_snapshots(flow: SpendingFlow) -> List:
     return discover.company_snapshots(flow.symbols)
 
 
-def menu_lines() -> List[str]:
-    """Numbered flows as plain text, for the shell front end."""
-    return ["  %d) %-44s %s" % (n, f.name, f.size) for n, f in enumerate(FLOWS, start=1)]
+# Yahoo returns the full legal name. The form of incorporation is the same
+# noise on every row, and it is what pushes the actual name out of the column.
+LEGAL_SUFFIX_RE = re.compile(
+    r"[,\s]+(?:incorporated|inc|corporation|corp|company|limited|ltd|plc|co|"
+    r"l\.?\s*l\.?\s*c|n\.?\s*v|s\.?\s*a|a\.?\s*g|s\.?\s*p\.?\s*a)\.?$",
+    re.IGNORECASE,
+)
+# "Eli Lilly and Company" loses its suffix and is left hanging on the "and".
+DANGLING_RE = re.compile(r"[,\s]+(?:and|&)$", re.IGNORECASE)
 
 
-def format_winner(winner: Beneficiary, snapshot: Optional[object] = None) -> str:
-    """One beneficiary as a line: who they are, what they take, what they sell."""
+def clean_name(name: Optional[str], width: int = COMPANY_WIDTH) -> str:
+    """A company name short enough to scan, with the legal form dropped.
+
+    "ASML Holding N.V. - New York Registry Shares" is 43 characters of which
+    12 are the company. Truncation alone leaves "ASML Holding N.V. - Ne".
+    """
+    text = (name or "").split(" - ")[0].strip()
+    # "Holding N.V." sheds one suffix per pass; "Inc." only needs the one.
+    for _ in range(3):
+        shorter = LEGAL_SUFFIX_RE.sub("", text).strip()
+        if shorter == text or not shorter:
+            break
+        text = shorter
+    text = DANGLING_RE.sub("", text) or text
+    if len(text) <= width:
+        return text
+    cut = text[:width]
+    # Cut on a word boundary -- a name broken mid-word reads as a typo. A cut
+    # that already lands on one keeps its last word rather than dropping it.
+    if text[width] != " ":
+        cut = cut.rsplit(" ", 1)[0] or text[:width]
+    return cut.rstrip(",")
+
+
+def share_bar(share: Optional[float], largest: Optional[float], width: int = SHARE_BAR_WIDTH) -> str:
+    """The share as a bar against the flow's biggest collector.
+
+    The concentration is the point of these tables -- that two names take most
+    of a flow is easier to see than to read off a column of numbers. A name
+    that collects nothing gets no bar rather than an empty one.
+    """
+    if not share or not largest or largest <= 0:
+        return " " * width
+    filled = min(max(int(math.ceil(share / largest * width)), 1), width)
+    return "#" * filled + "." * (width - filled)
+
+
+def largest_share(flow: SpendingFlow) -> Optional[float]:
+    """The biggest per-$1,000 cut in a flow, which every bar is drawn against."""
+    shares = [w.share for w in flow.winners if w.share]
+    return max(shares) if shares else None
+
+
+def format_buzz(score: Optional[object]) -> str:
+    """A buzz score as "62 Hot", or a dash where it could not be measured.
+
+    The figure is padded and the label is not, so a column of these lines up on
+    the number -- which is the part being compared down the column.
+    """
+    if score is None:
+        return "%3s" % "-"
+    if not getattr(score, "available", False):
+        return "%3s" % "n/a"
+    return "%3.0f %s" % (score.score, score.label)
+
+
+def menu_lines(palette: Optional[Palette] = None) -> List[str]:
+    """Numbered flows as plain text, for the shell front end.
+
+    The direction is left off deliberately. All nine flows are rising -- a
+    column that says the same thing nine times is width spent on nothing, and
+    the qualifier that differs is the catch printed once a flow is picked.
+    """
+    paint = palette or Palette(False)
+    # Sized from the names themselves, so the figures line up without leaving
+    # a gap the longest name never fills.
+    width = max(len(flow.name) for flow in FLOWS)
+    return [
+        "  %s %s %s"
+        % (
+            paint.grey("%d)" % number),
+            paint.bold("%-*s" % (width, flow.name)),
+            paint.grey(flow.size),
+        )
+        for number, flow in enumerate(FLOWS, start=1)
+    ]
+
+
+def format_winner(
+    winner: Beneficiary,
+    snapshot: Optional[object] = None,
+    palette: Optional[Palette] = None,
+    largest: Optional[float] = None,
+    buzz: Optional[object] = None,
+) -> str:
+    """One beneficiary as a line: who they are, what they take, what they sell.
+
+    ``largest`` scales the share bar; without it the bar is left off, which is
+    what a single line printed on its own wants.
+    """
+    paint = palette or Palette(False)
     price = "$%.2f" % snapshot.price if snapshot is not None and snapshot.price else "-"
     cap = "$%.1fB" % (snapshot.market_cap / 1e9) if snapshot is not None and snapshot.market_cap else "-"
-    name = (snapshot.name[:22] if snapshot is not None and snapshot.name else "")
-    return "%-6s %-22s %6s %9s %9s  %s" % (
-        winner.symbol, name, format_share(winner.share), price, cap, winner.role
-    )
+    name = clean_name(snapshot.name if snapshot is not None else None)
+    share = format_share(winner.share)
+
+    # Pad first, colour second: an escape code inside a width would be counted
+    # as part of it and every column below would sit one step to the left.
+    cells = [
+        paint.cyan(paint.bold("%-6s" % winner.symbol)),
+        "%-*s" % (COMPANY_WIDTH, name),
+        paint.bold("%6s" % share) if winner.share else paint.grey("%6s" % share),
+    ]
+    if largest:
+        cells.append(paint.cyan(share_bar(winner.share, largest)))
+    cells.extend([paint.bold("%9s" % price), paint.grey("%9s" % cap)])
+    if buzz is not None:
+        cells.append(_buzz_cell(buzz, paint))
+    cells.append(" " + paint.grey(winner.role))
+    return " ".join(cells)
+
+
+def _buzz_cell(score: object, paint: Palette) -> str:
+    """Score bold, label grey -- and no colour for the reading.
+
+    Loud is not the same as good: hype is a reason to buy for one strategy and
+    a reason to stay away for another, so the column reports and does not
+    grade.
+    """
+    if score is None or not getattr(score, "available", False):
+        return paint.grey("%-9s" % ("n/a" if score is not None else "-"))
+    return paint.bold("%3.0f" % score.score) + " " + paint.grey("%-5s" % score.label)

@@ -86,9 +86,9 @@ class ShortTermStrategy(OptionsPlaybook, Strategy):
             self._check_volatility(),
             self._check_earnings_blackout(),
             self._check_reward_risk(),
-            self.check_liquidity(self.rules.min_dollar_volume, weight=2.0, critical=True),
+            self.check_liquidity(self.rules.min_dollar_volume, weight=2.0),
             self._check_price_floor(),
-            self.check_position_size(self.rules.max_account_risk_pct, weight=2.0, critical=True),
+            self.check_position_size(self.rules.max_account_risk_pct, weight=2.0),
             self.check_concentration(self.rules.max_position_pct_of_account, weight=1.0),
             self._check_gap_risk(),
         ]
@@ -277,7 +277,6 @@ class ShortTermStrategy(OptionsPlaybook, Strategy):
             detail + " -- earnings lands mid-trade; use --allow-earnings or a longer horizon",
             value,
             weight=2.0,
-            critical=True,
         )
 
     # -- trade plan ---------------------------------------------------------
