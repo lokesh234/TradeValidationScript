@@ -846,6 +846,11 @@ class Strategy(ABC):
             title=title,
             headers=[""],
             rows=[[line] for line in lines],
+            # A key of its own so the layout cannot set this beside the
+            # headlines. It belongs to the profile above it, and a graph
+            # squeezed into half the width next to an unrelated table reads
+            # as part of that table.
+            pair_key="research:counterparties",
             note=note,
         )
 
@@ -881,6 +886,8 @@ class Strategy(ABC):
             headers=["When", "Publisher", "Headline"],
             rows=news.rows(chosen),
             left_align=[1, 2],
+            # Its own row too, for the same reason.
+            pair_key="research:news",
             note=news.note(
                 self.data.symbol, len(chosen), len(articles), rules.require_mention
             ),

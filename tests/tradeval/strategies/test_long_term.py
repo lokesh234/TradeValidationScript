@@ -309,3 +309,19 @@ def test_counterparty_panel_lands_in_the_report_under_the_profile():
     report = _strategy_for("NVDA").run()
     titles = [p.title for p in report.panels]
     assert titles.index("WHO NVDA DOES BUSINESS WITH") == 1
+
+
+def test_context_panels_never_share_a_row_with_each_other():
+    """Side by side, the graph reads as part of the headlines table.
+
+    The layout pairs any two unkeyed panels, so both context panels carry a
+    key of their own to keep each on its own row under the profile.
+    """
+    strategy = _strategy_for("NVDA")
+    # Names the ticker, so it survives the relevance filter.
+    strategy.data.news = [_news("NVDA beats on revenue")]
+    panels = strategy.run().panels
+    keys = [p.pair_key for p in panels if p.title.startswith(("WHO ", "IN THE NEWS"))]
+    assert len(keys) == 2
+    assert all(keys), "an unkeyed context panel would pair with its neighbour"
+    assert len(set(keys)) == 2, "sharing a key would pair them together"
