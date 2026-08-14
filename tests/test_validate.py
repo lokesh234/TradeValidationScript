@@ -334,3 +334,18 @@ def test_main_bad_config_file_exits_nonzero(tmp_path, capsys):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json")
     assert validate.main(["--config", str(bad), "--list-sectors"]) == 2
+
+
+def test_main_list_events_prints_the_next_releases(capsys):
+    assert validate.main(["--list-events"]) == 0
+    out = capsys.readouterr().out
+    assert any(kind in out for kind in ("FOMC", "CPI", "NFP", "PPI"))
+
+
+def test_main_list_events_says_when_the_table_has_run_out(capsys):
+    """Silence would read as "nothing scheduled", which is a different thing."""
+    with patch("tradeval.macro.upcoming", return_value=[]), \
+         patch("tradeval.macro.running_out", return_value=True):
+        assert validate.main(["--list-events"]) == 1
+    out = capsys.readouterr().out
+    assert "Refresh EVENTS" in out

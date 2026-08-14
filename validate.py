@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval import buzz, dates, discover, flow_buzz, reddit_auth, spending, stocktwits
+from tradeval import buzz, dates, discover, flow_buzz, macro, reddit_auth, spending, stocktwits
 from tradeval.config import Config, validate_weights
 from tradeval.context import TradeContext
 from tradeval.data import DataError, MarketData, resolve_symbols
@@ -214,6 +214,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         metavar="SYMBOL",
         help="print one company's stock info panel, then exit",
+    )
+    other.add_argument(
+        "--list-events",
+        action="store_true",
+        help="print the next scheduled macro releases (FOMC, CPI, NFP, PPI), then exit",
     )
     other.add_argument(
         "--list-spending",
@@ -1197,6 +1202,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(exc, file=sys.stderr)
             return 2
         return 0
+
+    if args.list_events:
+        events = macro.upcoming(limit=4)
+        for line in macro.format_lines(events, palette=palette):
+            print(line)
+        if macro.running_out():
+            # Silence here would read as "nothing scheduled", which is a very
+            # different thing from "the table stops here".
+            print(
+                palette.grey(
+                    "  The calendar ends after these. Refresh EVENTS in "
+                    "tradeval/macro.py from federalreserve.gov and bls.gov."
+                )
+            )
+        return 0 if events else 1
 
     if args.list_spending:
         for line in spending.menu_lines(palette):

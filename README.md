@@ -61,6 +61,37 @@ The prompts adapt to both answers: an earnings gamble in contracts asks for
 option premium, a short term trade in shares asks for entry/stop/target and
 direction, a long term hold just asks how much you're putting in.
 
+### What the market has scheduled
+
+The first screen opens with the macro calendar, before any ticker is typed:
+
+```
+On the calendar
+
+  Fri 04 Sep  in 21 days  NFP   payrolls, the other half of the mandate
+  Thu 10 Sep  in 27 days  PPI   producer prices, the print that leads CPI
+  Fri 11 Sep  in 28 days  CPI   the inflation print the rate path hangs on
+  Wed 16 Sep  in 33 days  FOMC  rate decision and the projections -- the whole curve reprices
+```
+
+Because the checklist grades a company and the calendar does not care. A
+short-dated option bought the day before a CPI print is a bet on the print
+whatever the chart says, and an FOMC meeting inside a one-month hold is a risk
+that belongs in the decision rather than in hindsight. Anything landing today
+or tomorrow is printed bold.
+
+These are hand-maintained in `tradeval/macro.py` from the published schedules
+([FOMC](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm),
+[BLS](https://www.bls.gov/schedule/news_release/)) — a rule will not do it,
+since payrolls is "the first Friday" until the first Friday is New Year's Day.
+**Check them against the source before trading around them**, and refresh the
+`EVENTS` list when it runs low; the tool says so itself rather than showing an
+empty calendar as though nothing were scheduled. The test suite catches the
+mistakes an update actually makes: a date out of order, a release on a
+weekend, payrolls not on a Friday.
+
+Shown once per session, and `validate.py --list-events` prints it on its own.
+
 ### Where the money is going
 
 `./trade.sh spend` browses the market's largest spending flows and the
@@ -1211,6 +1242,7 @@ tradeval/
   indicators.py           SMA, EMA, RSI, ATR, CAGR, drawdown
   checks.py               CheckResult / Status / weighted scoring
   news.py                 which headlines are actually about the ticker
+  macro.py                the scheduled FOMC / CPI / NFP / PPI calendar
   relationships.py        hand-maintained supplier/customer edges
   graph.py                drawing those edges in a terminal
   names.py                company names with the legal form dropped

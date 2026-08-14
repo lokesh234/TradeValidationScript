@@ -87,7 +87,21 @@ confirm() {  # confirm <prompt> -- defaults to no
     esac
 }
 
+# What the market has scheduled, before any of it is traded. Printed once per
+# session rather than before every menu loop: it is context to open with, not
+# something to re-read after a typo.
+CALENDAR_SHOWN=0
+show_calendar() {
+    [ "$CALENDAR_SHOWN" = "1" ] && return 0
+    CALENDAR_SHOWN=1
+    local events
+    events="$("$PY" "$ROOT/validate.py" --list-events $COLOR 2>/dev/null)" || return 0
+    [ -z "$events" ] && return 0
+    printf '\n%sOn the calendar%s\n\n%s\n' "$BOLD" "$OFF" "$events"
+}
+
 choose_strategy() {
+    show_calendar
     while true; do
         printf '\n%sWhich strategy are you trading?%s\n\n' "$BOLD" "$OFF"
         printf '  1) Earnings Gamble   %s0-10 days, event driven%s\n' "$DIM" "$OFF"
