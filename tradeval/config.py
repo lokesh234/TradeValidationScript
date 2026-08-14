@@ -272,6 +272,17 @@ def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
 
 
 @dataclass
+class ResearchRules:
+    """Context panels that describe the company rather than grade it."""
+
+    # The counterparty graph: who it buys from and sells to. False removes it.
+    counterparties: bool = True
+    # Names drawn on each side of the graph. Past a handful the picture stops
+    # being one and the fan-out is all that is left to read.
+    per_side: int = 6
+
+
+@dataclass
 class NewsRules:
     """Headlines printed beside the profile. Not scored, just context."""
 
@@ -322,6 +333,7 @@ class Config:
     long_term: LongTermRules = field(default_factory=LongTermRules)
     buzz: BuzzRules = field(default_factory=BuzzRules)
     news: NewsRules = field(default_factory=NewsRules)
+    research: ResearchRules = field(default_factory=ResearchRules)
     benchmark: str = "SPY"
     # How much each check counts, keyed by the name the report prints beside
     # it. Empty means every check keeps the weight its strategy gave it.

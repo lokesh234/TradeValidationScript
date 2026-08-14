@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Dict, List, Optional
 
-from .. import dates
+from .. import dates, graph
 from .. import indicators as ind
-from .. import news
+from .. import news, relationships
 from ..checks import (
     CheckResult,
     Verdict,
@@ -802,6 +802,53 @@ class Strategy(ABC):
         """Optional reference tables to print under the checks."""
         return []
 
+    def counterparty_panel(self) -> Optional[Panel]:
+        """Who the company buys from and sells to, drawn as a graph.
+
+        The relationship is what carries a shock between two tickers, and it
+        is in no field a screener has -- so the edges are hand-maintained and
+        the panel says so. A ticker with no entry falls back to the companies
+        standing in the same spending flow, which is a weaker claim: collecting
+        the same money is not the same as trading with each other.
+        """
+        if not self.config.research.counterparties:
+            return None
+
+        symbol = self.data.symbol
+        links = relationships.links(symbol)
+        if links:
+            title = "WHO %s DOES BUSINESS WITH" % symbol
+            lines = graph.render(symbol, links, self.config.research.per_side)
+            note = (
+                "Hand-maintained as of %s, and stale the moment a supply agreement "
+                "changes -- orientation, not a holding. Nothing here is scored. It is "
+                "here because an ASML order miss is an AMAT problem long before it is "
+                "an NVDA one, and no screener field will tell you that."
+                % relationships.AS_OF
+            )
+        else:
+            neighbours = relationships.flow_neighbours(symbol)
+            if not neighbours:
+                return None
+            # Not "does business with": the title has to claim only what the
+            # rows support, since the note under it is read second if at all.
+            title = "AROUND %s -- SAME SPENDING FLOW" % symbol
+            lines = graph.derived_lines(neighbours)
+            note = (
+                "No counterparties recorded for %s, so these are the companies "
+                "standing in the same spending flow. That is a weaker claim than a "
+                "trading relationship -- they collect the same money, which does not "
+                "mean they sell each other anything. Add real edges in "
+                "tradeval/relationships.py." % symbol
+            )
+
+        return Panel(
+            title=title,
+            headers=[""],
+            rows=[[line] for line in lines],
+            note=note,
+        )
+
     def news_panel(self) -> Optional[Panel]:
         """Recent headlines that name this company.
 
@@ -866,12 +913,15 @@ class Strategy(ABC):
         verdict = score_checks(results, self.config.scoring)
         # Built after the checks so panels can reuse anything they cached.
         panels = self.build_panels()
-        headlines = self.news_panel()
-        if headlines is not None:
-            # Straight after the profile, which is what it gives context to.
-            # When the profile went out with the sizing prompt it heads the
-            # report instead, since nothing above it needs explaining.
-            panels.insert(0 if self.ctx.profile_shown else 1, headlines)
+        # Context rides directly under the profile, which is what it gives
+        # context to: who the company trades with, then what was just written
+        # about it. When the profile went out with the sizing prompt these head
+        # the report instead, since nothing above them needs explaining.
+        at = 0 if self.ctx.profile_shown else 1
+        for extra in (self.counterparty_panel(), self.news_panel()):
+            if extra is not None:
+                panels.insert(at, extra)
+                at += 1
         notes = self.notes + [w for w in self.data.warnings if w not in self.notes]
         return Report(
             symbol=self.data.symbol,

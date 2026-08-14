@@ -101,3 +101,10 @@ def test_news_defaults_and_override():
 def test_news_unknown_key_raises():
     with pytest.raises(ValueError, match="Unknown config key: news.headlines"):
         Config.from_dict({"news": {"headlines": 3}})
+
+
+def test_research_defaults_and_override():
+    assert Config().research.counterparties is True
+    cfg = Config.from_dict({"research": {"counterparties": False, "per_side": 3}})
+    assert cfg.research.counterparties is False
+    assert cfg.research.per_side == 3

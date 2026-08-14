@@ -262,3 +262,50 @@ def test_news_panel_lands_in_the_report_after_the_profile():
     assert "IN THE NEWS -- TEST" in titles
     # The profile heads the report, and the headlines give it context.
     assert titles.index("IN THE NEWS -- TEST") == 1
+
+
+# -- counterparty graph ----------------------------------------------------
+
+
+def _strategy_for(symbol, **research):
+    config = Config()
+    for key, value in research.items():
+        setattr(config.research, key, value)
+    data = make_market_data(symbol=symbol)
+    data.news = []
+    ctx = TradeContext(data=data, config=config, instrument="stock")
+    return LongTermStrategy(ctx)
+
+
+def test_counterparty_panel_draws_recorded_edges():
+    panel = _strategy_for("NVDA").counterparty_panel()
+    assert panel is not None
+    assert panel.title == "WHO NVDA DOES BUSINESS WITH"
+    body = "\n".join(row[0] for row in panel.rows)
+    assert "[ NVDA ]" in body
+    assert "TSM" in body and "MSFT" in body
+    assert "hand-maintained" in panel.note.lower()
+
+
+def test_counterparty_panel_falls_back_to_the_spending_flow():
+    """A ticker with no recorded edges gets the weaker claim, labelled."""
+    panel = _strategy_for("PWR").counterparty_panel()
+    assert panel is not None
+    # The title must not claim a trading relationship the rows do not support.
+    assert "DOES BUSINESS WITH" not in panel.title
+    assert "SAME SPENDING FLOW" in panel.title
+    assert "weaker claim" in panel.note
+
+
+def test_counterparty_panel_is_none_for_an_unknown_ticker():
+    assert _strategy_for("NOSUCH").counterparty_panel() is None
+
+
+def test_counterparty_panel_can_be_switched_off():
+    assert _strategy_for("NVDA", counterparties=False).counterparty_panel() is None
+
+
+def test_counterparty_panel_lands_in_the_report_under_the_profile():
+    report = _strategy_for("NVDA").run()
+    titles = [p.title for p in report.panels]
+    assert titles.index("WHO NVDA DOES BUSINESS WITH") == 1

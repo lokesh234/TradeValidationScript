@@ -440,6 +440,56 @@ carries its yield against market cap so you can read the two rows together.
 Anything Yahoo doesn't publish reads `Not Available`, and if none of it is
 available the whole panel is dropped.
 
+#### Who it does business with
+
+Under the profile, the supply chain the ticker sits in — drawn as a graph,
+because the direction is the point:
+
+```
+ WHO NVDA DOES BUSINESS WITH
+
+  BUYS FROM              SELLS TO
+
+   TSM --+              +-- MSFT
+    MU --+              +-- AMZN
+  COHR --+  -[ NVDA ]-  +-- GOOGL
+  AMKR --+              +-- META
+                        +-- ORCL
+                        +-- CRWV
+
+  NVDA BUYS FROM
+    TSM   fabricates every leading-edge die NVIDIA designs
+    MU    HBM stacks, the memory bolted to the GPU
+  NVDA SELLS TO
+    MSFT  Azure accelerator capacity, one of the largest single buyers
+    GOOGL Cloud capacity -- and a TPU rival at the same time
+  COMPETES WITH
+    AMD   the only other merchant GPU at scale
+```
+
+**This data does not exist anywhere for free.** Yahoo has a company's sector
+and its institutional holders; nothing in any screener field says that every
+die NVIDIA sells was made by TSMC, or that the machines which made it came
+from ASML. That edge is what carries a shock between two tickers — an ASML
+order miss is an AMAT problem long before it is an NVDA one — so the edges are
+hand-maintained in `tradeval/relationships.py`, the same way the spending flows
+are, each with one line on what actually changes hands.
+
+Coverage is the AI and semiconductor complex, where the supply chain *is* the
+investment case. A ticker with no entry falls back to the companies standing in
+the same spending flow, under a different heading (`AROUND PWR — SAME SPENDING
+FLOW`) because that is a weaker claim: collecting the same money is not the
+same as trading with each other. A ticker in neither gets no panel.
+
+Nothing here is scored, and it goes stale the moment a supply agreement
+changes. Add a ticker by adding a key; the test suite checks the edges agree
+with each other, so recording that A supplies B while B says the opposite
+fails the build.
+
+```json
+{ "research": { "counterparties": true, "per_side": 6 } }
+```
+
 #### In the news
 
 Directly under the profile, the recent headlines that actually name the
@@ -1161,6 +1211,8 @@ tradeval/
   indicators.py           SMA, EMA, RSI, ATR, CAGR, drawdown
   checks.py               CheckResult / Status / weighted scoring
   news.py                 which headlines are actually about the ticker
+  relationships.py        hand-maintained supplier/customer edges
+  graph.py                drawing those edges in a terminal
   names.py                company names with the legal form dropped
   context.py              the proposed trade: prices, sizing, account
   report.py               terminal rendering
