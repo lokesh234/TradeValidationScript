@@ -60,8 +60,15 @@ def test_upcoming_with_no_limit_returns_everything_ahead():
     assert all(e.date >= today for e in macro.upcoming(today, limit=0))
 
 
-def test_upcoming_is_empty_once_the_table_runs_out():
-    assert macro.upcoming(dt.date(2030, 1, 1)) == []
+def test_upcoming_still_returns_derived_dates_past_the_table():
+    """The written-down table ends; the third-Friday rule does not.
+
+    running_out is what reports the staleness -- upcoming going quiet would
+    mean losing option expiry from the calendar as well.
+    """
+    ahead = macro.upcoming(dt.date(2030, 1, 1))
+    assert ahead
+    assert {e.kind for e in ahead} <= set(macro.DERIVED_KINDS)
 
 
 def test_running_out_flags_a_stale_table():
@@ -100,10 +107,11 @@ def test_countdown_for_something_already_gone_reads_today():
 
 def test_format_lines_one_per_event_with_no_colour_by_default():
     today = dt.date(2026, 8, 14)
-    lines = macro.format_lines(macro.upcoming(today, limit=3), today)
+    events = macro.upcoming(today, limit=3)
+    lines = macro.format_lines(events, today)
     assert len(lines) == 3
     assert not any("\033[" in line for line in lines)
-    assert "NFP" in lines[0]
+    assert events[0].kind in lines[0]
 
 
 def test_format_lines_colour_matches_the_plain_rendering():
@@ -116,3 +124,75 @@ def test_format_lines_colour_matches_the_plain_rendering():
 
 def test_format_lines_is_empty_for_no_events():
     assert macro.format_lines([], dt.date(2026, 8, 14)) == []
+
+
+# -- derived dates ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "year,month,expected",
+    [
+        (2026, 8, dt.date(2026, 8, 21)),
+        (2026, 9, dt.date(2026, 9, 18)),
+        (2026, 12, dt.date(2026, 12, 18)),
+        (2027, 1, dt.date(2027, 1, 15)),
+        # A month starting on a Friday: the third Friday is the 15th, not the 22nd.
+        (2027, 10, dt.date(2027, 10, 15)),
+    ],
+)
+def test_third_friday(year, month, expected):
+    assert macro.third_friday(year, month) == expected
+    assert macro.third_friday(year, month).weekday() == 4
+
+
+def test_third_friday_is_always_between_the_15th_and_21st():
+    for year in (2026, 2027):
+        for month in range(1, 13):
+            assert 15 <= macro.third_friday(year, month).day <= 21
+
+
+def test_derived_marks_the_quarter_ends_as_rebalances():
+    events = macro.derived(dt.date(2026, 8, 1), months=6)
+    by_date = {e.date: e.kind for e in events}
+    assert by_date[dt.date(2026, 9, 18)] == macro.REBAL
+    assert by_date[dt.date(2026, 12, 18)] == macro.REBAL
+    # Everything else that month is an ordinary expiry.
+    assert by_date[dt.date(2026, 10, 16)] == macro.OPEX
+
+
+def test_derived_skips_a_third_friday_already_gone():
+    """Run on the 22nd and this month's expiry is history, not upcoming."""
+    events = macro.derived(dt.date(2026, 8, 22), months=3)
+    assert all(e.date >= dt.date(2026, 8, 22) for e in events)
+    assert dt.date(2026, 8, 21) not in [e.date for e in events]
+
+
+def test_derived_rolls_over_the_year_end():
+    dates = [e.date for e in macro.derived(dt.date(2026, 11, 1), months=4)]
+    assert dt.date(2027, 1, 15) in dates
+    assert dates == sorted(dates)
+
+
+def test_all_events_merges_both_kinds_in_date_order():
+    events = macro.all_events(dt.date(2026, 8, 14))
+    dates = [e.date for e in events]
+    assert dates == sorted(dates)
+    kinds = {e.kind for e in events}
+    assert {macro.OPEX, macro.REBAL} & kinds
+    assert {macro.CPI, macro.FOMC} & kinds
+
+
+def test_running_out_ignores_the_derived_dates():
+    """The trap this guards: derived dates never end.
+
+    Counting them would report a healthy calendar long after every actual
+    release had fallen off the end of the table.
+    """
+    far = dt.date(2030, 1, 1)
+    assert macro.upcoming(far), "derived dates still exist that far out"
+    assert macro.running_out(far) is True
+
+
+def test_within_sees_a_rebalance_a_short_trade_would_span():
+    kinds = [e.kind for e in macro.within(40, dt.date(2026, 8, 14))]
+    assert macro.REBAL in kinds

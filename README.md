@@ -68,10 +68,12 @@ The first screen opens with the macro calendar, before any ticker is typed:
 ```
 On the calendar
 
-  Fri 04 Sep  in 21 days  NFP   payrolls, the other half of the mandate
-  Thu 10 Sep  in 27 days  PPI   producer prices, the print that leads CPI
-  Fri 11 Sep  in 28 days  CPI   the inflation print the rate path hangs on
-  Wed 16 Sep  in 33 days  FOMC  rate decision and the projections -- the whole curve reprices
+  Fri 21 Aug  in 7 days   OPEX   monthly option expiry -- open interest comes off the board
+  Fri 04 Sep  in 21 days  NFP    payrolls, the other half of the mandate
+  Thu 10 Sep  in 27 days  PPI    producer prices, the print that leads CPI
+  Fri 11 Sep  in 28 days  CPI    the inflation print the rate path hangs on
+  Wed 16 Sep  in 33 days  FOMC   rate decision and the projections -- the whole curve reprices
+  Fri 18 Sep  in 35 days  REBAL  S&P rebalance, quad witching and SPY's ex-dividend, all at one close
 ```
 
 Because the checklist grades a company and the calendar does not care. A
@@ -80,7 +82,18 @@ whatever the chart says, and an FOMC meeting inside a one-month hold is a risk
 that belongs in the decision rather than in hindsight. Anything landing today
 or tomorrow is printed bold.
 
-These are hand-maintained in `tradeval/macro.py` from the published schedules
+**Two kinds of date, and the difference decides how they are kept.**
+
+`OPEX` and `REBAL` are *worked out*, not stored. Both fall on the third Friday
+— option expiry every month, and in March/June/September/December that same
+close is the S&P rebalance, quad witching and SPY's ex-dividend all at once.
+A rule with no committee behind it cannot go stale, so nothing to maintain.
+(One exception: when the third Friday is a market holiday, expiry moves back a
+day. Good Friday, in practice.)
+
+`FOMC`, `CPI`, `NFP` and `PPI` are *written down*, because no rule generates
+them. They are hand-maintained in `tradeval/macro.py` from the published
+schedules
 ([FOMC](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm),
 [BLS](https://www.bls.gov/schedule/news_release/)) — a rule will not do it,
 since payrolls is "the first Friday" until the first Friday is New Year's Day.

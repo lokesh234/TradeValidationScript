@@ -1204,7 +1204,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     if args.list_events:
-        events = macro.upcoming(limit=4)
+        events = macro.upcoming(limit=6)
         for line in macro.format_lines(events, palette=palette):
             print(line)
         if macro.running_out():
@@ -1212,7 +1212,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             # different thing from "the table stops here".
             print(
                 palette.grey(
-                    "  The calendar ends after these. Refresh EVENTS in "
+                    "  The published releases stop here -- what is left above is "
+                    "worked out from the third-Friday rule. Refresh EVENTS in "
                     "tradeval/macro.py from federalreserve.gov and bls.gov."
                 )
             )
