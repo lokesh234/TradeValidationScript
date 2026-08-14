@@ -61,6 +61,24 @@ The prompts adapt to both answers: an earnings gamble in contracts asks for
 option premium, a short term trade in shares asks for entry/stop/target and
 direction, a long term hold just asks how much you're putting in.
 
+### Where the market is
+
+`./trade.sh` opens with the tape before it opens with a menu, because a
+checklist read without it is read out of context — an entry that looks
+extended is a different proposition on a day the whole market is up 2%:
+
+```
+Where the market closed
+
+  S&P 500        7,781.93    -0.22%
+  Dow           53,718.26    -0.23%
+  Nasdaq 100       729.18    -0.39%
+  Russell 2000     304.23    +0.24%
+```
+
+One batched request for all four, about 0.4s. If it fails you lose the header,
+not the report. `validate.py --list-indices` prints it on its own.
+
 ### What the market has scheduled
 
 The first screen opens with the macro calendar, before any ticker is typed:
@@ -102,6 +120,15 @@ since payrolls is "the first Friday" until the first Friday is New Year's Day.
 empty calendar as though nothing were scheduled. The test suite catches the
 mistakes an update actually makes: a date out of order, a release on a
 weekend, payrolls not on a Friday.
+
+The block closes with the count to month end, in **sessions rather than
+days** — `11 trading days to month end (Mon 31 Aug)` — since that is the number
+that matters when decay is running against a contract. `tradeval/sessions.py`
+works the market holidays out rather than listing them: most are the nth
+weekday of a month, the fixed ones move off a weekend by rule, and Good Friday
+follows Easter, so a year the tool has never seen still counts correctly. When
+the last of the month is not a session it says so and counts to the one that
+is (`Fri 29 May, the 31st falling on a Sunday`).
 
 Shown once per session, and `validate.py --list-events` prints it on its own.
 
@@ -1256,6 +1283,8 @@ tradeval/
   checks.py               CheckResult / Status / weighted scoring
   news.py                 which headlines are actually about the ticker
   macro.py                the scheduled FOMC / CPI / NFP / PPI calendar
+  sessions.py             market holidays and counting trading days
+  indices.py              the S&P / Dow / Nasdaq / Russell header
   relationships.py        hand-maintained supplier/customer edges
   graph.py                drawing those edges in a terminal
   names.py                company names with the legal form dropped

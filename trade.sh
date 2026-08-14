@@ -94,7 +94,11 @@ CALENDAR_SHOWN=0
 show_calendar() {
     [ "$CALENDAR_SHOWN" = "1" ] && return 0
     CALENDAR_SHOWN=1
-    local events
+    local quotes events
+    # Where the tape is, before anything is judged against it. One request,
+    # and a failure just leaves the header off.
+    quotes="$("$PY" "$ROOT/validate.py" --list-indices $COLOR 2>/dev/null)"
+    [ -n "$quotes" ] && printf '\n%sWhere the market closed%s\n\n%s\n' "$BOLD" "$OFF" "$quotes"
     events="$("$PY" "$ROOT/validate.py" --list-events $COLOR 2>/dev/null)" || return 0
     [ -z "$events" ] && return 0
     printf '\n%sOn the calendar%s\n\n%s\n' "$BOLD" "$OFF" "$events"

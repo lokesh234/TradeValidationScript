@@ -349,3 +349,20 @@ def test_main_list_events_says_when_the_table_has_run_out(capsys):
         assert validate.main(["--list-events"]) == 1
     out = capsys.readouterr().out
     assert "Refresh EVENTS" in out
+
+
+def test_main_list_indices_prints_the_market_header(capsys):
+    quotes = [validate.indices.IndexQuote("^GSPC", "S&P 500", 100.0, 1.25)]
+    with patch("tradeval.indices.snapshot", return_value=quotes):
+        assert validate.main(["--list-indices"]) == 0
+    assert "S&P 500" in capsys.readouterr().out
+
+
+def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
+    with patch("tradeval.indices.snapshot", return_value=[]):
+        assert validate.main(["--list-indices"]) == 1
+
+
+def test_main_list_events_ends_with_the_month_end_count(capsys):
+    assert validate.main(["--list-events"]) == 0
+    assert "trading day" in capsys.readouterr().out

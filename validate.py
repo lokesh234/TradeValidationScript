@@ -28,7 +28,18 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval import buzz, dates, discover, flow_buzz, macro, reddit_auth, spending, stocktwits
+from tradeval import (
+    buzz,
+    dates,
+    discover,
+    flow_buzz,
+    indices,
+    macro,
+    reddit_auth,
+    sessions,
+    spending,
+    stocktwits,
+)
 from tradeval.config import Config, validate_weights
 from tradeval.context import TradeContext
 from tradeval.data import DataError, MarketData, resolve_symbols
@@ -214,6 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--profile",
         metavar="SYMBOL",
         help="print one company's stock info panel, then exit",
+    )
+    other.add_argument(
+        "--list-indices",
+        action="store_true",
+        help="print where the major indices closed, then exit",
     )
     other.add_argument(
         "--list-events",
@@ -1203,6 +1219,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             return 2
         return 0
 
+    if args.list_indices:
+        quotes = indices.snapshot()
+        for line in indices.format_lines(quotes, palette):
+            print(line)
+        return 0 if quotes else 1
+
     if args.list_events:
         events = macro.upcoming(limit=6)
         for line in macro.format_lines(events, palette=palette):
@@ -1217,6 +1239,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "tradeval/macro.py from federalreserve.gov and bls.gov."
                 )
             )
+        print(palette.grey("  " + sessions.month_end_line()))
         return 0 if events else 1
 
     if args.list_spending:
