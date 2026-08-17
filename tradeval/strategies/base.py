@@ -194,6 +194,11 @@ class Report:
     as_of: dt.date
     results: List[CheckResult]
     verdict: Verdict
+    # What the company is worth today and across how many shares. Carried on
+    # the report so anything scaling a target off it -- what a market cap you
+    # believe in would pay -- does not have to reach back into MarketData.
+    market_cap: Optional[float] = None
+    shares_outstanding: Optional[float] = None
     notes: List[str] = field(default_factory=list)
     panels: List[Panel] = field(default_factory=list)
 
@@ -979,6 +984,8 @@ class Strategy(ABC):
             horizon=self.horizon,
             price=self.data.price,
             as_of=self.data.last_date,
+            market_cap=self.data.market_cap,
+            shares_outstanding=self.data._shares_outstanding(),
             results=results,
             verdict=verdict,
             notes=notes,

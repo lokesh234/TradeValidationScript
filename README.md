@@ -1140,6 +1140,7 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--premium` | Dollars at risk outright (option premium). Overrides `--risk`. |
 | `--size` | Dollars deployed into the position, for the concentration check. |
 | `--earnings-date` | Earnings only: which report to trade, `YYYY-MM-DD`. Prompts if omitted. |
+| `--target-cap` | Long term only: a market cap you think it reaches (`5T`, `900B`). Prompts after the verdict if omitted. |
 | `--allow-earnings` | Short term only: permit holding through a scheduled report. |
 | `--spending` | Browse the market's big spending flows and their beneficiaries, then pick a ticker from one. Takes a number or a name; bare lists them. |
 | `--buzz` | Score retail chatter out of 100. With `--spending`, scores the whole flow — one lookup per name. |
@@ -1254,6 +1255,46 @@ giving up, and to the single tall table when even that won't fit. Below about
 205 columns you get exactly what you got before, so this can only improve on
 the tall version. The width ceiling is 240 columns.
 
+### What a market cap you believe in would pay
+
+A long-term thesis is usually held as a size — "I think this is a
+ten-trillion-dollar company one day" — so after the verdict a long-term run
+asks for that number and does the arithmetic on it:
+
+```
+What market cap do you think NVDA reaches? [now $5.45T, Enter to skip]: 10T
+
+ WHAT NVDA WOULD BE WORTH AT $10.00T
+  Market cap now           $5.45T
+  Market cap you expect   $10.00T                                 1.83x from here
+  Implied share price     $412.86                        at today's 24.22B shares
+  Upside                   +83.4%
+
+  Your position           $20,000
+  Worth at that cap       $36,673                                 +$16,673 profit
+
+  If it takes 3 years    22.4%/yr  very few companies compound like that for long
+  If it takes 5 years    12.9%/yr                ahead of the S&P's long-run ~10%
+  If it takes 10 years    6.3%/yr                  behind the S&P's long-run ~10%
+```
+
+Holding a thesis as a market cap hides the two questions that decide whether
+the trade is any good: **what the share price has to be** for it to be true,
+and **how many years of compounding** that is at a rate you would accept
+anywhere else. An 83% gain sounds like a thesis; 6.3%/yr over ten years is an
+index fund with extra steps.
+
+Accepts `5T`, `$900B`, `2.5 trillion`, `1,500B` or `4.1e12`. A bare `5` is
+refused with a suggestion, since nobody is targeting a five-dollar market cap.
+Pass `--size` and it prices your actual position; without it you still get the
+price and the rates.
+
+The implied price is the target cap divided by **today's** share count —
+buybacks would put it higher, dilution lower — and the panel says so. It is
+your number and it is printed after the verdict, never scored into it.
+`--target-cap 10T` skips the prompt; a scripted run (no terminal, or `--quiet`)
+never asks.
+
 ## Tuning the rules
 
 Every threshold lives in `tradeval/config.py`. Override any of them with JSON
@@ -1363,6 +1404,7 @@ tradeval/
   x_api.py                X search (paid tier), off by default
   macro.py                the scheduled FOMC / CPI / NFP / PPI calendar
   sessions.py             market holidays and counting trading days
+  upside.py               what a target market cap implies and pays
   indices.py              the S&P / Dow / Nasdaq / Russell header
   relationships.py        hand-maintained supplier/customer edges
   graph.py                drawing those edges in a terminal

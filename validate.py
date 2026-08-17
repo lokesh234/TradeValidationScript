@@ -39,6 +39,7 @@ from tradeval import (
     sessions,
     spending,
     stocktwits,
+    upside,
     x_api,
 )
 from tradeval.config import Config, validate_weights
@@ -128,6 +129,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="earnings only: which scheduled report to trade. Prompts if omitted.",
     )
 
+    plan.add_argument(
+        "--target-cap",
+        metavar="CAP",
+        help="long term only: a market cap you think it reaches, e.g. 5T or 900B. "
+        "Prints what that implies for the share price, your position and the rate "
+        "per year. Prompts after the verdict if omitted.",
+    )
     plan.add_argument(
         "--horizon",
         help="short term only: how long you plan to hold -- 1m, 3m or 6m. Prompts if omitted.",
@@ -1167,6 +1175,62 @@ def confirm_weights() -> bool:
     return raw in ("y", "yes")
 
 
+def prompt_target_cap(symbol: str, current_cap: Optional[float]) -> Optional[float]:
+    """Ask what the company is worth one day, in a size rather than a price.
+
+    Asked after the verdict, because it is the reader's own number and has no
+    business shaping a score. Enter skips it.
+    """
+    now = upside.format_cap(current_cap)
+    while True:
+        try:
+            raw = input(
+                "\nWhat market cap do you think %s reaches? [now %s, Enter to skip]: "
+                % (symbol, now)
+            ).strip()
+        except EOFError:
+            print()
+            return None
+        if not raw:
+            return None
+        try:
+            return upside.parse_cap(raw)
+        except ValueError as exc:
+            print("  %s" % exc)
+
+
+def show_upside(report, args: argparse.Namespace, palette, width: int) -> None:
+    """Turn a market cap the reader believes in into what it would pay them."""
+    current_cap = report.market_cap
+
+    if args.target_cap:
+        try:
+            target = upside.parse_cap(args.target_cap)
+        except ValueError as exc:
+            print("  %s" % exc, file=sys.stderr)
+            return
+    else:
+        if not sys.stdin.isatty() or args.quiet:
+            return
+        target = prompt_target_cap(report.symbol, current_cap)
+    if target is None:
+        return
+
+    projection = upside.project(
+        report.symbol,
+        current_cap,
+        target,
+        report.price,
+        shares=report.shares_outstanding,
+        position=args.size,
+    )
+    if projection is None:
+        print("  No market cap for %s, so there is nothing to scale." % report.symbol)
+        return
+    for line in layout_panels([upside.panel(projection)], palette, width):
+        print(line)
+
+
 def buzz_scorer(args: argparse.Namespace, config: Config):
     """The configured chatter source as a callable over a list of symbols.
 
@@ -1526,6 +1590,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         reports.append(report)
         print(render(report, palette, verbose=not args.quiet, width=width))
+        if key == "long":
+            # After the verdict, never before it: this is the reader's own
+            # number and has no business shaping a score.
+            show_upside(report, args, palette, width)
 
     if not reports:
         return 1

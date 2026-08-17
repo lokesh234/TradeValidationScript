@@ -440,3 +440,80 @@ def test_prompt_symbols_leaves_the_earnings_menu_alone():
          patch("builtins.input", side_effect=["AMAT"]):
         assert validate.prompt_symbols([], "earnings", Config()) == ["AMAT"]
     sectors.assert_not_called()
+
+
+# -- the market-cap projection --------------------------------------------
+
+
+def _long_report(cap=5e12, shares=2.5e10):
+    from tradeval.checks import Verdict
+    from tradeval.strategies.base import Report
+
+    return Report(
+        symbol="NVDA", name="NVIDIA", strategy_key="long", strategy_name="Long Term",
+        horizon="1 year+", price=200.0, as_of=dt.date(2026, 8, 16), results=[],
+        verdict=Verdict(label="GO", score=80.0, counted_weight=10.0, skipped_weight=0.0),
+        market_cap=cap, shares_outstanding=shares,
+    )
+
+
+def test_prompt_target_cap_reads_a_cap():
+    with patch("builtins.input", side_effect=["5T"]):
+        assert validate.prompt_target_cap("NVDA", 4e12) == 5e12
+
+
+def test_prompt_target_cap_reasks_after_a_bad_answer(capsys):
+    with patch("builtins.input", side_effect=["soon", "5T"]):
+        assert validate.prompt_target_cap("NVDA", 4e12) == 5e12
+    assert "Could not read" in capsys.readouterr().out
+
+
+def test_prompt_target_cap_skips_on_enter_or_eof():
+    with patch("builtins.input", side_effect=[""]):
+        assert validate.prompt_target_cap("NVDA", 4e12) is None
+    with patch("builtins.input", side_effect=EOFError):
+        assert validate.prompt_target_cap("NVDA", 4e12) is None
+
+
+def test_show_upside_prints_the_panel_from_the_flag(capsys):
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long", "--target-cap", "10T"])
+    validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
+    out = capsys.readouterr().out
+    assert "WOULD BE WORTH AT $10.00T" in out
+    assert "$400.00" in out
+
+
+def test_show_upside_never_prompts_when_stdin_is_not_a_terminal(capsys):
+    """A scripted run must not block waiting for an answer nobody will give."""
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long"])
+    with patch("sys.stdin.isatty", return_value=False), \
+         patch("builtins.input", side_effect=AssertionError("must not prompt")):
+        validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
+    assert capsys.readouterr().out == ""
+
+
+def test_show_upside_is_silent_under_quiet():
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long", "--quiet"])
+    with patch("sys.stdin.isatty", return_value=True), \
+         patch("builtins.input", side_effect=AssertionError("must not prompt")):
+        validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
+
+
+def test_show_upside_prompts_when_there_is_someone_to_ask(capsys):
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long"])
+    with patch("sys.stdin.isatty", return_value=True), \
+         patch("builtins.input", side_effect=["8T"]):
+        validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
+    assert "WOULD BE WORTH AT $8.00T" in capsys.readouterr().out
+
+
+def test_show_upside_says_so_when_there_is_no_market_cap(capsys):
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long", "--target-cap", "10T"])
+    validate.show_upside(_long_report(cap=None), args, validate.make_palette(no_color=True), 100)
+    assert "nothing to scale" in capsys.readouterr().out
+
+
+def test_show_upside_reports_a_bad_flag_without_crashing(capsys):
+    args = validate.build_parser().parse_args(["NVDA", "-t", "long", "--target-cap", "soon"])
+    validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
+    assert "Could not read" in capsys.readouterr().err
