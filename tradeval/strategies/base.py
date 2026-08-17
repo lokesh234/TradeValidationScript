@@ -11,7 +11,8 @@ from typing import Dict, List, Optional
 
 from .. import dates, graph
 from .. import indicators as ind
-from .. import news, relationships
+from .. import news, relationships, x_api
+from .. import buzz as buzz_scoring
 from ..checks import (
     CheckResult,
     Verdict,
@@ -854,6 +855,46 @@ class Strategy(ABC):
             note=note,
         )
 
+    def x_panel(self) -> Optional[Panel]:
+        """What X is saying about the ticker.
+
+        Off unless asked for, because X is the one source here that bills by
+        the request. No token, no subscription or no posts all resolve the
+        same way: the section is absent and the report is unchanged.
+        """
+        rules = self.config.x
+        if rules.limit <= 0:
+            return None
+        try:
+            posts = x_api.fetch_posts(
+                self.data.symbol, self.data.name, limit=rules.max_results
+            )
+        except Exception as exc:
+            # Includes the no-token and wrong-tier cases. Said once, quietly,
+            # rather than failing a run over a section nobody is scored on.
+            self.note("X chatter unavailable: %s" % exc)
+            return None
+        if not posts:
+            return None
+
+        shown = posts[: rules.limit]
+        score = None
+        try:
+            score = buzz_scoring.score_documents(
+                self.data.symbol, posts, len(posts), self.config.buzz
+            )
+        except Exception:
+            score = None
+
+        return Panel(
+            title="WHAT X IS SAYING -- %s" % self.data.symbol,
+            headers=["When", "Account", "Reach", "Post"],
+            rows=x_api.rows(shown),
+            left_align=[1, 3],
+            pair_key="research:x",
+            note=x_api.note(self.data.symbol, len(shown), score),
+        )
+
     def news_panel(self) -> Optional[Panel]:
         """Recent headlines that name this company.
 
@@ -925,7 +966,7 @@ class Strategy(ABC):
         # about it. When the profile went out with the sizing prompt these head
         # the report instead, since nothing above them needs explaining.
         at = 0 if self.ctx.profile_shown else 1
-        for extra in (self.counterparty_panel(), self.news_panel()):
+        for extra in (self.counterparty_panel(), self.news_panel(), self.x_panel()):
             if extra is not None:
                 panels.insert(at, extra)
                 at += 1

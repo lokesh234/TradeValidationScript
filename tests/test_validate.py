@@ -366,3 +366,26 @@ def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
 def test_main_list_events_ends_with_the_month_end_count(capsys):
     assert validate.main(["--list-events"]) == 0
     assert "trading day" in capsys.readouterr().out
+
+
+def test_x_status_reports_missing_credentials(monkeypatch):
+    monkeypatch.setattr(validate.x_api.XCredentials, "load", classmethod(lambda cls, path=None: None))
+    assert validate.x_status() == 1
+
+
+def test_x_status_reports_a_configured_token(monkeypatch, capsys):
+    token = validate.x_api.XCredentials(bearer_token="abc")
+    monkeypatch.setattr(validate.x_api.XCredentials, "load", classmethod(lambda cls, path=None: token))
+    assert validate.x_status() == 0
+    out = capsys.readouterr().out
+    assert "configured" in out
+    assert "abc" not in out, "the token must never be printed"
+
+
+def test_buzz_scorer_can_be_pointed_at_x():
+    args = validate.build_parser().parse_args(["--buzz"])
+    config = Config()
+    config.buzz.source = "x"
+    with patch("tradeval.x_api.score_symbols", return_value={"NVDA": "stub"}) as mocked:
+        assert validate.buzz_scorer(args, config)(["NVDA"]) == {"NVDA": "stub"}
+    mocked.assert_called_once()

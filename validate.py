@@ -39,6 +39,7 @@ from tradeval import (
     sessions,
     spending,
     stocktwits,
+    x_api,
 )
 from tradeval.config import Config, validate_weights
 from tradeval.context import TradeContext
@@ -171,6 +172,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--buzz-source",
         action="store_true",
         help="print the configured buzz source, then exit",
+    )
+    reddit.add_argument(
+        "--x-setup",
+        action="store_true",
+        help="store an X bearer token outside the repo (X charges for read access)",
+    )
+    reddit.add_argument(
+        "--x-status",
+        action="store_true",
+        help="report whether an X token is present, then exit (0 = yes)",
     )
     reddit.add_argument(
         "--reddit-status",
@@ -938,6 +949,46 @@ def reddit_setup(path: Optional[str] = None) -> int:
     return 0
 
 
+def x_setup(path: Optional[str] = None) -> int:
+    """Store an X bearer token outside the repo, readable only by you."""
+    target = path or x_api.CREDENTIALS_PATH
+    print("X charges for read access: posting is free, searching is not.")
+    print("Recent search needs a paid tier and an app bearer token.")
+    print("Create one at https://developer.x.com/en/portal/dashboard")
+    print("Stored at %s, readable only by you. Never inside the repo.\n" % target)
+
+    try:
+        token = getpass.getpass("Bearer token (hidden): ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return 130
+
+    if not token:
+        print("A bearer token is required.", file=sys.stderr)
+        return 2
+
+    try:
+        written = x_api.XCredentials(bearer_token=token).save(target)
+    except OSError as exc:
+        print("Could not write %s: %s" % (target, exc), file=sys.stderr)
+        return 1
+
+    print("\nSaved to %s" % written)
+    for warning in x_api.audit_credentials_file(written):
+        print("WARNING: %s" % warning, file=sys.stderr)
+    print('Turn the section on with:  --config \'{"x": {"limit": 5}}\'  or a config file.')
+    return 0
+
+
+def x_status(path: Optional[str] = None) -> int:
+    """Exit 0 when an X token is present, 1 otherwise. Used by trade.sh."""
+    if x_api.XCredentials.load(path) is None:
+        print("X: not configured (read access is a paid tier)")
+        return 1
+    print("X: token configured")
+    return 0
+
+
 def reddit_status(path: Optional[str] = None) -> int:
     """Exit 0 when buzz scoring can run, 1 otherwise. Used by trade.sh."""
     credentials = buzz.RedditCredentials.load(path)
@@ -1112,6 +1163,9 @@ def buzz_scorer(args: argparse.Namespace, config: Config):
         if source == "stocktwits":
             return stocktwits.score_symbols(symbols, config.buzz)
 
+        if source == "x":
+            return x_api.score_symbols(symbols, config.buzz)
+
         if source == "reddit":
             credentials = buzz.RedditCredentials.load(args.reddit_credentials)
             if credentials is None:
@@ -1121,7 +1175,7 @@ def buzz_scorer(args: argparse.Namespace, config: Config):
                 )
             return buzz.score_symbols(symbols, config.buzz, credentials)
 
-        reason = "unknown buzz source %r (use stocktwits or reddit)" % source
+        reason = "unknown buzz source %r (use stocktwits, reddit or x)" % source
         print(reason, file=sys.stderr)
         return {s: buzz.BuzzScore.unavailable(s, reason) for s in symbols}
 
@@ -1292,6 +1346,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.buzz_source:
         print(config.buzz.source)
         return 0
+
+    if args.x_setup:
+        return x_setup()
+
+    if args.x_status:
+        return x_status()
 
     if args.reddit_status:
         return reddit_status(args.reddit_credentials)

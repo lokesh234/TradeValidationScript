@@ -283,6 +283,17 @@ class ResearchRules:
 
 
 @dataclass
+class XRules:
+    """What X is saying. Off by default: X charges for read access."""
+
+    # 0 removes the section and the request behind it. Left at 0 so the tool
+    # never spends someone's metered quota without being asked to.
+    limit: int = 0
+    # Posts pulled per lookup. The endpoint's own floor is 10.
+    max_results: int = 25
+
+
+@dataclass
 class NewsRules:
     """Headlines printed beside the profile. Not scored, just context."""
 
@@ -334,6 +345,7 @@ class Config:
     buzz: BuzzRules = field(default_factory=BuzzRules)
     news: NewsRules = field(default_factory=NewsRules)
     research: ResearchRules = field(default_factory=ResearchRules)
+    x: XRules = field(default_factory=XRules)
     benchmark: str = "SPY"
     # How much each check counts, keyed by the name the report prints beside
     # it. Empty means every check keeps the weight its strategy gave it.

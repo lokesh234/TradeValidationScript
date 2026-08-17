@@ -108,3 +108,9 @@ def test_research_defaults_and_override():
     cfg = Config.from_dict({"research": {"counterparties": False, "per_side": 3}})
     assert cfg.research.counterparties is False
     assert cfg.research.per_side == 3
+
+
+def test_x_is_off_by_default_because_it_costs_money():
+    assert Config().x.limit == 0
+    cfg = Config.from_dict({"x": {"limit": 5, "max_results": 50}})
+    assert cfg.x.limit == 5 and cfg.x.max_results == 50

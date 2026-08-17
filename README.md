@@ -329,6 +329,50 @@ Note StockTwits' endpoint is public but undocumented; if it ever starts
 refusing requests the check reports `Not Available` and is excluded from the
 score, like any other missing data.
 
+### What X is saying
+
+A section of its own for the ticker's cashtag, ranked by what each post
+actually drew rather than by when it landed:
+
+```
+ WHAT X IS SAYING -- NVDA
+  When    Account          Reach  Post
+  3h ago  @somebigaccount    509  $NVDA breaking out of the range it has been in since June
+  6h ago  @anotherone         88  Anyone else think $NVDA is priced for perfection here?
+  Posts naming $NVDA in the last week, loudest first... Nothing here is scored into the verdict.
+```
+
+**X is the one source here that costs money, and it is off by default.** X
+removed free read access in 2023 — posting is free, searching is not — so
+recent search needs a paid tier and an app bearer token. Without one this
+section reports itself unavailable in the notes and the rest of the report is
+untouched; nothing in the tool depends on it.
+
+```bash
+./trade.sh                        # or:
+.venv/bin/python validate.py --x-setup     # stores the token, 0600, outside the repo
+.venv/bin/python validate.py --x-status    # 0 when a token is present
+```
+
+Then switch the section on, since a token alone will not spend your quota:
+
+```json
+{ "x": { "limit": 5, "max_results": 25 } }
+```
+
+`limit: 0` (the default) removes the section and the request behind it. One
+request per report, never paged — the paid tiers meter by the month, so a
+second screenful is not worth a second slice of the quota.
+
+The search is the **cashtag**, not the bare symbol: three or four capital
+letters match far too much ordinary English to spend a metered request on.
+Retweets are excluded so one opinion is not counted ten times. Even so a
+cashtag catches promoters and bots as readily as traders, which is why posts
+are ranked by engagement and the account is printed beside each one — an
+anonymous egg with three followers should read as what it is. `{ "buzz": {
+"source": "x" } }` also points the scored buzz check at X instead of
+StockTwits.
+
 ### Peer earnings read-across
 
 `--peers` shows how the closest competitors were treated when *they* reported:
@@ -1282,6 +1326,7 @@ tradeval/
   indicators.py           SMA, EMA, RSI, ATR, CAGR, drawdown
   checks.py               CheckResult / Status / weighted scoring
   news.py                 which headlines are actually about the ticker
+  x_api.py                X search (paid tier), off by default
   macro.py                the scheduled FOMC / CPI / NFP / PPI calendar
   sessions.py             market holidays and counting trading days
   indices.py              the S&P / Dow / Nasdaq / Russell header
