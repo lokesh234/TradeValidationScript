@@ -199,6 +199,11 @@ class Report:
     # believe in would pay -- does not have to reach back into MarketData.
     market_cap: Optional[float] = None
     shares_outstanding: Optional[float] = None
+    # The position as sized, so anything projecting it forward reads it here
+    # rather than off the command line -- the interactive run collects this at
+    # a prompt, where no flag was ever passed.
+    position_shares: Optional[int] = None
+    position_size: Optional[float] = None
     notes: List[str] = field(default_factory=list)
     panels: List[Panel] = field(default_factory=list)
 
@@ -986,6 +991,11 @@ class Strategy(ABC):
             as_of=self.data.last_date,
             market_cap=self.data.market_cap,
             shares_outstanding=self.data._shares_outstanding(),
+            # Shares only mean something when shares are what is being bought.
+            position_shares=(
+                None if self.ctx.trades_options else self.ctx.share_count(self.data.price)
+            ),
+            position_size=self.ctx.size,
             results=results,
             verdict=verdict,
             notes=notes,

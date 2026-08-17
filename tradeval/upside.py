@@ -95,6 +95,10 @@ class Projection:
     price: float
     shares: Optional[float] = None
     position: Optional[float] = None
+    # Shares actually held, when the trade is in stock. Worth carrying apart
+    # from the dollars: what those shares are worth at the target is the
+    # question a cap target is really asking.
+    shares_held: Optional[int] = None
 
     @property
     def multiple(self) -> float:
@@ -117,17 +121,35 @@ class Projection:
         return (implied / self.price - 1.0) * 100.0
 
     @property
-    def profit(self) -> Optional[float]:
-        """What the position would be worth over what it cost."""
-        if not self.position or self.upside_pct is None:
-            return None
-        return self.position * (self.upside_pct / 100.0)
+    def cost(self) -> Optional[float]:
+        """What the position cost: the dollars given, or the shares priced."""
+        if self.position:
+            return self.position
+        if self.shares_held and self.price:
+            return self.shares_held * self.price
+        return None
 
     @property
     def value(self) -> Optional[float]:
-        if not self.position or self.profit is None:
+        """What it would be worth at the target cap.
+
+        Priced off the shares where there are shares, since whole shares is
+        what was actually bought -- scaling the dollars would quietly assume
+        a fractional one.
+        """
+        implied = self.implied_price
+        if self.shares_held and implied is not None:
+            return self.shares_held * implied
+        cost = self.cost
+        if cost is None or self.upside_pct is None:
             return None
-        return self.position + self.profit
+        return cost * (1.0 + self.upside_pct / 100.0)
+
+    @property
+    def profit(self) -> Optional[float]:
+        """What it would be worth over what it cost."""
+        value, cost = self.value, self.cost
+        return None if value is None or cost is None else value - cost
 
 
 def project(
@@ -137,11 +159,12 @@ def project(
     price: float,
     shares: Optional[float] = None,
     position: Optional[float] = None,
+    shares_held: Optional[int] = None,
 ) -> Optional[Projection]:
     """None when there is no current cap to measure the target against."""
     if not current_cap or current_cap <= 0 or not price:
         return None
-    return Projection(symbol, current_cap, target, price, shares, position)
+    return Projection(symbol, current_cap, target, price, shares, position, shares_held)
 
 
 def panel(projection: Projection) -> Panel:
@@ -165,14 +188,30 @@ def panel(projection: Projection) -> Panel:
     if projection.upside_pct is not None:
         rows.append(["Upside", "%+.1f%%" % projection.upside_pct, "", ""])
 
-    if projection.position:
+    if projection.cost is not None:
+        held = projection.shares_held
         rows.append(["", "", "", ""])
-        rows.append(["Your position", "${:,.0f}".format(projection.position), "", ""])
+        rows.append(
+            [
+                "Your position",
+                "${:,.0f}".format(projection.cost),
+                _shares_note(held, projection.price),
+                "",
+            ]
+        )
         rows.append(
             [
                 "Worth at that cap",
                 "${:,.0f}".format(projection.value),
-                "{:+,.0f} profit".format(projection.profit).replace("+", "+$").replace("-", "-$"),
+                _shares_note(held, implied),
+                "",
+            ]
+        )
+        rows.append(
+            [
+                "Profit",
+                "{:+,.0f}".format(projection.profit).replace("+", "+$").replace("-", "-$"),
+                "",
                 "",
             ]
         )
@@ -205,6 +244,13 @@ def panel(projection: Projection) -> Panel:
             "would accept from an index fund before deciding the thesis is worth it."
         ),
     )
+
+
+def _shares_note(shares: Optional[int], price: Optional[float]) -> str:
+    """"5,000 shares at $87.71" -- the same holding, priced twice."""
+    if not shares or price is None:
+        return ""
+    return "{:,} share{} at ${:,.2f}".format(shares, "" if shares == 1 else "s", price)
 
 
 def _rate_note(rate: float) -> str:

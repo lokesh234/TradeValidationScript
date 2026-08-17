@@ -119,7 +119,7 @@ def test_panel_shows_the_position_and_the_rates():
     assert "2.00x from here" in body
     assert "$400.00" in body
     assert "$20,000" in body and "$40,000" in body
-    assert "+$20,000 profit" in body
+    assert "+$20,000" in body
     for years in upside.YEARS:
         assert "If it takes %d years" % years in body
     assert "not a forecast" in panel.note
@@ -138,4 +138,44 @@ def test_panel_names_the_share_count_assumption():
 
 def test_a_loss_is_signed_as_one_in_the_panel():
     body = "\n".join(" ".join(r) for r in upside.panel(_projection(target_cap=2.5e12)).rows)
-    assert "-$10,000 profit" in body
+    assert "-$10,000" in body
+
+
+# -- what the shares themselves would be worth ------------------------------
+
+
+def test_shares_held_price_the_position_at_both_ends():
+    p = _projection(position=None, shares_held=5000, price=200.0)
+    assert p.cost == pytest.approx(1_000_000.0)      # 5,000 at $200
+    assert p.value == pytest.approx(2_000_000.0)     # 5,000 at $400
+    assert p.profit == pytest.approx(1_000_000.0)
+
+
+def test_value_is_priced_off_whole_shares_not_scaled_dollars():
+    """Scaling the dollars would quietly assume a fractional share."""
+    p = _projection(position=1000.0, shares_held=4, price=200.0)
+    # 4 shares at $400 is $1,600 -- not $1,000 grossed up by the cap ratio.
+    assert p.value == pytest.approx(1600.0)
+    assert p.cost == pytest.approx(1000.0)
+
+
+def test_panel_shows_the_same_holding_priced_twice():
+    body = "\n".join(" ".join(r) for r in upside.panel(
+        _projection(position=None, shares_held=5000, price=200.0)
+    ).rows)
+    assert "5,000 shares at $200.00" in body
+    assert "5,000 shares at $400.00" in body
+
+
+def test_panel_says_share_not_shares_for_one():
+    body = "\n".join(" ".join(r) for r in upside.panel(
+        _projection(position=None, shares_held=1, price=200.0)
+    ).rows)
+    assert "1 share at $200.00" in body
+    assert "1 shares" not in body
+
+
+def test_project_passes_the_held_shares_through():
+    p = upside.project("X", 1e12, 2e12, 100.0, shares=1e10, shares_held=50)
+    assert p.shares_held == 50
+    assert p.value == pytest.approx(50 * 200.0)

@@ -1222,7 +1222,10 @@ def show_upside(report, args: argparse.Namespace, palette, width: int) -> None:
         target,
         report.price,
         shares=report.shares_outstanding,
-        position=args.size,
+        # From the report, not the flag: an interactive run answers this at a
+        # prompt and never passes --size at all.
+        position=args.size or report.position_size,
+        shares_held=report.position_shares,
     )
     if projection is None:
         print("  No market cap for %s, so there is nothing to scale." % report.symbol)

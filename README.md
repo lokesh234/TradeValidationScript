@@ -1270,8 +1270,9 @@ What market cap do you think NVDA reaches? [now $5.45T, Enter to skip]: 10T
   Implied share price     $412.86                        at today's 24.22B shares
   Upside                   +83.4%
 
-  Your position           $20,000
-  Worth at that cap       $36,673                                 +$16,673 profit
+  Your position          $438,550                          5,000 shares at $87.71
+  Worth at that cap      $581,051                         5,000 shares at $116.21
+  Profit                +$142,501
 
   If it takes 3 years    22.4%/yr  very few companies compound like that for long
   If it takes 5 years    12.9%/yr                ahead of the S&P's long-run ~10%
@@ -1286,8 +1287,11 @@ index fund with extra steps.
 
 Accepts `5T`, `$900B`, `2.5 trillion`, `1,500B` or `4.1e12`. A bare `5` is
 refused with a suggestion, since nobody is targeting a five-dollar market cap.
-Pass `--size` and it prices your actual position; without it you still get the
-price and the rates.
+It prices the position you actually sized — the shares the prompt collected or
+`--size`/`--shares` on the command line — showing **the same holding priced
+twice**, at today's price and at the implied one. Value comes off whole shares
+rather than grossing up the dollars, since a fractional share is not what was
+bought. Without a position you still get the implied price and the rates.
 
 The implied price is the target cap divided by **today's** share count —
 buybacks would put it higher, dilution lower — and the panel says so. It is

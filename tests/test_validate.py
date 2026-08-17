@@ -517,3 +517,16 @@ def test_show_upside_reports_a_bad_flag_without_crashing(capsys):
     args = validate.build_parser().parse_args(["NVDA", "-t", "long", "--target-cap", "soon"])
     validate.show_upside(_long_report(), args, validate.make_palette(no_color=True), 100)
     assert "Could not read" in capsys.readouterr().err
+
+
+def test_show_upside_uses_the_position_the_prompt_collected(capsys):
+    """The interactive run never passes --size; it answers a prompt instead."""
+    report = _long_report()
+    report.position_size = 438550.0
+    report.position_shares = 5000
+    args = validate.build_parser().parse_args(["KO", "-t", "long", "--target-cap", "10T"])
+    assert args.size is None, "nothing was passed on the command line"
+    validate.show_upside(report, args, validate.make_palette(no_color=True), 104)
+    out = capsys.readouterr().out
+    assert "Your position" in out
+    assert "5,000 shares" in out
