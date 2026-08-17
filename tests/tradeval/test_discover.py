@@ -135,3 +135,47 @@ def test_find_earnings_candidates_widens_window_when_thin(monkeypatch):
     found, start, end = discover.find_earnings_candidates(days=None, limit=5, min_results=3)
     assert len(found) == 1
     assert len(calls) == 2  # first the plain week, then the rolling 7 days
+
+
+# -- a prompt that takes either a sector or a ticker ------------------------
+
+
+def test_sector_or_none_resolves_a_menu_number():
+    assert discover.sector_or_none("1") == discover.MENU_CHOICES[0]
+    assert discover.sector_or_none("10") == discover.MENU_CHOICES[9]
+
+
+def test_sector_or_none_rejects_a_number_off_the_menu():
+    """99 is not a sector, so it falls through to being read as a symbol."""
+    assert discover.sector_or_none("99") is None
+    assert discover.sector_or_none("0") is None
+
+
+def test_sector_or_none_takes_a_long_enough_name():
+    assert discover.sector_or_none("tech") == "Technology"
+    assert discover.sector_or_none("Technology") == "Technology"
+    assert discover.sector_or_none("HEALTH") == "Healthcare"
+
+
+def test_short_input_is_a_ticker_not_a_sector_prefix():
+    """The point of the floor: T and MU are symbols people actually trade.
+
+    Without it "T" prefix-matches Technology and "M" matches Memory, and the
+    two shortest tickers on the market could never be typed at that prompt.
+    """
+    assert discover.sector_or_none("T") is None
+    assert discover.sector_or_none("M") is None
+    assert discover.sector_or_none("MU") is None
+    assert discover.sector_or_none("KO") is None
+
+
+def test_sector_or_none_on_an_unknown_name():
+    assert discover.sector_or_none("NVDA") is None
+    assert discover.sector_or_none("BRK.B") is None
+    assert discover.sector_or_none("") is None
+    assert discover.sector_or_none("   ") is None
+
+
+def test_resolve_sector_itself_is_unchanged():
+    """The floor belongs to the ambiguous prompt, not to --sector."""
+    assert discover.resolve_sector("T") == "Technology"

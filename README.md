@@ -243,6 +243,40 @@ Costs one lookup per name, roughly a minute for a nine-name flow, so it is
 never read unless asked for. Set `{ "buzz": { "source": "reddit" } }` and the
 flow is scored off Reddit instead, in one pass over a shared corpus.
 
+### Browsing a sector
+
+**Short term and long term** both open with the sector and theme menu, because
+both hold a company rather than an event — you find one the same way, by
+looking at a basket and taking the biggest names in it:
+
+```
+Which sector?
+
+   1) Technology          6) Industrials
+   2) Healthcare          7) Memory
+   3) Financial Services  8) NeoCloud
+   ...
+
+Choice [1-10, a ticker, or b to go back]: 1
+
+Technology -- largest companies:
+
+   1) AAPL   Apple Inc.   $3.9T
+   ...
+```
+
+**You never have to walk through it.** Type a ticker at any of these prompts —
+the sector menu, the company list, the earnings list, the spending flows — and
+it is taken as the answer the list was going to give. Browsing exists to
+produce a symbol; someone who already has one should not have to shop for it.
+
+That prompt takes both, so the two are told apart by a rule: a number is always
+the menu, and a name has to be **three characters or more** before it outranks
+a symbol. Without that floor `T` prefix-matches Technology and `M` matches
+Memory, and the two shortest tickers on the market could never be typed.
+`tech` still gets you Technology; `T` gets you AT&T. (`--sector` on the command
+line is unambiguous and keeps the old matching.)
+
 ### This week's earnings candidates
 
 Pick the earnings gamble without a ticker and it offers the largest tech names

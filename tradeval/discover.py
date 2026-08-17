@@ -96,6 +96,32 @@ def resolve_sector(choice: str) -> str:
     )
 
 
+# Shortest name fragment that may stand for a sector at a prompt which also
+# accepts a ticker. Without a floor "T" prefix-matches Technology and "M"
+# matches Memory, so the two shortest tickers on the market could never be
+# typed. Three characters clears every one- and two-letter symbol.
+MIN_SECTOR_FRAGMENT = 3
+
+
+def sector_or_none(choice: str) -> Optional[str]:
+    """The sector a choice names, or None when it should be read as a ticker.
+
+    For prompts that take either. A number is always the menu; a name has to
+    be long enough not to be somebody's ticker before it outranks one.
+    """
+    raw = (choice or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        return MENU_CHOICES[int(raw) - 1] if 1 <= int(raw) <= len(MENU_CHOICES) else None
+    if len(raw) < MIN_SECTOR_FRAGMENT:
+        return None
+    try:
+        return resolve_sector(raw)
+    except ValueError:
+        return None
+
+
 def sector_companies(
     sector: str, limit: int = 10, min_market_cap: float = 2e9
 ) -> List[SectorCompany]:

@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--sector",
-        help="short term only: sector or theme to browse for candidates (a menu number or a name)",
+        help="short and long term: sector or theme to browse for candidates (a menu number or a name)",
     )
     plan.add_argument(
         "--peers",
@@ -226,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--resolve-sector",
         metavar="CHOICE",
         help="print the sector or theme a menu choice names, then exit",
+    )
+    other.add_argument(
+        "--resolve-sector-or-ticker",
+        metavar="CHOICE",
+        help="print 'sector:NAME' or 'ticker:SYMBOL' for a choice that could be "
+        "either, then exit. For prompts that accept both.",
     )
     other.add_argument(
         "--list-sector-companies",
@@ -357,8 +363,12 @@ def prompt_symbols(
         )
     elif key == "earnings":
         candidates = show_earnings_menu(config)
-    elif key == "short":
-        candidates = show_sector_menu(sector)
+    elif key in ("short", "long"):
+        # A long-term hold is found the same way a swing trade is: by looking
+        # at a sector and picking the biggest names in it.
+        candidates, typed = show_sector_menu(sector)
+        if typed:
+            return [typed]
 
     prompt = (
         "\nPick a number, or type ticker(s): " if candidates else "Ticker(s), space separated: "
@@ -379,8 +389,13 @@ def prompt_symbols(
         return resolve_symbols(raw.split())
 
 
-def show_sector_menu(sector: Optional[str] = None) -> List:
-    """Pick a sector or theme, then list its largest companies to choose from."""
+def show_sector_menu(sector: Optional[str] = None) -> "tuple[List, Optional[str]]":
+    """Pick a sector or theme, then list its largest companies to choose from.
+
+    Returns the companies and, when the prompt was answered with a ticker
+    rather than a sector, that ticker -- browsing is a way of finding a symbol,
+    so someone who already has one should never have to walk through it.
+    """
     if sector is not None:
         # --sector takes the same menu numbers and name fragments the prompt
         # does, so it has to go through the same resolution.
@@ -394,15 +409,17 @@ def show_sector_menu(sector: Optional[str] = None) -> List:
         for line in discover.format_sector_menu():
             print(line)
         try:
-            raw = input("\nChoice [1-%d]: " % len(discover.MENU_CHOICES)).strip()
+            raw = input(
+                "\nChoice [1-%d, or type a ticker]: " % len(discover.MENU_CHOICES)
+            ).strip()
         except EOFError:
-            return []
+            return [], None
         if not raw:
             continue
-        try:
-            sector = discover.resolve_sector(raw)
-        except ValueError as exc:
-            print("  %s" % exc)
+        sector = discover.sector_or_none(raw)
+        if sector is None:
+            # Not a sector, so it is the thing browsing was going to produce.
+            return [], resolve_symbols([raw])[0]
 
     try:
         companies = discover.sector_companies(sector)
@@ -410,12 +427,12 @@ def show_sector_menu(sector: Optional[str] = None) -> List:
         companies = []
     if not companies:
         print("\nNo companies found for %s." % sector)
-        return []
+        return [], None
 
     print("\n%s -- largest companies:\n" % sector)
     for number, item in enumerate(companies, start=1):
         print("  %2d) %s" % (number, discover.format_company(item)))
-    return companies
+    return companies, None
 
 
 def show_earnings_menu(config: Config) -> List:
@@ -1295,6 +1312,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         print(palette.grey("  " + sessions.month_end_line()))
         return 0 if events else 1
+
+    if args.resolve_sector_or_ticker:
+        choice = args.resolve_sector_or_ticker
+        sector = discover.sector_or_none(choice)
+        if sector:
+            print("sector:%s" % sector)
+        else:
+            print("ticker:%s" % resolve_symbols([choice])[0])
+        return 0
 
     if args.list_spending:
         for line in spending.menu_lines(palette):

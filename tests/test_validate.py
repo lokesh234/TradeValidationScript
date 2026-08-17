@@ -389,3 +389,54 @@ def test_buzz_scorer_can_be_pointed_at_x():
     with patch("tradeval.x_api.score_symbols", return_value={"NVDA": "stub"}) as mocked:
         assert validate.buzz_scorer(args, config)(["NVDA"]) == {"NVDA": "stub"}
     mocked.assert_called_once()
+
+
+def test_main_resolve_sector_or_ticker_labels_which_it_is(capsys):
+    assert validate.main(["--resolve-sector-or-ticker", "1"]) == 0
+    assert capsys.readouterr().out.strip() == "sector:Technology"
+
+    assert validate.main(["--resolve-sector-or-ticker", "tech"]) == 0
+    assert capsys.readouterr().out.strip() == "sector:Technology"
+
+    # Short enough to be a symbol, so it is treated as one.
+    assert validate.main(["--resolve-sector-or-ticker", "T"]) == 0
+    assert capsys.readouterr().out.strip() == "ticker:T"
+
+    assert validate.main(["--resolve-sector-or-ticker", "nvda"]) == 0
+    assert capsys.readouterr().out.strip() == "ticker:NVDA"
+
+
+def test_show_sector_menu_hands_back_a_typed_ticker():
+    """Browsing exists to produce a symbol; someone who has one skips it."""
+    with patch("builtins.input", side_effect=["MU"]):
+        companies, typed = validate.show_sector_menu()
+    assert companies == []
+    assert typed == "MU"
+
+
+def test_show_sector_menu_still_takes_a_sector():
+    with patch("builtins.input", side_effect=["1"]), \
+         patch("tradeval.discover.sector_companies", return_value=[]):
+        companies, typed = validate.show_sector_menu()
+    assert typed is None
+
+
+def test_prompt_symbols_offers_sectors_to_a_long_term_trade():
+    """A long-term hold is found the same way a swing trade is."""
+    with patch("validate.show_sector_menu", return_value=([], "KO")) as menu:
+        assert validate.prompt_symbols([], "long", Config()) == ["KO"]
+    menu.assert_called_once()
+
+
+def test_prompt_symbols_still_offers_sectors_to_a_short_term_trade():
+    with patch("validate.show_sector_menu", return_value=([], "KO")) as menu:
+        assert validate.prompt_symbols([], "short", Config()) == ["KO"]
+    menu.assert_called_once()
+
+
+def test_prompt_symbols_leaves_the_earnings_menu_alone():
+    with patch("validate.show_sector_menu") as sectors, \
+         patch("validate.show_earnings_menu", return_value=[]), \
+         patch("builtins.input", side_effect=["AMAT"]):
+        assert validate.prompt_symbols([], "earnings", Config()) == ["AMAT"]
+    sectors.assert_not_called()

@@ -157,7 +157,7 @@ pick_candidate() {
     [ -n "$flow" ] && extra=", c for the chatter"
     printf '\n'
     while true; do
-        ask reply "Pick a number to take one${extra}, or b to go back"
+        ask reply "Pick a number${extra}, type a ticker, or b to go back"
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             b|back|"") return 1 ;;
             c|chatter|buzz)
@@ -166,7 +166,19 @@ pick_candidate() {
                 else
                     printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
                 fi ;;
-            *[!0-9]*) printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF" ;;
+            *[!0-9]*)
+                # A symbol typed here is the answer the list was going to give,
+                # so take it rather than insisting on a number.
+                case "$reply" in
+                    *[!A-Za-z0-9.-]*)
+                        printf '  %sPick a number from 1 to %s, or type a ticker.%s\n' \
+                            "$DIM" "$count" "$OFF" ;;
+                    *)
+                        TICKERS="$(printf '%s' "$reply" | tr '[:lower:]' '[:upper:]')"
+                        printf '  %s-> %s%s\n' "$DIM" "$TICKERS" "$OFF"
+                        "$PY" "$ROOT/validate.py" --profile "$TICKERS"
+                        return 0 ;;
+                esac ;;
             *)
                 if [ "$reply" -ge 1 ] && [ "$reply" -le "$count" ]; then
                     TICKERS="${CANDIDATES[$((reply - 1))]}"
@@ -257,14 +269,26 @@ choose_sector() {
     count="$(printf '%s\n' "$menu" | wc -l | tr -d ' ')"
     printf '\n%sWhich sector?%s\n\n%s\n\n' "$BOLD" "$OFF" "$menu"
     while true; do
-        ask reply "Choice [1-$count, or b to go back]"
+        ask reply "Choice [1-$count, a ticker, or b to go back]"
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             b|back|"") return 1 ;;
         esac
         # Resolving is a local lookup; leave the network fetch to browse_sector.
-        SECTOR="$("$PY" "$ROOT/validate.py" --resolve-sector "$reply" 2>/dev/null)"
-        [ -n "$SECTOR" ] && return 0
-        printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$count" "$OFF"
+        # --resolve-sector-or-ticker leaves a number or a long enough name as a
+        # sector and hands anything else back as a symbol, so "T" reaches the
+        # ticker prompt instead of prefix-matching Technology.
+        SECTOR="$("$PY" "$ROOT/validate.py" --resolve-sector-or-ticker "$reply" 2>/dev/null)"
+        case "$SECTOR" in
+            sector:*) SECTOR="${SECTOR#sector:}"; return 0 ;;
+            ticker:*)
+                # Browsing exists to produce a symbol. Given one, skip it.
+                TICKERS="${SECTOR#ticker:}"
+                SECTOR=""
+                printf '  %s-> %s%s\n' "$DIM" "$TICKERS" "$OFF"
+                return 2 ;;
+        esac
+        SECTOR=""
+        printf '  %sPick a number from 1 to %s, or type a ticker.%s\n' "$DIM" "$count" "$OFF"
     done
 }
 
@@ -329,14 +353,22 @@ choose_instrument() {
 }
 
 choose_ticker() {
-    local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0
+    local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0 picked
+    TICKERS=""
     # An earnings gamble offers this week's reporters to choose from.
     if [ "$STRATEGY" = "earnings" ] && browse_earnings; then
         count=${#CANDIDATES[@]}
         prompt="Pick a number, or type a ticker"
-    elif [ "$STRATEGY" = "short" ] && choose_sector && browse_sector; then
-        count=${#CANDIDATES[@]}
-        prompt="Pick a number, or type a ticker"
+    elif [ "$STRATEGY" = "short" ] || [ "$STRATEGY" = "long" ]; then
+        # Both hold a company rather than an event, so both are found the same
+        # way: look at a sector, take the biggest names in it.
+        choose_sector; picked=$?
+        # 2 means a ticker was typed at the sector prompt -- nothing left to ask.
+        [ "$picked" = "2" ] && return 0
+        if [ "$picked" = "0" ] && browse_sector; then
+            count=${#CANDIDATES[@]}
+            prompt="Pick a number, or type a ticker"
+        fi
     fi
 
     while true; do
