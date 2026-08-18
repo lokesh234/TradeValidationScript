@@ -85,7 +85,32 @@
       "Bash(awk '/CALLS -- /,/^$/' /private/tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/c3b2f5d3-519f-4cdc-9864-7520bf2a39ed/scratchpad/st500b.txt)",
       "Bash(grep *)",
       "Bash(sed -n '/def _spread_panels/,/def _spread_table/p' tradeval/strategies/options.py)",
-      "Bash(sed -n '/def _spread_profit_panel/,/^    def _check_budget_covers_a_spread/p' tradeval/strategies/options.py)"
+      "Bash(sed -n '/def _spread_profit_panel/,/^    def _check_budget_covers_a_spread/p' tradeval/strategies/options.py)",
+      "Bash(python3 validate.py --list-spending)",
+      "Bash(python3 validate.py --list-spending-winners 5)",
+      "Bash(python3 validate.py --list-spending-winners 9)",
+      "Bash(python3 -c ' *)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(command -v python3.11 python3.12 python3.13)",
+      "Bash(.venv/bin/pip install *)",
+      "Bash(.venv/bin/pip uninstall *)",
+      "Bash(command -v uv pyenv conda docker)",
+      "Bash(docker info *)",
+      "Bash(gh run *)",
+      "Bash(gh auth *)",
+      "Bash(gh pr create --base main --head add-mit-license --title 'Say plainly that the code is MIT' --body ' *)",
+      "Bash(timeout 180 ./trade.sh)",
+      "Bash(timeout 400 ./trade.sh)",
+      "Bash(awk -F: '{print $1}')",
+      "Bash(sed -i '' -e 's/def check_liquidity\\(self, min_dollar_volume: float, weight: float, critical: bool\\) -> CheckResult:/def check_liquidity\\(self, min_dollar_volume: float, weight: float, critical: bool = False\\) -> CheckResult:/' -e 's/def check_position_size\\(self, max_risk_pct: float, weight: float, critical: bool\\) -> CheckResult:/def check_position_size\\(self, max_risk_pct: float, weight: float, critical: bool = False\\) -> CheckResult:/' tradeval/strategies/base.py)",
+      "Bash(sed -i '' 's/, weight=1.0, critical=False\\)/, weight=1.0\\)/' tradeval/strategies/long_term.py tradeval/strategies/earnings_gamble.py)",
+      "Bash(sed -n 52,63p /tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/436684f7-fa0a-4509-b05b-fd7379c76a56/scratchpad/spread.txt)",
+      "Bash(sed -n 104,115p /tmp/claude-501/-Users-lokeshgangaramaney-WebstormProjects-TradeValidationScripts/436684f7-fa0a-4509-b05b-fd7379c76a56/scratchpad/spread.txt)",
+      "Read(//tmp/**)",
+      "Bash(echo \"--- exit: $? ---\")",
+      "Bash(sed -n '/^choose_sector\\(\\) {/,/^}/p' trade.sh)",
+      "Bash(sed -n '/^choose_ticker\\(\\) {/,/^}/p' trade.sh)",
+      "Bash(timeout 60 ./trade.sh)"
     ]
   }
 }

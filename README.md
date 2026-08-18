@@ -70,13 +70,28 @@ extended is a different proposition on a day the whole market is up 2%:
 ```
 Where the market closed
 
-  S&P 500        7,781.93    -0.22%
-  Dow           53,718.26    -0.23%
-  Nasdaq 100       729.18    -0.39%
-  Russell 2000     304.23    +0.24%
+  S&P 500         7,781.93    -0.22%
+  Dow            53,718.26    -0.23%
+  Nasdaq 100        729.18    -0.39%
+  Russell 2000      304.23    +0.24%
+
+  10-year yield      4.28%   +3.0 bp
+  30-year yield      4.91%   +2.8 bp
 ```
 
-One batched request for all four, about 0.4s. If it fails you lose the header,
+Then the long end of the curve, because the discount rate is half of what a
+multiple is worth and none of it shows up in an index level. A ten-year at
+4.7% is a different market for a growth name than a ten-year at 3.5%, on the
+same S&P print.
+
+Yields are quoted the way a desk quotes them — the level as a percent, and the
+day's move in basis points, since 4.28% going to 4.31% is a 3bp move and
+calling it +0.7% describes nothing anyone trades on. Colour reads as it does
+everywhere else in the tool, as "in your favour": this header is read before an
+equity entry, so a yield that **rises** prints red and one that falls prints
+green. The sign always says which way it went.
+
+One batched request for all six, about 0.4s. If it fails you lose the header,
 not the report. `validate.py --list-indices` prints it on its own.
 
 ### What the market has scheduled

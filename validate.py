@@ -254,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
     other.add_argument(
         "--list-indices",
         action="store_true",
-        help="print where the major indices closed, then exit",
+        help="print where the major indices and the 10- and 30-year yields closed, then exit",
     )
     other.add_argument(
         "--list-events",

@@ -352,10 +352,16 @@ def test_main_list_events_says_when_the_table_has_run_out(capsys):
 
 
 def test_main_list_indices_prints_the_market_header(capsys):
-    quotes = [validate.indices.IndexQuote("^GSPC", "S&P 500", 100.0, 1.25)]
+    quotes = [
+        validate.indices.IndexQuote("^GSPC", "S&P 500", 100.0, 1.25),
+        validate.indices.IndexQuote("^TNX", "10-year yield", 4.28, None, 3.0, True),
+    ]
     with patch("tradeval.indices.snapshot", return_value=quotes):
         assert validate.main(["--list-indices"]) == 0
-    assert "S&P 500" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "S&P 500" in out
+    # The curve comes through the same flag; the shell front end prints one block.
+    assert "10-year yield" in out and "+3.0 bp" in out
 
 
 def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
