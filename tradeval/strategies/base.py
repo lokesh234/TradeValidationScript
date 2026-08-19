@@ -701,7 +701,17 @@ class Strategy(ABC):
                 when = "tomorrow"
             else:
                 when = "in %d days" % days
-            rows.append(["Next earnings", dates.format_date(report), when, ""])
+            # The date reads in the figure column and the key you would type
+            # back into a flag rides with the countdown, rather than making
+            # this one row twice the width of every price above it.
+            rows.append(
+                [
+                    "Next earnings",
+                    dates.long_date(report),
+                    "%s [%s]" % (when, report.isoformat()),
+                    "",
+                ]
+            )
         return rows
 
     def _balance_sheet_rows(self) -> List[List[str]]:
@@ -801,8 +811,10 @@ class Strategy(ABC):
 
         spread = _span(low, high, "$%.2f")
         if low and high and mean:
-            # Disagreement measured against the anchor, not the price.
-            spread += ", %.0f%% wide" % ((high - low) / mean * 100.0)
+            # Disagreement measured against the anchor, not the price. It goes
+            # in the note beside the coverage, which keeps the figure column
+            # holding figures.
+            coverage.insert(0, "%.0f%% wide" % ((high - low) / mean * 100.0))
 
         return [
             ["Analyst target", _num(mean, "$%.2f"), upside, GOOD_ANALYST_TARGET],

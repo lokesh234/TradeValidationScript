@@ -9,7 +9,9 @@ import pytest
 
 from tradeval.checks import CheckResult, Status, Verdict
 from tradeval.report import (
+    PANEL_GAP,
     Palette,
+    layout_panels,
     make_palette,
     panel_width,
     plain_len,
@@ -164,6 +166,119 @@ def test_render_includes_panel_rows():
     text = render(report, Palette(enabled=False), width=120)
     assert "A PANEL" in text
     assert "Col1" in text
+
+
+def _info_panel(**overrides) -> Panel:
+    defaults = dict(
+        title="INFO",
+        headers=["Metric", "Value", "Range / note", "What's good"],
+        rows=[
+            ["FIRST BLOCK", "", "", ""],
+            ["Market cap", "$158.92B", "", "$10B+ trades liquid"],
+            ["Price", "$588.72", "65% of 52w range", "upper half = strength"],
+            ["SECOND BLOCK", "", "", ""],
+            ["Beta", "0.90", "moves with the market", "over 2 needs a smaller size"],
+        ],
+        sections=[0, 3],
+        label_value_note=True,
+    )
+    defaults.update(overrides)
+    return Panel(**defaults)
+
+
+def _panel_lines(panel: Panel, width: int = 120) -> list:
+    return [line for line in layout_panels([panel], Palette(enabled=False), width)]
+
+
+def test_section_headings_are_ruled_to_the_table_edge():
+    lines = _panel_lines(_info_panel())
+    heading = next(line for line in lines if line.startswith("  FIRST BLOCK"))
+    assert heading.startswith("  FIRST BLOCK -----")
+
+
+def test_section_rule_stops_at_the_report_width():
+    lines = _panel_lines(_info_panel(), width=40)
+    heading = next(line for line in lines if line.startswith("  FIRST BLOCK"))
+    assert len(heading) <= 40
+
+
+def test_a_blank_line_opens_each_block_but_not_the_first():
+    lines = _panel_lines(_info_panel())
+    first = next(i for i, line in enumerate(lines) if line.startswith("  FIRST BLOCK"))
+    second = next(i for i, line in enumerate(lines) if line.startswith("  SECOND BLOCK"))
+    # The header row sits directly above the opening block; the second block
+    # needs the gap, since a row of figures runs into it.
+    assert lines[first - 1].strip()
+    assert lines[second - 1] == ""
+
+
+def test_the_closing_note_stands_off_the_table():
+    lines = _panel_lines(_info_panel(note="A closing note."))
+    note = next(i for i, line in enumerate(lines) if "A closing note." in line)
+    assert lines[note - 1] == ""
+
+
+def test_notes_read_left_aligned_under_their_header():
+    """Right-aligned prose starts in a different place on every row."""
+    lines = _panel_lines(_info_panel())
+    header = next(line for line in lines if "Range / note" in line)
+    rows = [line for line in lines if line.startswith(("  Price", "  Beta"))]
+    column = header.index("Range / note")
+    assert [line.index("65% of 52w range") for line in rows if "65%" in line] == [column]
+    assert [line.index("moves with the market") for line in rows if "moves" in line] == [column]
+
+
+_OUTLIER_ROWS = [
+    ["Expected earnings (quarter)", "$1.26B", "EPS x 269.94M shares", "the consensus"],
+    ["Free cash flow", "$3.23B", "2.03% of market cap", "positive is the bar"],
+    ["Next earnings", "20th August, 2026 [2026-08-20]", "in 2 days", "the date to hold to"],
+]
+
+
+def test_one_long_figure_does_not_widen_the_column_for_every_row():
+    """A spelled-out date among the prices would open a gulf beside each label."""
+    lines = _panel_lines(_info_panel(rows=_OUTLIER_ROWS, sections=[]))
+    cash = next(line for line in lines if line.startswith("  Free cash flow"))
+    assert "  $3.23B  2.03% of market cap" in cash
+
+
+def _tall_panel() -> Panel:
+    """A table long enough to split, whose only early cut is a lopsided one."""
+    rows = [["OPENER", "", "", ""]]
+    rows += [["Row %d" % i, "$%d.00" % i, "note %d" % i, "guide %d" % i] for i in range(4)]
+    rows.append(["MIDDLE", "", "", ""])
+    rows += [["Row %d" % i, "$%d.00" % i, "note %d" % i, "guide %d" % i] for i in range(4, 30)]
+    return Panel(
+        title="TALL",
+        headers=["Metric", "Value", "Range / note", "What's good"],
+        rows=rows,
+        sections=[0, 5],
+        label_value_note=True,
+        split_when_wide=True,
+    )
+
+
+def test_a_lopsided_cut_is_left_whole_rather_than_split():
+    """Five rows beside thirty is a stripe of empty page, not two columns."""
+    lines = _panel_lines(_tall_panel(), width=240)
+    assert not any(PANEL_GAP in line for line in lines)
+
+
+def test_a_balanced_cut_still_splits():
+    panel = _tall_panel()
+    panel.sections.append(18)
+    panel.rows[18] = ["EVEN", "", "", ""]
+    lines = _panel_lines(panel, width=240)
+    assert any(PANEL_GAP in line for line in lines)
+
+
+def test_an_over_long_figure_spends_the_padding_around_it():
+    """The outlier still prints in full, and the columns past it hold their line."""
+    lines = _panel_lines(_info_panel(rows=_OUTLIER_ROWS, sections=[]))
+    cash = next(line for line in lines if line.startswith("  Free cash flow"))
+    date = next(line for line in lines if line.startswith("  Next earnings"))
+    assert "20th August, 2026 [2026-08-20]" in date
+    assert cash.index("positive is the bar") == date.index("the date to hold to")
 
 
 def test_render_summary_empty_for_single_report():

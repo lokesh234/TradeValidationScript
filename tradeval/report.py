@@ -24,6 +24,10 @@ FALLBACK_WIDTH = 100
 MIN_INLINE_DETAIL = 52
 # Below this a table is short enough to read in one column anyway.
 MIN_SPLIT_ROWS = 16
+# The smaller half of a split has to hold at least this share of the rows.
+# A third is uneven enough to be worth trying and even enough to still read as
+# two columns.
+MIN_SPLIT_BALANCE = 1.0 / 3.0
 
 
 def detect_width(override: Optional[int] = None) -> int:
@@ -276,6 +280,11 @@ def _render_verdict(report: Report, palette: Palette) -> List[str]:
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 PANEL_GAP = " || "
 MARKER_PREFIX = "  <- "
+# Figures are short -- a price, a percentage, a multiple. Anything past this
+# is an outlier, a spelled-out earnings date among the prices, and is left out
+# of the column's width rather than opening a gulf between every label and its
+# number. The outlier still prints in full, over the padding around it.
+MAX_FIGURE_WIDTH = 12
 
 
 def plain_len(text: str) -> int:
@@ -288,7 +297,42 @@ def _panel_column_widths(panel: Panel) -> List[int]:
     for row in list(panel.rows) + ([panel.subheaders] if panel.subheaders else []):
         for i, cell in enumerate(row):
             widths[i] = max(widths[i], len(cell))
+    if panel.label_value_note and len(widths) > 1:
+        fits = [len(row[1]) for row in panel.rows if len(row) > 1 and len(row[1]) <= MAX_FIGURE_WIDTH]
+        # A table whose figures are all long -- a column of dates -- has no
+        # outlier to leave out, so it keeps the cap itself rather than
+        # collapsing onto the header and overflowing every row.
+        sized = max(fits) if fits else min(widths[1], MAX_FIGURE_WIDTH)
+        widths[1] = max(len(panel.headers[1]), sized)
     return widths
+
+
+def _elastic_widths(row: Sequence[str], widths: Sequence[int]) -> List[int]:
+    """Row widths where an over-long cell eats the padding around it.
+
+    A column sized on its typical cell still has to print the outlier that
+    overran it. Taking the room from the padding either side -- empty space in
+    a row whose label is short and whose notes are shorter than their column --
+    keeps the columns past the outlier where the rest of the table expects
+    them, instead of shunting the whole row sideways.
+    """
+    out = list(widths)
+    for index in range(1, min(len(row), len(out))):
+        over = len(row[index]) - out[index]
+        if over <= 0:
+            continue
+        out[index] = len(row[index])
+        # The label's padding first: room taken there moves the outlier left,
+        # where it still reads against its own label.
+        neighbours = list(range(index - 1, -1, -1)) + list(range(index + 1, len(out)))
+        for other in neighbours:
+            if over <= 0:
+                break
+            slack = out[other] - (len(row[other]) if other < len(row) else 0)
+            taken = max(0, min(slack, over))
+            out[other] -= taken
+            over -= taken
+    return out
 
 
 def panel_width(panel: Panel) -> int:
@@ -398,9 +442,18 @@ def _split_if_wide(panel: Panel, width: int) -> List[Panel]:
         return [panel]
     # Cuts land on section headings so no block is torn in two, and are tried
     # from the most even outward: an uneven split still beats no split, since
-    # the halves' widths depend on what happens to be in each one.
-    middle = len(panel.rows) / 2.0
-    breaks = [index for index in panel.sections if 0 < index < len(panel.rows)]
+    # the halves' widths depend on what happens to be in each one. Past a
+    # point it stops being a split, though -- five rows beside forty reads as
+    # one tall table with a stripe of empty page down the left, which is worse
+    # than the tall table it came from. Those cuts are left on the table and
+    # the panel stays whole.
+    total = len(panel.rows)
+    middle = total / 2.0
+    breaks = [
+        index
+        for index in panel.sections
+        if 0 < index < total and min(index, total - index) >= total * MIN_SPLIT_BALANCE
+    ]
     for cut in sorted(breaks, key=lambda index: abs(index - middle)):
         left, right = _halves(panel, cut)
         if panel_width(left) + len(PANEL_GAP) + panel_width(right) <= width:
@@ -439,6 +492,11 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
     widths = _panel_column_widths(panel)
 
     left = {0} | set(panel.left_align)
+    # Label, figure, then prose. Right-aligning a sentence leaves its opening
+    # word in a different place on every row, so everything past the figure
+    # reads left, and the header row moves with it.
+    if panel.label_value_note:
+        left |= set(range(2, len(widths)))
 
     def line(cells: Sequence[str], colorize: bool = False) -> str:
         # Labels and text columns run left, figures right.
@@ -467,25 +525,51 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
     for index, row in enumerate(panel.rows):
         if index in panel.sections:
             # Headings carry the title's colour, a step down from it in weight,
-            # so blocks separate without competing with the panel name.
-            out.append(palette.cyan(line(row)))
+            # so blocks separate without competing with the panel name. The
+            # blank line above does most of the work -- the reader is asking
+            # one question at a time, and this is where the question changes.
+            # A heading opening the table needs no gap: the header row is
+            # already above it.
+            if index:
+                out.append("")
+            out.append(palette.cyan(_section_rule(row[0], widths, width)))
             continue
         if index in panel.dim:
             out.append(palette.grey(line(row)))
             continue
         if panel.label_value_note:
-            out.append(_render_info_row(row, widths, palette, panel.row_styles.get(index)))
+            out.append(_render_info_row(row, widths, left, palette, panel.row_styles.get(index)))
             continue
         text = line(row, colorize=panel.color_signed)
         marker = MARKER_PREFIX + panel.highlight_label
         out.append(palette.cyan(text + marker) if index in panel.highlight else text)
     if panel.note:
+        # The note is about the table, not a row of it, so it stands off the
+        # bottom rather than reading as one more line of data.
+        out.append("")
         out.extend(palette.grey(l) for l in _wrap_text(panel.note, width, "  "))
     return out
 
 
+def _section_rule(label: str, widths: Sequence[int], width: int) -> str:
+    """A block heading, carried to the table's edge by a light rule.
+
+    The rule gives the eye the width of the block it is entering and a line to
+    come back to, which a bare label floating over a column of figures does not.
+    It stops at the report's edge, since a table wider than the terminal would
+    otherwise wrap the rule onto a line of its own.
+    """
+    table = min(2 + sum(widths) + 2 * (len(widths) - 1), width)
+    head = "  " + label + " "
+    return head + "-" * max(table - len(head), 0)
+
+
 def _render_info_row(
-    row: Sequence[str], widths: Sequence[int], palette: Palette, style: Optional[str]
+    row: Sequence[str],
+    widths: Sequence[int],
+    left: set,
+    palette: Palette,
+    style: Optional[str],
 ) -> str:
     """Label plain, figure emphasised, trailing notes dimmed.
 
@@ -506,15 +590,16 @@ def _render_info_row(
     if not filled:
         return ""
     last = max(filled)
+    widths = _elastic_widths(row[: last + 1], widths)
 
     parts = []
     for index, cell in enumerate(row[: last + 1]):
         # Right-aligned cells pad on the left, so they can always be padded --
-        # figures then line up whether or not a note follows. Only the label
-        # would leave trailing spaces, so it is padded only when something
-        # comes after it.
-        if index == 0:
-            padded = cell.ljust(widths[index]) if last > 0 else cell
+        # figures then line up whether or not a note follows. A left-aligned
+        # cell pads on the right, where trailing spaces would show, so it is
+        # padded only when something comes after it.
+        if index in left:
+            padded = cell.ljust(widths[index]) if index < last else cell
         else:
             padded = cell.rjust(widths[index])
         if index == 0:

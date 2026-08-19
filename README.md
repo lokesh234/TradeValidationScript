@@ -36,6 +36,8 @@ Which strategy are you trading?
 
 Choice [1-5]: 2
 
+Ticker symbol (Short Term): nvda
+
 What are you trading?
 
   O) Options            single contracts
@@ -44,7 +46,6 @@ What are you trading?
   P) Put debit spread   buy a strike, sell one below
 
 Choice [O/S/C/P]: S
-Ticker symbol (Short Term): nvda
 Add account and trade details for sizing [y/N]: y
   Account value in $ (Enter to skip): 50000
   Percent of account to risk (Enter to skip): 1
@@ -469,11 +470,12 @@ the default source is StockTwits, which serves per-ticker streams publicly:
   PASS   x1 Retail buzz   31/100 Quiet   82 messages on stocktwits over 165h (0.50/hour), leaning mixed
 
  RETAIL BUZZ -- stocktwits, last 165 hours
-  Volume         18         weight 4 -- 0.50 messages/hour
+  Component   0-100  Basis
+  Volume         18  weight 4 -- 0.50 messages/hour
   Velocity       50  weight 3 -- 1.48x newer half vs older
   Engagement     65  weight 1 -- 214 median audience reach
-  Breadth        17       weight 3 -- 52 posters over 165h
-  Buzz score     31                   Quiet, leaning mixed  <- score
+  Breadth        17  weight 3 -- 52 posters over 165h
+  Buzz score     31  Quiet, leaning mixed
 ```
 
 | Component | What it measures |
@@ -623,51 +625,57 @@ adds what the street expects from the report you selected:
   related industries in the United States, China, Korea, Taiwan, Japan, Southeast Asia, Europe, and internationally. The company
   operates through Semiconductor Systems and Applied Global Services (AGS) segments.
 
-  Metric                                             Value                   Range / note                   What's good
-  SIZE AND PRICE
-  Market cap                                      $417.31B                                          $10B+ trades liquid
-  Price                                            $525.61               63% of 52w range         upper half = strength
-  52-week high                                     $739.67               spot 28.9% below
-  52-week low                                      $154.47              spot 240.3% above
-  Traded per day                                    $3.86B   7.36M shares, 20-day average       $20M+/day fills cleanly
-  TREND AND MOMENTUM
-  50-day SMA                                       $556.07                spot 5.5% below          the swing-trade line
-  200-day SMA                                      $384.17               spot 36.8% above          the bull / bear line
-  50-day EMA                                       $528.63                spot 0.6% below    same window, reacts faster
-  200-day EMA                                      $409.70               spot 28.3% above       the slow line, weighted
-  VWAP, 20-day                                     $527.23                spot 0.3% below      the month's average cost
-  VWAP, 1-year                                     $354.12               spot 48.4% above   where the year's buyers sit
-  RSI (14)                                            48.0          momentum over 14 days    30-70 normal, 70+ extended
-  ATR (14)                                          $36.46                  6.9% of price  a day's range, sets the stop
-  vs SPY, 3 months                                  +14.3%           +18.5% against +4.2%  positive means it is leading
-  VALUATION
-  Forward P/E                                        30.46                 49.35 trailing             S&P averages ~22x
-  PEG ratio                                           1.19    P/E against expected growth     under 1.0 is cheap growth
-  Price / sales                                      14.38   market cap per $1 of revenue     under 3 typical, 10+ rich
-  EV / EBITDA                                        44.59            counts the debt too              under 15 typical
-  THE COMING REPORT
-  Expected EPS                                        3.39                    3.21 - 3.56
-  Expected earnings (quarter)                       $2.70B           EPS x 793.96M shares
-  Expected revenue (quarter)                        $9.00B                $8.95B - $9.20B
-  THE BUSINESS
-  Revenue (trailing 12m)                           $29.02B
-  Revenue growth                                    +11.4%                 year over year         10%+ solid, 25%+ fast
-  Earnings growth                                   +31.3%       most recent quarter, YoY   should keep pace with sales
-  Gross margin                                       49.0%     before running the company          40%+ = pricing power
-  Profit margin                                      29.3%     net income per $1 of sales   10%+ healthy, under 0 burns
-  Return on equity                                   39.7%  earned on shareholder capital           15%+ compounds well
-  Free cash flow                                    $5.70B            1.37% of market cap   positive, 5%+ of cap strong
-  Next earnings                                 2026-08-13                      in 2 days
-  BALANCE SHEET
-  Net cash                                        $973.00M     $8.24B cash vs $7.27B debt  cash above debt is a cushion
-  Debt / equity                                      30.4%      debt per $1 of book value     under 100% is comfortable
-  THE STREET AND THE FLOAT
-  Analyst target                                   $633.34               +20.5% from spot        targets skew ~15% high
-  Target range                 $358.00 - $900.00, 86% wide        35 analysts, strong buy    under 40% wide = agreement
-  Institutional held                                 84.7%                  insiders 0.3%              40-80% is normal
-  Short interest                                      2.1%            of float sold short  over 10% of float is crowded
-  Beta                                                1.62         amplifies market moves   over 2 needs a smaller size
-  Dividend yield                                     0.41%              17.3% of earnings            the S&P pays ~1.2%
+  Metric                          Value  Range / note                       What's good
+  SIZE AND PRICE ---------------------------------------------------------------------------------------
+  Market cap                   $417.31B                                     $10B+ trades liquid
+  Price                         $525.61  63% of 52w range                   upper half = strength
+  52-week high                  $739.67  spot 28.9% below
+  52-week low                   $154.47  spot 240.3% above
+  Traded per day                 $3.86B  7.36M shares, 20-day average       $20M+/day fills cleanly
+
+  TREND AND MOMENTUM -----------------------------------------------------------------------------------
+  50-day SMA                    $556.07  spot 5.5% below                    the swing-trade line
+  200-day SMA                   $384.17  spot 36.8% above                   the bull / bear line
+  50-day EMA                    $528.63  spot 0.6% below                    same window, reacts faster
+  200-day EMA                   $409.70  spot 28.3% above                   the slow line, weighted
+  VWAP, 20-day                  $527.23  spot 0.3% below                    the month's average cost
+  VWAP, 1-year                  $354.12  spot 48.4% above                   where the year's buyers sit
+  RSI (14)                         48.0  momentum over 14 days              30-70 normal, 70+ extended
+  ATR (14)                       $36.46  6.9% of price                      a day's range, sets the stop
+  vs SPY, 3 months               +14.3%  +18.5% against +4.2%               positive means it is leading
+
+  VALUATION --------------------------------------------------------------------------------------------
+  Forward P/E                     30.46  49.35 trailing                     S&P averages ~22x
+  PEG ratio                        1.19  P/E against expected growth        under 1.0 is cheap growth
+  Price / sales                   14.38  market cap per $1 of revenue       under 3 typical, 10+ rich
+  EV / EBITDA                     44.59  counts the debt too                under 15 typical
+
+  THE COMING REPORT ------------------------------------------------------------------------------------
+  Expected EPS                     3.39  3.21 - 3.56
+  Expected earnings (quarter)    $2.70B  EPS x 793.96M shares
+  Expected revenue (quarter)     $9.00B  $8.95B - $9.20B
+
+  THE BUSINESS -----------------------------------------------------------------------------------------
+  Revenue (trailing 12m)        $29.02B
+  Revenue growth                 +11.4%  year over year                     10%+ solid, 25%+ fast
+  Earnings growth                +31.3%  most recent quarter, YoY           should keep pace with sales
+  Gross margin                    49.0%  before running the company         40%+ = pricing power
+  Profit margin                   29.3%  net income per $1 of sales         10%+ healthy, under 0 burns
+  Return on equity                39.7%  earned on shareholder capital      15%+ compounds well
+  Free cash flow                 $5.70B  1.37% of market cap                positive, 5%+ of cap strong
+  Next earnings       13th August, 2026  in 2 days [2026-08-13]
+
+  BALANCE SHEET ----------------------------------------------------------------------------------------
+  Net cash                     $973.00M  $8.24B cash vs $7.27B debt         cash above debt is a cushion
+  Debt / equity                   30.4%  debt per $1 of book value          under 100% is comfortable
+
+  THE STREET AND THE FLOAT -----------------------------------------------------------------------------
+  Analyst target                $633.34  +20.5% from spot                   targets skew ~15% high
+  Target range        $358.00 - $900.00  86% wide, 35 analysts, strong buy  under 40% wide = agreement
+  Institutional held              84.7%  insiders 0.3%                      40-80% is normal
+  Short interest                   2.1%  of float sold short                over 10% of float is crowded
+  Beta                             1.62  amplifies market moves             over 2 needs a smaller size
+  Dividend yield                  0.41%  17.3% of earnings                  the S&P pays ~1.2%
 ```
 
 A short term or long term trade gets the same panel without `THE COMING
@@ -681,7 +689,13 @@ business you assumed they were.
 Rows are grouped because you read them one question at a time: where it is
 trading (`TREND AND MOMENTUM`), what it costs (`VALUATION`), whether it earns
 (`THE BUSINESS`), whether it can pay its debts (`BALANCE SHEET`), and who else
-is in it (`THE STREET AND THE FLOAT`).
+is in it (`THE STREET AND THE FLOAT`). Each block opens on a blank line and a
+heading ruled to the table's edge, so the question you are on is visible
+without reading the rows, and the three columns hold one line each: labels
+left, figures on a single right edge, everything explaining them left-aligned
+under its own heading. One long value — a spelled-out earnings date among the
+prices — spends the padding around it rather than widening the figure column
+for every row above.
 
 `TREND AND MOMENTUM` carries the lines price is trading against — 50 and 200
 day, simple and exponential — each with **where spot sits against it**, since a
@@ -828,15 +842,18 @@ that only ever says `Google` is not.
 ### What you're trading
 
 **Every** trade type asks what you're actually buying — a thesis about a
-company is not the same thing as the instrument you express it in:
+company is not the same thing as the instrument you express it in. It is asked
+**after** the ticker, since the calendar and the sector lists are what you are
+choosing between, and how you take the trade is a decision about the name you
+landed on:
 
 ```
 What are you trading?
 
-  O) Options            single contracts on the report
-  S) Stock              shares held through it
-  C) Call debit spread  buy a strike, sell one above -- bullish
-  P) Put debit spread   buy a strike, sell one below -- bearish
+  O) Options            single contracts
+  S) Stock              the shares themselves
+  C) Call debit spread  buy a strike, sell one above
+  P) Put debit spread   buy a strike, sell one below
 
 Choice [O/S/C/P]: S
 ```
@@ -1386,7 +1403,7 @@ its neighbour if both fit. The whole earnings report goes from 83 lines at 100
 columns to 62 at 200.
 
 The stock panel is tall enough to be worth **splitting against itself**. Given
-around 205 columns it is set as two columns, cut at a section heading so no
+around 195 columns it is set as two columns, cut at a section heading so no
 block is torn in half, with the title and description running full width above
 both:
 
@@ -1395,16 +1412,19 @@ both:
   Technology / Semiconductors -- 784 employees
   Cerebras Systems Inc. operates as an artificial intelligence infrastructure company...
 
-  Metric              Value             Range / note      What's good ||   Metric                  Value          Range / note      What's good
-  SIZE AND PRICE                                                      ||   THE BUSINESS
-  Market cap        $52.32B                    $10B+ trades liquid    ||   Revenue (trailing 12m)  $603.88M
-  Price             $234.76  33% of 52w range  upper half = strength  ||   Revenue growth            +94.4%  year over year  10%+ solid, 25%+ fast
+  Metric            Value  Range / note      What's good           ||   Metric                     Value  Range / note    What's good
+  SIZE AND PRICE ------------------------------------------------- ||   THE BUSINESS ----------------------------------------------------------
+  Market cap      $52.32B                    $10B+ trades liquid   ||   Revenue (trailing 12m)  $603.88M
+  Price           $234.76  33% of 52w range  upper half = strength ||   Revenue growth            +94.4%  year over year  10%+ solid, 25%+ fast
 ```
 
-That takes it from 52 lines to 31, with nothing dropped. The cut is chosen for
-you: the most even split that fits, falling back to a less even one before
-giving up, and to the single tall table when even that won't fit. Below about
-205 columns you get exactly what you got before, so this can only improve on
+On a full panel that takes it from 62 lines to 38, with nothing dropped. The
+cut is chosen for you: the most even split that fits, falling back to a less
+even one before giving up, and to the single tall table when even that won't
+fit. A cut leaving less than a third of the rows on one side is not offered at
+all — five rows beside forty is a stripe of empty page down the left, not two
+columns — so a terminal between the two sizes keeps the tall table. Below about
+195 columns you get exactly what you got before, so this can only improve on
 the tall version. The width ceiling is 240 columns.
 
 ### What a market cap you believe in would pay
@@ -1417,18 +1437,19 @@ asks for that number and does the arithmetic on it:
 What market cap do you think NVDA reaches? [now $5.45T, Enter to skip]: 10T
 
  WHAT NVDA WOULD BE WORTH AT $10.00T
-  Market cap now           $5.45T
-  Market cap you expect   $10.00T                                 1.83x from here
-  Implied share price     $412.86                        at today's 24.22B shares
-  Upside                   +83.4%
+  Metric                     Value  Note
+  Market cap now            $5.45T
+  Market cap you expect    $10.00T  1.83x from here
+  Implied share price      $412.86  at today's 24.22B shares
+  Upside                    +83.4%
 
-  Your position          $438,550                          5,000 shares at $87.71
-  Worth at that cap      $581,051                         5,000 shares at $116.21
-  Profit                +$142,501
+  Your position           $438,550  5,000 shares at $87.71
+  Worth at that cap       $581,051  5,000 shares at $116.21
+  Profit                 +$142,501
 
-  If it takes 3 years    22.4%/yr  very few companies compound like that for long
-  If it takes 5 years    12.9%/yr                ahead of the S&P's long-run ~10%
-  If it takes 10 years    6.3%/yr                  behind the S&P's long-run ~10%
+  If it takes 3 years     22.4%/yr  very few companies compound like that for long
+  If it takes 5 years     12.9%/yr  ahead of the S&P's long-run ~10%
+  If it takes 10 years     6.3%/yr  behind the S&P's long-run ~10%
 ```
 
 Holding a thesis as a market cap hides the two questions that decide whether

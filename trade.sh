@@ -659,9 +659,12 @@ while true; do
     HORIZON=""
     INSTRUMENT=""
     [ "$STRATEGY" = "short" ] && choose_horizon
-    choose_instrument
+    # The name first, then how you are taking it: the calendar and the sector
+    # lists are what you are choosing between, and an instrument picked before
+    # them is a decision made about a company you have not seen yet.
     # Browsing already settled the ticker, so only ask when it did not.
     [ -z "$TICKERS" ] && choose_ticker
+    choose_instrument
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
     if [ "$STRATEGY" = "earnings" ]; then
