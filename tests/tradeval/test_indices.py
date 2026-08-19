@@ -160,6 +160,55 @@ def test_format_lines_needs_no_separator_when_the_curve_is_all_there_is():
     assert len(lines) == 2 and "" not in lines
 
 
+def test_moves_reads_a_watchlist_in_one_request(monkeypatch):
+    calls = []
+
+    def record(symbols, *a, **k):
+        calls.append(list(symbols))
+        return {"Close": _frame(**{"KO": [90.0, 91.8], "NVDA": [220.0, 217.8]})}
+
+    monkeypatch.setattr(indices.yf, "download", record, raising=False)
+    quotes = indices.moves(["KO", "NVDA"])
+    assert len(calls) == 1
+    assert quotes["KO"][0] == 91.8
+    assert quotes["KO"][1] == pytest.approx(2.0)
+    assert quotes["NVDA"][1] == pytest.approx(-1.0)
+
+
+def test_moves_handles_the_one_symbol_shape(monkeypatch):
+    """A single symbol comes back as a series, not a one-column frame."""
+    _patched(monkeypatch, pd.Series([90.0, 91.8]))
+    assert indices.moves(["KO"])["KO"][0] == 91.8
+
+
+def test_moves_leaves_out_what_it_could_not_price(monkeypatch):
+    _patched(monkeypatch, _frame(**{"KO": [90.0, 91.8]}))
+    quotes = indices.moves(["KO", "NOPE"])
+    assert "KO" in quotes and "NOPE" not in quotes
+
+
+def test_moves_asks_for_each_symbol_once(monkeypatch):
+    calls = []
+
+    def record(symbols, *a, **k):
+        calls.append(list(symbols))
+        return {"Close": _frame(**{"KO": [90.0, 91.8]})}
+
+    monkeypatch.setattr(indices.yf, "download", record, raising=False)
+    indices.moves(["KO", "KO", ""])
+    assert calls == [["KO"]]
+
+
+def test_moves_degrades_to_nothing_when_the_fetch_fails(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(indices.yf, "download", boom, raising=False)
+    # A list of stocks is still a list of stocks without the prices.
+    assert indices.moves(["KO"]) == {}
+    assert indices.moves([]) == {}
+
+
 def test_the_shipped_list_covers_what_was_asked_for():
     assert set(dict(indices.INDICES)) == {"^GSPC", "^DJI", "QQQ", "IWM"}
     assert set(dict(indices.VOLATILITY)) == {"^VIX"}

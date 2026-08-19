@@ -111,6 +111,51 @@ def _last_two(series) -> "tuple[Optional[float], Optional[float]]":
     return float(clean.iloc[-1]), float(clean.iloc[-2])
 
 
+def moves(symbols: Sequence[str]) -> "dict[str, tuple[Optional[float], Optional[float]]]":
+    """Last close and the day's percent change for each symbol, in one request.
+
+    The same batched download the header uses, pointed at an arbitrary list --
+    a watchlist, in practice. Missing rather than raising: a symbol Yahoo has
+    nothing for is left out, and a fetch that fails altogether returns nothing,
+    because a list of stocks is still a list of stocks without the prices.
+    """
+    wanted = [symbol for symbol in dict.fromkeys(symbols) if symbol]
+    if not wanted:
+        return {}
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            frame = yf.download(wanted, period="5d", progress=False, auto_adjust=False)["Close"]
+    except Exception:
+        return {}
+
+    out = {}
+    for symbol in wanted:
+        # Asking for one symbol comes back as its own column, as a bare series,
+        # or as a frame with a single column of another name, depending on the
+        # shape yfinance is in. All three are the same closes.
+        try:
+            column = frame[symbol]
+        except Exception:
+            # With more than one asked for, a column that is not there is a
+            # symbol Yahoo had nothing for -- and the frame's other columns
+            # belong to other stocks, so there is nothing to fall back to.
+            if len(wanted) > 1:
+                continue
+            column = frame
+        if getattr(column, "ndim", 1) > 1:
+            column = column.iloc[:, 0]
+        try:
+            last, previous = _last_two(column)
+        except Exception:
+            continue
+        if last is None:
+            continue
+        change = (last / previous - 1.0) * 100.0 if previous else None
+        out[symbol] = (last, change)
+    return out
+
+
 def snapshot(
     indices: Sequence = INDICES,
     yields: Sequence = YIELDS,

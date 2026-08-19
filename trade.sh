@@ -436,6 +436,76 @@ EOF
     return 0
 }
 
+# -- your stocks -------------------------------------------------------------
+
+# The saved list, read once per run and used twice: to offer at the ticker
+# prompt, and to know afterwards whether the stock you just validated is
+# already on it. An unreachable database leaves READ at 0, which is what tells
+# the rest of the script to say nothing about saved stocks at all -- rather
+# than offering an empty list and failing on the save.
+FAVOURITES_READ=0
+FAVOURITES_OUT=""
+FAVOURITE_SYMBOLS=" "
+read_favourites() {
+    [ "$FAVOURITES_READ" = "1" ] && return 0
+    FAVOURITES_OUT="$("$PY" "$ROOT/validate.py" --list-favourites 2>/dev/null)" || return 1
+    FAVOURITES_READ=1
+    local sym rest
+    while IFS="$(printf '\t')" read -r sym rest; do
+        [ -n "$sym" ] && FAVOURITE_SYMBOLS="$FAVOURITE_SYMBOLS$sym "
+    done <<EOF
+$FAVOURITES_OUT
+EOF
+    return 0
+}
+
+# Same shape as browse_sector: fill CANDIDATES, print them numbered, and leave
+# the choosing to choose_ticker. Non-zero means there is nothing to offer --
+# an empty list, or no database to read one from -- which puts the sector menu
+# back where it was.
+browse_favourites() {
+    CANDIDATES=()
+    if ! read_favourites; then
+        # Said out loud rather than skipped past. Silence here reads as "you
+        # have not saved anything", which is a different thing from "the list
+        # is in a database this run could not reach" -- and the second one is
+        # fixed by one command.
+        printf '\n%sYour stocks: no database to read them from -- `./trade.sh db up`%s\n' \
+            "$DIM" "$OFF"
+        return 1
+    fi
+    [ -z "$FAVOURITES_OUT" ] && return 1
+    local sym line n=0
+    printf '\n%sYour stocks:%s\n\n' "$BOLD" "$OFF"
+    while IFS="$(printf '\t')" read -r sym line; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        CANDIDATES+=("$sym")
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$FAVOURITES_OUT
+EOF
+    [ "$n" -gt 0 ] || return 1
+    return 0
+}
+
+# Offered after the verdict, for a stock that is not already on the list.
+# Asked here rather than before the run because this is the point at which you
+# know whether it was worth keeping.
+offer_to_save() {
+    case "$STRATEGY" in short|long) ;; *) return 0 ;; esac
+    # One symbol only: "save these three" is a different question.
+    case "$TICKERS" in ""|*" "*) return 0 ;; esac
+    read_favourites || return 0
+    case "$FAVOURITE_SYMBOLS" in *" $TICKERS "*) return 0 ;; esac
+    printf '\n'
+    confirm "Save $TICKERS to your stocks" || return 0
+    "$PY" "$ROOT/validate.py" --favourite "$TICKERS"
+    # Saved or not, it has been asked about -- so the next loop does not ask
+    # again about the same ticker.
+    FAVOURITE_SYMBOLS="$FAVOURITE_SYMBOLS$TICKERS "
+}
+
 # The companies reporting this week, for an earnings gamble that has not been
 # given a ticker. Same shape as browse_sector: fill CANDIDATES, print them
 # numbered, and leave the choosing to choose_ticker.
@@ -498,26 +568,51 @@ choose_instrument() {
 }
 
 choose_ticker() {
-    local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0 picked
+    local prompt="Ticker symbol ($STRATEGY_LABEL)" count=0 picked sectors=0
     TICKERS=""
     # An earnings gamble offers this week's reporters to choose from.
     if [ "$STRATEGY" = "earnings" ] && browse_earnings; then
         count=${#CANDIDATES[@]}
         prompt="Pick a number, or type a ticker"
     elif [ "$STRATEGY" = "short" ] || [ "$STRATEGY" = "long" ]; then
-        # Both hold a company rather than an event, so both are found the same
-        # way: look at a sector, take the biggest names in it.
-        choose_sector; picked=$?
-        # 2 means a ticker was typed at the sector prompt -- nothing left to ask.
-        [ "$picked" = "2" ] && return 0
-        if [ "$picked" = "0" ] && browse_sector; then
+        # Your own list first, when there is one: a stock you went to the
+        # trouble of saving is a likelier answer than the largest company in a
+        # sector you have yet to choose. Sectors are still one keystroke away.
+        if browse_favourites; then
             count=${#CANDIDATES[@]}
-            prompt="Pick a number, or type a ticker"
+            prompt="Pick a number, type a ticker, or s to browse sectors"
+            sectors=1
+        else
+            # Both hold a company rather than an event, so both are found the
+            # same way: look at a sector, take the biggest names in it.
+            choose_sector; picked=$?
+            # 2 means a ticker was typed at the sector prompt -- nothing left.
+            [ "$picked" = "2" ] && return 0
+            if [ "$picked" = "0" ] && browse_sector; then
+                count=${#CANDIDATES[@]}
+                prompt="Pick a number, or type a ticker"
+            fi
         fi
     fi
 
     while true; do
         ask reply "$prompt"
+        # Offered only while your own list is the one on screen, and it hands
+        # over for good: the sector list replaces it rather than sitting under
+        # it, so the numbers on screen are always the numbers being picked.
+        if [ "$sectors" = "1" ]; then
+            case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+                s|sector|sectors)
+                    sectors=0; count=0; prompt="Ticker symbol ($STRATEGY_LABEL)"
+                    choose_sector; picked=$?
+                    [ "$picked" = "2" ] && return 0
+                    if [ "$picked" = "0" ] && browse_sector; then
+                        count=${#CANDIDATES[@]}
+                        prompt="Pick a number, or type a ticker"
+                    fi
+                    continue ;;
+            esac
+        fi
         case "$reply" in
             "") printf '  %sEnter a ticker%s.\n' "$DIM" \
                     "$([ "$count" -gt 0 ] && printf ' or pick a number' || true)$OFF" ;;
@@ -631,6 +726,68 @@ collect_details() {
     esac
 }
 
+# -- the database ------------------------------------------------------------
+
+# One Postgres in Docker, beside the checkout. Everything here is a thin wrap
+# of `docker compose`, so that the database can be worked without remembering
+# which file it is declared in -- and so `status` can answer the question
+# actually being asked, which is not "is a container running" but "can this
+# tool reach a database".
+compose() {
+    docker compose -f "$ROOT/docker-compose.yml" "$@"
+}
+
+require_docker() {
+    command -v docker >/dev/null 2>&1 || {
+        printf '%sDocker is not installed. Get it from docker.com, or point\n' "$DIM"
+        printf 'TRADEVAL_DATABASE_URL at a Postgres you already have.%s\n' "$OFF"
+        return 1
+    }
+    docker info >/dev/null 2>&1 || {
+        printf '%sThe Docker daemon is not running -- start Docker Desktop.%s\n' "$DIM" "$OFF"
+        return 1
+    }
+}
+
+manage_db() {
+    case "$1" in
+        up|start)
+            require_docker || return 1
+            compose up -d --wait || return 1
+            "$PY" "$ROOT/validate.py" --db-status
+            ;;
+        down|stop)
+            # No -v: the volume outlives the container, which is the whole
+            # point of keeping anything in it.
+            require_docker || return 1
+            compose down
+            ;;
+        status)
+            # Asked of Python rather than of Docker: a container that is up and
+            # a database this tool can log into are different claims.
+            "$PY" "$ROOT/validate.py" --db-status
+            ;;
+        psql)
+            require_docker || return 1
+            compose exec db psql -U "${TRADEVAL_DB_USER:-tradeval}" -d "${TRADEVAL_DB_NAME:-tradeval}"
+            ;;
+        logs)
+            require_docker || return 1
+            compose logs -f db
+            ;;
+        reset)
+            require_docker || return 1
+            printf '%sThis deletes the database volume and everything in it.%s\n' "$DIM" "$OFF"
+            confirm "Delete tradeval-db-data" || return 1
+            compose down -v
+            ;;
+        *)
+            printf 'Usage: ./trade.sh db up|down|status|psql|logs|reset\n' >&2
+            return 2
+            ;;
+    esac
+}
+
 # -- main --------------------------------------------------------------------
 
 bootstrap
@@ -648,12 +805,24 @@ if [ "$#" -gt 0 ]; then
             # script, so hand straight over.
             exec "$PY" "$ROOT/validate.py" --spending
             ;;
+        db|database|postgres)
+            shift
+            manage_db "${1:-status}"
+            exit $?
+            ;;
+        stocks|saved|favourites|favorites)
+            # The list on its own, without walking into a validation.
+            exec "$PY" "$ROOT/validate.py" --favourites $COLOR
+            ;;
         help|--help|-h)
             "$PY" "$ROOT/validate.py" --help
             printf '\nExtras handled by this script:\n'
             printf '  ./trade.sh              interactive menu\n'
             printf '  ./trade.sh spend        browse where the money is going\n'
             printf '  ./trade.sh reddit       set up the Reddit buzz score\n'
+            printf '  ./trade.sh stocks       the stocks you have saved\n'
+            printf '  ./trade.sh db up|down|status|psql|logs|reset\n'
+            printf '                          the local Postgres, in Docker\n'
             exit 0
             ;;
     esac
@@ -706,6 +875,8 @@ while true; do
     [ "$PROFILE_SHOWN" = "1" ] && ARGS+=(--profile-shown)
     "$PY" "$ROOT/validate.py" $TICKERS -t "$STRATEGY" ${ARGS[@]+"${ARGS[@]}"}
     LAST_STATUS=$?
+
+    offer_to_save
 
     confirm "Validate another trade" || break
 done

@@ -31,7 +31,9 @@ from typing import List, Optional  # noqa: E402
 from tradeval import (
     buzz,
     dates,
+    db,
     discover,
+    favourites,
     flow_buzz,
     indices,
     kalshi,
@@ -288,6 +290,38 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-sector-companies",
         metavar="SECTOR",
         help="print a sector's largest companies as SYMBOL<tab>description, then exit",
+    )
+    other.add_argument(
+        "--db-status",
+        action="store_true",
+        help="report whether the local Postgres is reachable, then exit (0 = yes)",
+    )
+    # Both spellings, because half the world writes one and half the other, and
+    # being told "unrecognized arguments" over a vowel is a silly way to lose a
+    # stock you meant to save.
+    other.add_argument(
+        "--favourite",
+        "--favorite",
+        metavar="SYMBOL",
+        help="save a stock to your list, then exit",
+    )
+    other.add_argument(
+        "--unfavourite",
+        "--unfavorite",
+        metavar="SYMBOL",
+        help="drop a stock from your list, then exit",
+    )
+    other.add_argument(
+        "--favourites",
+        "--favorites",
+        action="store_true",
+        help="print your saved stocks, then exit",
+    )
+    other.add_argument(
+        "--list-favourites",
+        "--list-favorites",
+        action="store_true",
+        help="print your saved stocks as SYMBOL<tab>description, then exit",
     )
     other.add_argument(
         "--profile",
@@ -1082,6 +1116,102 @@ def reddit_status(path: Optional[str] = None) -> int:
     return 0
 
 
+def _company_name(symbol: str) -> "tuple[str, Optional[str]]":
+    """The company's name, and a note when it could not be looked up.
+
+    Saving a stock should not depend on Yahoo being reachable, so a failed
+    lookup saves the symbol with no name rather than refusing. A symbol Yahoo
+    answers about but has no name for is the one case worth stopping on: it is
+    almost always a typo, and a typo on this list is a row you will have to
+    delete later.
+    """
+    try:
+        data = MarketData(symbol)
+        name = data.name
+    except Exception:  # noqa: BLE001 -- offline is a state, not a failure here
+        return "", "saved without a name -- could not reach Yahoo to look it up"
+    if name == symbol:
+        return "", "Yahoo publishes nothing under '%s' -- check the symbol" % symbol
+    return name, None
+
+
+def favourite_add(symbol: str) -> int:
+    """Save a stock, with its name if one can be found. Used by trade.sh."""
+    try:
+        wanted = favourites.clean(symbol)
+    except favourites.InvalidSymbol as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    name, warning = _company_name(wanted)
+    if warning and not name:
+        # A typo reads the same as an outage from here, so the message says
+        # which one it was and the caller decides whether to care.
+        print(warning, file=sys.stderr)
+        if "check the symbol" in warning:
+            return 2
+    try:
+        added = favourites.add(wanted, name=name)
+    except db.DatabaseUnavailable as exc:
+        print("Not saved: %s" % exc, file=sys.stderr)
+        return 1
+    print("%s %s your stocks" % (wanted, "added to" if added else "is already on"))
+    return 0
+
+
+def favourite_remove(symbol: str) -> int:
+    """Drop a stock from the list. Used by trade.sh."""
+    try:
+        wanted = favourites.clean(symbol)
+    except favourites.InvalidSymbol as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    try:
+        removed = favourites.remove(wanted)
+    except db.DatabaseUnavailable as exc:
+        print("Not removed: %s" % exc, file=sys.stderr)
+        return 1
+    print("%s %s" % (wanted, "dropped from your stocks" if removed else "was not on your stocks"))
+    return 0 if removed else 1
+
+
+def favourite_list(machine_readable: bool, palette=None) -> int:
+    """Your saved stocks: numbered for a person, tab separated for trade.sh."""
+    try:
+        saved = favourites.listing()
+    except db.DatabaseUnavailable as exc:
+        if not machine_readable:
+            print("Your stocks: %s" % exc, file=sys.stderr)
+        return 1
+    # Exit 0 means the list was read, not that it had anything in it: trade.sh
+    # tells those two apart to decide whether to offer a save at the end of a
+    # run, and someone with nothing saved yet is exactly who should be asked.
+    priced = favourites.with_quotes(saved)
+    if machine_readable:
+        for item, quote in priced:
+            print("%s\t%s" % (item.symbol, favourites.format_line(item, quote)))
+        return 0
+    if not saved:
+        print("No saved stocks yet. Save one with:  validate.py --favourite NVDA")
+        return 0
+    paint = palette or make_palette(no_color=True)
+    print(paint.bold("\nYour stocks\n"))
+    for item, quote in priced:
+        print("  " + favourites.format_line(item, quote))
+    print("")
+    return 0
+
+
+def db_status() -> int:
+    """Exit 0 when the local Postgres answers, 1 otherwise. Used by trade.sh.
+
+    Printed rather than raised either way: not having a database is a state
+    this tool runs in, not an error it reports.
+    """
+    up, line = db.status_line()
+    print(line, file=sys.stdout if up else sys.stderr)
+    return 0 if up else 1
+
+
 def reddit_authorize(path: Optional[str] = None) -> int:
     """One browser sign-in, then store the refresh token beside the credentials."""
     credentials = buzz.RedditCredentials.load(path)
@@ -1664,6 +1794,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.reddit_status:
         return reddit_status(args.reddit_credentials)
+
+    if args.db_status:
+        return db_status()
+
+    if args.favourite:
+        return favourite_add(args.favourite)
+
+    if args.unfavourite:
+        return favourite_remove(args.unfavourite)
+
+    if args.favourites or args.list_favourites:
+        return favourite_list(args.list_favourites, palette)
 
     if args.reddit_setup:
         return reddit_setup(args.reddit_credentials)

@@ -132,7 +132,21 @@
       "Bash(tee new_block.txt)",
       "Bash(sed -i '' 's/^start, end = 620, 671.*/start, end = 620, 670  # title line .. last row/' readme_block.py)",
       "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python -)",
-      "Bash(timeout 240 ./trade.sh)"
+      "Bash(timeout 240 ./trade.sh)",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python -m pytest -q /Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/tests/tradeval/test_db.py)",
+      "Bash(./trade.sh db *)",
+      "Bash(awk -F: '{print $3}')",
+      "Bash(echo \"bad symbol exit=$?\")",
+      "Bash(echo \"already saved exit=$?\")",
+      "Bash(echo \"db exit=$?\")",
+      "Bash(echo \"fav exit=$?\")",
+      "Bash(docker rm *)",
+      "Bash(sh trade.sh stocks)",
+      "Bash(timeout 300 sh trade.sh)",
+      "Bash(TRADEVAL_DB_PORT=5599 bash -c 'printf \"3\\\\nb\\\\nAAPL\\\\n\" | timeout 60 /Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/trade.sh 2>&1 | sed -n \"/Your stocks/,/Which sector/p\" | head -6')",
+      "Bash(timeout 120 ./trade.sh)"
     ]
   }
 }

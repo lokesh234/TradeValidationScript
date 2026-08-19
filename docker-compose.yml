@@ -1,0 +1,49 @@
+# The local Postgres this tool keeps things in.
+#
+#   ./trade.sh db up        start it (and wait until it answers)
+#   ./trade.sh db status     is it up, and can Python reach it
+#   ./trade.sh db psql       a shell on it
+#   ./trade.sh db down       stop it, keeping the data
+#
+# Nothing in the checklist needs this to be running: a validation that cannot
+# reach the database is a validation without a record of it, not a failed one.
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: tradeval-db
+    # Every setting is overridable from the environment, and defaulted so that
+    # a clone with nothing exported still comes up. The password is a local
+    # development credential for a port that only this machine can see -- see
+    # the bind address below -- and is not a secret worth hiding from the repo.
+    environment:
+      POSTGRES_DB: ${TRADEVAL_DB_NAME:-tradeval}
+      POSTGRES_USER: ${TRADEVAL_DB_USER:-tradeval}
+      POSTGRES_PASSWORD: ${TRADEVAL_DB_PASSWORD:-tradeval}
+      # Postgres skips host-based auth for the socket but not for TCP, which is
+      # how we reach it. scram-sha-256 rather than trust: an open port with no
+      # password is one misconfigured firewall away from being everyone's.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+    ports:
+      # Bound to the loopback interface on purpose. "5432:5432" would publish
+      # it on every interface the machine has, coffee shop wifi included.
+      - "127.0.0.1:${TRADEVAL_DB_PORT:-5432}:5432"
+    volumes:
+      # A named volume, so `docker compose down` stops the container without
+      # taking the data with it. `down -v` is the one that forgets.
+      - tradeval-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready against the real database and user, not just the port: the
+      # server accepts connections for a second or two before it will answer.
+      test: ["CMD-SHELL", "pg_isready -q -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    # Comes back with Docker itself, so the database is up before the first
+    # `./trade.sh` of the day rather than after the first error.
+    restart: unless-stopped
+
+volumes:
+  tradeval-db-data:
+    name: tradeval-db-data

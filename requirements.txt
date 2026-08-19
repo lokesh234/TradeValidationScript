@@ -7,3 +7,9 @@ lxml>=4.9
 # Declared outright rather than leaned on as a yfinance transitive: the Reddit
 # buzz client owns its own session, retries and rate limiting.
 requests>=2.31
+# The local Postgres in docker-compose.yml. [binary] ships the libpq wheel, so
+# there is no system postgres to install first. Nothing in the checklist needs
+# the database to be up -- tradeval/db.py imports this lazily and degrades --
+# but it is a declared dependency rather than an optional extra so that a
+# clone which runs ./trade.sh has it.
+psycopg[binary]>=3.1

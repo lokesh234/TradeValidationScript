@@ -1617,6 +1617,117 @@ tradeval/
 Adding a fourth trade type means subclassing `Strategy`, implementing
 `build_checks()`, and registering it in `strategies/__init__.py`.
 
+## Your stocks
+
+The stocks you save, kept in the local Postgres and offered back at the ticker
+prompt for a **short term** or **long term** trade — the names you already
+watch are the ones you are most likely to be trading:
+
+```
+Your stocks:
+
+   1) KO     Coca-Cola Company (The)        $90.35    +1.7%  today
+   2) NVDA   NVIDIA Corporation            $217.56    -1.0%  3 days ago
+   3) IREN   IREN Limited                   $42.84    +2.0%  today
+
+Pick a number, type a ticker, or s to browse sectors:
+```
+
+The last close and the day's move come from one batched request for the whole
+list, because a name beside the ticker it repeats says nothing you didn't know
+when you typed it. Offline the rows still name the stocks, which is all the
+picker strictly needs.
+
+`s` hands over to the sector menu, which is where you land anyway when the list
+is empty. It costs you `S` as a ticker at that one prompt, the same way `b`
+costs you `B` at the sector menu. Nothing is lost by having one: an earnings gamble still opens on this
+week's reporters, and typing a ticker still works at every prompt.
+
+After a verdict you're asked whether to keep the stock — at the end rather than
+the start, because that's the point at which you know whether it was worth
+keeping:
+
+```
+Save MSFT to your stocks [y/N]: y
+MSFT added to your stocks
+```
+
+The company name is looked up once, when it's saved, so the list reads without
+another fetch. A symbol Yahoo publishes nothing under is refused rather than
+saved, since a typo here is a row you'd have to delete later.
+
+From the command line, in either spelling:
+
+```bash
+./trade.sh stocks                    # the list on its own
+validate.py --favourite NVDA         # or --favorite
+validate.py --unfavourite NVDA
+validate.py --list-favourites        # SYMBOL<tab>description, for scripts
+```
+
+Saving the same stock twice is not an error — it's the same list either way,
+and you're told which happened. With no database reachable the picker says so
+in one line and falls back to sectors, rather than quietly pretending you never
+saved anything.
+
+## The local database
+
+A Postgres in Docker, beside the checkout. It holds [your stocks](#your-stocks),
+and whatever comes next. A validation that can't reach it is a validation with
+no record of it, not a failed one — every read and write degrades to "no list
+to offer" rather than an error.
+
+```bash
+./trade.sh db up        # start it, and wait until it answers
+./trade.sh db status    # is it up, and can Python log into it
+./trade.sh db psql      # a shell on it
+./trade.sh db down      # stop it, keeping the data
+./trade.sh db reset     # delete the volume (asks first)
+```
+
+```
+Postgres 17.4: up at postgresql://tradeval@127.0.0.1:5432/tradeval
+```
+
+`status` asks Python rather than Docker, because "a container is running" and
+"this tool can log into a database" are different claims and only the second
+one matters. It exits 0 when the database answered, so it scripts.
+
+The container is `postgres:17-alpine`, published on **127.0.0.1 only** — plain
+`5432:5432` would put it on every interface the machine has, coffee-shop wifi
+included — with the data in a named volume that outlives `db down`. The
+development password is in `docker-compose.yml` in plain sight, which is what
+it is worth on a loopback port; anything real belongs in the environment:
+
+| Variable | Default | |
+|---|---|---|
+| `TRADEVAL_DATABASE_URL` | — | a full URL, overriding everything below |
+| `TRADEVAL_DB_HOST` | `127.0.0.1` | |
+| `TRADEVAL_DB_PORT` | `5432` | change it if 5432 is already taken |
+| `TRADEVAL_DB_NAME` | `tradeval` | |
+| `TRADEVAL_DB_USER` | `tradeval` | |
+| `TRADEVAL_DB_PASSWORD` | `tradeval` | |
+| `TRADEVAL_DB_TIMEOUT` | `5` | seconds to wait before giving up on it |
+
+Both the compose file and `tradeval/db.py` read these, so exporting one moves
+the container and the client together. Point `TRADEVAL_DATABASE_URL` at a
+Postgres you already run and Docker never enters into it. The printed URL never
+carries the password.
+
+`tradeval/db.py` is the whole client: `settings()` reads the environment,
+`connect()` opens a connection or raises `DatabaseUnavailable` with a sentence
+you can act on, and `available()` answers the same question without raising.
+`psycopg` is imported inside the call rather than at the top of the module, so
+a checkout that never installed it still runs everything else.
+
+The schema is a list of named migrations in the same file, applied in order and
+recorded in a `schema_migrations` table, so a database made three versions ago
+catches up on the next run and a fresh one is built by replaying the lot. They
+run on the way into any read or write — two statements against a warm
+connection — which is what keeps setting up the schema from being something you
+have to remember to do. Once a migration has shipped it is never edited; a
+change to it is a new entry, because the old one has already run somewhere.
+
 ## Development
 
 ```bash
@@ -1638,7 +1749,10 @@ tests/
   test_validate.py        the CLI's argument parsing and pure helpers
 ```
 
-Nothing in the suite touches the network. `MarketData` and `Strategy` expose
+Nothing in the suite touches the network, and nothing in it needs the database:
+`tests/tradeval/test_db.py` covers the settings and the failure messages
+against a stub driver, so the suite is green with Docker switched off.
+`MarketData` and `Strategy` expose
 most of what they compute as `functools.cached_property`, which only runs the
 first time it is read -- assigning straight to the instance (`data.history =
 some_dataframe`) pre-fills the cache instead, so a fixture can hand a strategy
