@@ -38,6 +38,10 @@ Choice [1-5]: 2
 
 Ticker symbol (Short Term): nvda
 
+ STOCK INFO
+  Technology / Semiconductors -- 36,000 employees
+  ...the whole profile of the company, printed as soon as it has a name...
+
 What are you trading?
 
   O) Options            single contracts
@@ -77,10 +81,17 @@ Where the market closed
   Dow            53,718.26    -0.23%
   Nasdaq 100        729.18    -0.39%
   Russell 2000      304.23    +0.24%
+  VIX                15.84    +4.28%  normal
 
   10-year yield      4.28%   +3.0 bp
   30-year yield      4.91%   +2.8 bp
 ```
+
+The **VIX** rides with the tape, because the same index print is a different
+market at 12 than at 28 — and because an option trade is buying that number
+rather than reading it. It carries a word for where the level sits (`calm`
+under 15, `normal` under 20, `jumpy` under 30, `panic` above it), since a quote
+of 21 says nothing to anyone who doesn't already know that 15 is quiet.
 
 Then the long end of the curve, because the discount rate is half of what a
 multiple is worth and none of it shows up in an index level. A ten-year at
@@ -92,9 +103,10 @@ day's move in basis points, since 4.28% going to 4.31% is a 3bp move and
 calling it +0.7% describes nothing anyone trades on. Colour reads as it does
 everywhere else in the tool, as "in your favour": this header is read before an
 equity entry, so a yield that **rises** prints red and one that falls prints
-green. The sign always says which way it went.
+green — and so does a VIX that rises, since a bid for protection is the same
+headwind. The sign always says which way it went.
 
-One batched request for all six, about 0.4s. If it fails you lose the header,
+One batched request for all seven, about 0.4s. If it fails you lose the header,
 not the report. `validate.py --list-indices` prints it on its own.
 
 ### What the market has scheduled
@@ -614,6 +626,12 @@ window, the option expiry used for the implied move, and the IV term structure
 all follow it. Skip the prompt with `--earnings-date 2026-08-13`.
 
 ### The stock info panel
+
+Printed **the moment the ticker is settled** — before you're asked what you're
+trading and before any sizing question, since both are answered differently for
+a $150B industrial than for a biotech that lost money last year. It costs one
+extra fetch, and the run that follows is told not to repeat it; the report at
+the end still carries it, which is the copy you scroll back to.
 
 Every strategy prints the same profile of the company, and an earnings gamble
 adds what the street expects from the report you selected:

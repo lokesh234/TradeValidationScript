@@ -295,9 +295,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="print one company's stock info panel, then exit",
     )
     other.add_argument(
+        "--profile-shown",
+        action="store_true",
+        help="the caller already printed the stock info panel (trade.sh does, at the "
+        "moment the ticker is picked), so do not print it again before the sizing "
+        "questions -- the report still carries it",
+    )
+    other.add_argument(
         "--list-indices",
         action="store_true",
-        help="print where the major indices and the 10- and 30-year yields closed, then exit",
+        help="print where the major indices, the VIX and the 10- and 30-year yields closed, then exit",
     )
     other.add_argument(
         "--list-events",
@@ -891,6 +898,11 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     ticker you have not looked at is the thing this tool exists to stop. Then
     the prices, then the questions -- all of it before the checks that spend
     those answers.
+
+    A caller that already put the profile on screen -- trade.sh prints it the
+    moment the ticker is picked -- says so with --profile-shown, and this skips
+    to the prices. The report still carries the panel: that copy is the one you
+    scroll back to, and it is a screen further down than the one you have seen.
     """
     ctx = strategy.ctx
     wants_shares = not ctx.trades_options and args.size is None
@@ -906,7 +918,7 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     if not (wants_shares or wants_count or wants_floor or wants_strikes or wants_pick):
         return
 
-    panel = strategy.profile_panel()
+    panel = None if args.profile_shown else strategy.profile_panel()
     if panel:
         for line in layout_panels([panel], palette, width):
             print(line)

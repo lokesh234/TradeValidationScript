@@ -457,6 +457,25 @@ EOF
     return 0
 }
 
+# The company, the moment it has a name. What you are trading is the next
+# question and the sizing questions come after it, and both are answered
+# differently for a $150B industrial than for a biotech that lost money last
+# year -- so the profile goes on screen before either is asked rather than a
+# screen into the run. Costs one fetch, and the validation below is told not
+# to print the same table again.
+PROFILE_SHOWN=0
+show_profile() {
+    PROFILE_SHOWN=0
+    # One ticker only: three profiles stacked before a single question is a
+    # wall, and a multi-symbol run is read as a summary table anyway.
+    case "$TICKERS" in ""|*" "*) return 0 ;; esac
+    local panel
+    panel="$("$PY" "$ROOT/validate.py" --profile "$TICKERS" $COLOR 2>/dev/null)" || return 0
+    [ -z "$panel" ] && return 0
+    printf '%s\n' "$panel"
+    PROFILE_SHOWN=1
+}
+
 # What the trade is made of. Every strategy can be taken any of these ways, and
 # the answer decides the sizing questions -- premium or stop, not both.
 choose_instrument() {
@@ -664,6 +683,7 @@ while true; do
     # them is a decision made about a company you have not seen yet.
     # Browsing already settled the ticker, so only ask when it did not.
     [ -z "$TICKERS" ] && choose_ticker
+    show_profile
     choose_instrument
     collect_details
     # Asked outside collect_details: these are context, not position sizing.
@@ -681,6 +701,9 @@ while true; do
     # shellcheck disable=SC2086
     [ -n "$HORIZON" ] && ARGS+=(--horizon "$HORIZON")
     [ -n "$INSTRUMENT" ] && ARGS+=(--instrument "$INSTRUMENT")
+    # Only when the panel actually reached the screen: a fetch that failed up
+    # there has to leave the run free to print it.
+    [ "$PROFILE_SHOWN" = "1" ] && ARGS+=(--profile-shown)
     "$PY" "$ROOT/validate.py" $TICKERS -t "$STRATEGY" ${ARGS[@]+"${ARGS[@]}"}
     LAST_STATUS=$?
 

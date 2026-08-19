@@ -22,7 +22,7 @@ def _patched(monkeypatch, frame):
 
 def test_snapshot_computes_the_change_from_the_last_two_closes(monkeypatch):
     _patched(monkeypatch, _frame(**{"^GSPC": [100.0, 110.0], "QQQ": [50.0, 49.0]}))
-    quotes = indices.snapshot((("^GSPC", "S&P 500"), ("QQQ", "Nasdaq 100")), ())
+    quotes = indices.snapshot((("^GSPC", "S&P 500"), ("QQQ", "Nasdaq 100")), (), ())
     by_symbol = {q.symbol: q for q in quotes}
     assert by_symbol["^GSPC"].price == 110.0
     assert by_symbol["^GSPC"].change_pct == pytest.approx(10.0)
@@ -32,7 +32,7 @@ def test_snapshot_computes_the_change_from_the_last_two_closes(monkeypatch):
 def test_snapshot_moves_a_yield_in_basis_points(monkeypatch):
     """4.28% to 4.31% is 3bp. The ratio the indices use would say +0.7%."""
     _patched(monkeypatch, _frame(**{"^TNX": [4.28, 4.31]}))
-    quote = indices.snapshot((), (("^TNX", "10-year yield"),))[0]
+    quote = indices.snapshot((), (("^TNX", "10-year yield"),), ())[0]
     assert quote.is_yield is True
     assert quote.price == pytest.approx(4.31)
     assert quote.change_bp == pytest.approx(3.0)
@@ -43,14 +43,14 @@ def test_snapshot_moves_a_yield_in_basis_points(monkeypatch):
 def test_snapshot_ignores_gaps_in_a_series(monkeypatch):
     """A holiday leaves a NaN; the change is still against the last real close."""
     _patched(monkeypatch, _frame(**{"^GSPC": [100.0, float("nan"), 105.0]}))
-    quote = indices.snapshot((("^GSPC", "S&P 500"),), ())[0]
+    quote = indices.snapshot((("^GSPC", "S&P 500"),), (), ())[0]
     assert quote.price == 105.0
     assert quote.change_pct == pytest.approx(5.0)
 
 
 def test_snapshot_survives_a_single_close(monkeypatch):
     _patched(monkeypatch, _frame(**{"^GSPC": [100.0], "^TNX": [4.28]}))
-    quote = indices.snapshot((("^GSPC", "S&P 500"),), (("^TNX", "10-year yield"),))
+    quote = indices.snapshot((("^GSPC", "S&P 500"),), (("^TNX", "10-year yield"),), ())
     assert quote[0].price == 100.0
     assert quote[0].change_pct is None
     assert quote[0].available is True
@@ -62,12 +62,12 @@ def test_snapshot_survives_a_single_close(monkeypatch):
 
 def test_snapshot_marks_a_missing_symbol_unavailable(monkeypatch):
     _patched(monkeypatch, _frame(**{"^GSPC": [100.0, 101.0]}))
-    quotes = indices.snapshot((("^GSPC", "S&P 500"), ("NOPE", "Missing")), ())
+    quotes = indices.snapshot((("^GSPC", "S&P 500"), ("NOPE", "Missing")), (), ())
     assert quotes[1].available is False
 
 
-def test_snapshot_asks_for_both_groups_in_one_request(monkeypatch):
-    """The curve costs two more symbols, not a second round trip."""
+def test_snapshot_asks_for_every_group_in_one_request(monkeypatch):
+    """The VIX and the curve cost three more symbols, not another round trip."""
     calls = []
 
     def record(symbols, *a, **k):
@@ -77,7 +77,7 @@ def test_snapshot_asks_for_both_groups_in_one_request(monkeypatch):
     monkeypatch.setattr(indices.yf, "download", record, raising=False)
     indices.snapshot()
     assert len(calls) == 1
-    assert calls[0] == ["^GSPC", "^DJI", "QQQ", "IWM", "^TNX", "^TYX"]
+    assert calls[0] == ["^GSPC", "^DJI", "QQQ", "IWM", "^VIX", "^TNX", "^TYX"]
 
 
 def test_snapshot_degrades_to_empty_when_the_fetch_fails(monkeypatch):
@@ -162,4 +162,54 @@ def test_format_lines_needs_no_separator_when_the_curve_is_all_there_is():
 
 def test_the_shipped_list_covers_what_was_asked_for():
     assert set(dict(indices.INDICES)) == {"^GSPC", "^DJI", "QQQ", "IWM"}
+    assert set(dict(indices.VOLATILITY)) == {"^VIX"}
     assert set(dict(indices.YIELDS)) == {"^TNX", "^TYX"}
+
+
+def _vix_row(level, change_pct):
+    quote = IndexQuote(
+        "^VIX", "VIX", level, change_pct, None, False, True, indices.vix_read(level)
+    )
+    return indices.format_lines([quote], Palette(True))[0]
+
+
+@pytest.mark.parametrize(
+    "level, word",
+    [(11.5, "calm"), (15.0, "normal"), (19.9, "normal"), (24.0, "jumpy"), (42.0, "panic")],
+)
+def test_vix_read_names_the_level(level, word):
+    assert indices.vix_read(level) == word
+
+
+def test_the_vix_carries_what_its_level_says():
+    """A quote of 21 says nothing to anyone who does not know 15 is quiet."""
+    assert "jumpy" in ANSI_RE.sub("", _vix_row(24.0, 8.0))
+
+
+def test_a_rising_vix_prints_red_like_the_curve_does():
+    """A bid for protection is the headwind, whichever way the sign points."""
+    assert "\033[31m" in _vix_row(24.0, 8.0)
+    assert "\033[32m" in _vix_row(13.0, -8.0)
+
+
+def test_the_vix_is_quoted_with_the_tape_not_the_curve():
+    quotes = [
+        IndexQuote("^GSPC", "S&P 500", 7781.93, -0.22),
+        IndexQuote("^VIX", "VIX", 15.84, 4.28, None, False, True, "normal"),
+        IndexQuote("^TNX", "10-year yield", 4.28, None, 3.0, True, True),
+    ]
+    lines = indices.format_lines(quotes)
+    # One blank line, and it comes before the curve rather than before the VIX.
+    assert [index for index, line in enumerate(lines) if line == ""] == [2]
+
+
+def test_a_row_without_a_note_ends_where_it_always_did():
+    quotes = [
+        IndexQuote("^GSPC", "S&P 500", 7781.93, -0.22),
+        IndexQuote("^VIX", "VIX", 15.84, 4.28, None, False, True, "normal"),
+    ]
+    lines = indices.format_lines(quotes)
+    assert lines[0] == lines[0].rstrip()
+    assert lines[1].endswith("normal")
+    # The note is extra, so the columns before it still line up.
+    assert lines[0].index("%") == lines[1].index("%")

@@ -121,7 +121,18 @@
       "Bash(command -v shellcheck)",
       "Bash(shellcheck -S warning trade.sh)",
       "Bash(bash -c '\nfor side in yes no; do\n  picked_quote=\"70/71\"; range=\"\"\n  qb=\"${picked_quote%%/*}\"; qa=\"${picked_quote##*/}\"\n  if [ \"$side\" = \"no\" ]; then range=\", the no side is $\\(\\(100 - qa\\)\\)/$\\(\\(100 - qb\\)\\)c\"\n  else range=\", the yes side is $qb/${qa}c\"; fi\n  printf \"side=%-3s prompt -> %s\\\\n\" \"$side\" \"  Price you would pay in cents \\(Enter for the ask$range\\):\"\ndone\npicked_quote=\"\"; range=\"\"\nprintf \"no quote  -> %s\\\\n\" \"  Price you would pay in cents \\(Enter for the ask$range\\):\"')",
-      "Bash(bash -c '\nDIM=\"\"; OFF=\"\"\nask_cents\\(\\) {\n    local __var=\"$1\" __prompt=\"$2\" __reply=\"\"\n    while true; do\n        read -r __reply || { echo; return 1; }\n        case \"$__reply\" in\n            \"\"\\) eval \"$__var=\\\\x27\\\\x27\"; return ;;\n            *[!0-9.]*|*.*.*|.\\) printf \"  reject: enter a price in cents, 1 to 99\\\\n\" ;;\n            *\\)\n                if awk \"BEGIN{exit !\\($__reply > 0 && $__reply < 100\\)}\"; then\n                    eval \"$__var=\\\\$__reply\"; return\n                fi\n                printf \"  reject: between 1c and 99c\\\\n\" ;;\n        esac\n    done\n}\nprintf \"100\\\\nabc\\\\n0\\\\n99.5\\\\n\" | { ask_cents p \"x\"; echo \"accepted: $p\"; }')"
+      "Bash(bash -c '\nDIM=\"\"; OFF=\"\"\nask_cents\\(\\) {\n    local __var=\"$1\" __prompt=\"$2\" __reply=\"\"\n    while true; do\n        read -r __reply || { echo; return 1; }\n        case \"$__reply\" in\n            \"\"\\) eval \"$__var=\\\\x27\\\\x27\"; return ;;\n            *[!0-9.]*|*.*.*|.\\) printf \"  reject: enter a price in cents, 1 to 99\\\\n\" ;;\n            *\\)\n                if awk \"BEGIN{exit !\\($__reply > 0 && $__reply < 100\\)}\"; then\n                    eval \"$__var=\\\\$__reply\"; return\n                fi\n                printf \"  reject: between 1c and 99c\\\\n\" ;;\n        esac\n    done\n}\nprintf \"100\\\\nabc\\\\n0\\\\n99.5\\\\n\" | { ask_cents p \"x\"; echo \"accepted: $p\"; }')",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python preview.py 100)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python preview.py 240)",
+      "Bash(sed -i '' 's/^MAX_FIGURE_WIDTH = 18$/MAX_FIGURE_WIDTH = 12/' tradeval/report.py)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python preview.py 120)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python preview.py 200)",
+      "Bash(sed -i '' 's/^import sys$/import re\\\\nimport sys/' readme_block.py)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python readme_block.py 130)",
+      "Bash(tee new_block.txt)",
+      "Bash(sed -i '' 's/^start, end = 620, 671.*/start, end = 620, 670  # title line .. last row/' readme_block.py)",
+      "Bash(/Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/.venv/bin/python -)",
+      "Bash(timeout 240 ./trade.sh)"
     ]
   }
 }

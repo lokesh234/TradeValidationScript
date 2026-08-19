@@ -1,12 +1,17 @@
 """Where the market is, before anything is traded in it.
 
-Six numbers, fetched in one request, printed before the menu. Not because a
+Seven numbers, fetched in one request, printed before the menu. Not because a
 day's move on the S&P decides anything, but because a checklist read without
 knowing the tape is a checklist read out of context: an entry that looks
 extended is a different proposition on a day the whole market is up 2%.
 
 The two indices are quoted as indices and the two funds as funds, which is how
 each is spoken about. The percent change is the column that compares.
+
+Then the VIX, because the same index print is a different tape at 12 than at
+28, and because an option trade is buying that number rather than reading it.
+It carries a word for where the level sits: a quote of 21 says nothing to
+anyone who does not already know that 15 is quiet.
 
 Then the long end of the curve, because the discount rate is half of what a
 multiple is worth and none of it shows up in an index level. A ten-year at
@@ -35,12 +40,32 @@ INDICES = (
     ("IWM", "Russell 2000"),
 )
 
+# What the market is paying for protection, which is the other half of "where
+# it closed": the same index print is a different tape at a VIX of 12 than at
+# 28, and an option trade is buying the number itself.
+VOLATILITY = (("^VIX", "VIX"),)
+
 # The two points on the curve equities are priced against. Yahoo quotes both as
 # the yield itself, so 4.72 is 4.72% and not a price to be divided by anything.
 YIELDS = (
     ("^TNX", "10-year yield"),
     ("^TYX", "30-year yield"),
 )
+
+# What the level says on its own, since a VIX quote is the one row here whose
+# number is not a price and means nothing without the ranges around it.
+VIX_READS = ((15.0, "calm"), (20.0, "normal"), (30.0, "jumpy"))
+VIX_EXTREME = "panic"
+
+
+def vix_read(level: Optional[float]) -> str:
+    """Where a VIX level sits: calm, normal, jumpy, or panic."""
+    if level is None:
+        return ""
+    for ceiling, word in VIX_READS:
+        if level < ceiling:
+            return word
+    return VIX_EXTREME
 
 
 @dataclass
@@ -59,6 +84,19 @@ class IndexQuote:
     change_pct: Optional[float] = None
     change_bp: Optional[float] = None
     is_yield: bool = False
+    # A row that is not a yield and is still read the other way round: the VIX.
+    rises_are_bad: bool = False
+    # What the level itself says, where the number needs it.
+    note: str = ""
+
+    @property
+    def headwind(self) -> bool:
+        """Whether a rise in this row is the headwind for an equity entry.
+
+        True of the curve by definition, and of anything else that carries the
+        flag. Colour reads off this rather than off the group a row came from.
+        """
+        return self.is_yield or self.rises_are_bad
 
     @property
     def available(self) -> bool:
@@ -74,19 +112,23 @@ def _last_two(series) -> "tuple[Optional[float], Optional[float]]":
 
 
 def snapshot(
-    indices: Sequence = INDICES, yields: Sequence = YIELDS
+    indices: Sequence = INDICES,
+    yields: Sequence = YIELDS,
+    volatility: Sequence = VOLATILITY,
 ) -> List[IndexQuote]:
     """One batched request for the lot. Empty when the fetch fails.
 
-    Both groups go out together -- the curve costs two more symbols on a
-    request that was already being made, not a second round trip.
+    Every group goes out together -- the curve and the VIX cost three more
+    symbols on a request that was already being made, not another round trip.
 
     This runs before the menu, so it degrades rather than delays: no quotes is
     a missing header, not a missing report.
     """
-    rows = [(symbol, label, False) for symbol, label in indices]
-    rows += [(symbol, label, True) for symbol, label in yields]
-    symbols = [symbol for symbol, _, _ in rows]
+    # (symbol, label, is_yield, rises_are_bad)
+    rows = [(symbol, label, False, False) for symbol, label in indices]
+    rows += [(symbol, label, False, True) for symbol, label in volatility]
+    rows += [(symbol, label, True, False) for symbol, label in yields]
+    symbols = [symbol for symbol, _, _, _ in rows]
     if not symbols:
         return []
     try:
@@ -99,7 +141,7 @@ def snapshot(
         return []
 
     out: List[IndexQuote] = []
-    for symbol, label, is_yield in rows:
+    for symbol, label, is_yield, rises_are_bad in rows:
         try:
             last, previous = _last_two(frame[symbol])
         except Exception:
@@ -112,7 +154,12 @@ def snapshot(
                 change_bp = (last - previous) * 100.0
             else:
                 change_pct = (last / previous - 1.0) * 100.0
-        out.append(IndexQuote(symbol, label, last, change_pct, change_bp, is_yield))
+        note = vix_read(last) if symbol in dict(volatility) else ""
+        out.append(
+            IndexQuote(
+                symbol, label, last, change_pct, change_bp, is_yield, rises_are_bad, note
+            )
+        )
     return out
 
 
@@ -132,12 +179,13 @@ def _colour(quote: IndexQuote, paint):
     move = quote.change_bp if quote.is_yield else quote.change_pct
     if move is None:
         return paint.grey
-    if quote.is_yield:
+    if quote.headwind:
         # Green and red mean "in your favour" everywhere else in this tool, and
         # this header is read before an equity entry. Higher long rates are the
         # headwind there -- a discount rate going up is a multiple coming down
-        # -- so a yield that rises prints red while the sign says which way it
-        # went. Falling is not a buy signal either; it is just the tailwind.
+        # -- and so is a bid for protection, so both print red on the way up
+        # while the sign says which way they went. Falling is not a buy signal
+        # either; it is just the tailwind.
         return paint.red if move > 0 else paint.green
     return paint.green if move >= 0 else paint.red
 
@@ -166,12 +214,14 @@ def format_lines(quotes: Sequence[IndexQuote], palette=None) -> List[str]:
         if quote.is_yield and not previous_was_yield and lines:
             lines.append("")
         previous_was_yield = quote.is_yield
-        lines.append(
-            "  %s  %s  %s"
-            % (
-                paint.bold("%-*s" % (label_w, quote.label)),
-                "%*s" % (level_w, _level(quote)),
-                _colour(quote, paint)("%*s" % (move_w, _move(quote))),
-            )
+        row = "  %s  %s  %s" % (
+            paint.bold("%-*s" % (label_w, quote.label)),
+            "%*s" % (level_w, _level(quote)),
+            _colour(quote, paint)("%*s" % (move_w, _move(quote))),
         )
+        # Unpadded and last, so a row without a note ends where it always did
+        # and no spaces are buried inside a colour escape.
+        if quote.note:
+            row += "  " + paint.grey(quote.note)
+        lines.append(row)
     return lines
