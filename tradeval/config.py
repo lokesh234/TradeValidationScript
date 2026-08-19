@@ -205,6 +205,60 @@ class LongTermRules:
 
 
 @dataclass
+class EventContractRules:
+    """A binary claim on an exchange, priced in cents between 0 and 100.
+
+    Nothing here is a chart threshold, because there is no chart: a contract
+    that settles at a dollar has no trend, no earnings and no balance sheet.
+    What decides it is the gap between the price and your own probability, and
+    whether the costs of getting in and out leave any of that gap behind.
+    """
+
+    # Points of probability between your estimate and the ask. Under a few
+    # points you are paying the spread to bet on your own rounding error.
+    min_edge_pts: float = 7.0
+    warn_edge_pts: float = 3.0
+    # The round trip, in cents. On a claim that pays a dollar, five cents of
+    # spread is five percent of everything at stake.
+    max_spread_cents: float = 2.0
+    warn_spread_cents: float = 5.0
+    # Contracts traded in a day, and left open. Thin markets quote fine and
+    # fill badly.
+    min_volume_24h: float = 1000.0
+    warn_volume_24h: float = 100.0
+    min_open_interest: float = 5000.0
+    warn_open_interest: float = 500.0
+    # Your order against what is actually resting at the ask.
+    warn_depth_ratio: float = 1.0
+    # Capital is committed until it settles, so a claim a year out has to be
+    # worth the wait.
+    max_days_to_close: float = 180.0
+    warn_days_to_close: float = 365.0
+    # The exchange's cut, as a share of what a win pays. The fee formula makes
+    # this exactly 7% of the price -- the (1 - price) in the fee cancels the
+    # (1 - price) a win pays -- so these bands are really prices: 5% is a 71c
+    # contract and 6.5% is a 93c one. Stated as a share of the win anyway,
+    # because that is the number that comes out of your pocket.
+    max_fee_pct_of_win: float = 5.0
+    warn_fee_pct_of_win: float = 6.5
+    # Kalshi's published rate: 0.07 x contracts x price x (1 - price).
+    fee_rate: float = 0.07
+    # A binary can lose all of it, so the whole cost is the risk.
+    max_account_risk_pct: float = 2.0
+    # Fraction of the Kelly stake to actually bet. Full Kelly assumes your
+    # probability is right, which is the one thing you cannot check.
+    kelly_fraction: float = 0.25
+    # What the money would earn sitting in bills instead.
+    risk_free_rate_pct: float = 4.0
+    # Pennies and near-certainties: one tick is a large share of the price,
+    # and the spread eats the whole edge.
+    min_price_cents: float = 3.0
+    max_price_cents: float = 97.0
+    # Markets offered when searching by phrase.
+    search_limit: int = 8
+
+
+@dataclass
 class BuzzRules:
     """Reddit hype scoring. Only used when credentials are configured."""
 
@@ -342,6 +396,7 @@ class Config:
     options: OptionRules = field(default_factory=OptionRules)
     short_term: ShortTermRules = field(default_factory=ShortTermRules)
     long_term: LongTermRules = field(default_factory=LongTermRules)
+    event_contract: EventContractRules = field(default_factory=EventContractRules)
     buzz: BuzzRules = field(default_factory=BuzzRules)
     news: NewsRules = field(default_factory=NewsRules)
     research: ResearchRules = field(default_factory=ResearchRules)

@@ -369,6 +369,114 @@ def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
         assert validate.main(["--list-indices"]) == 1
 
 
+def _event_market(**overrides):
+    base = dict(
+        ticker="KXFEDDECISION-26SEP-H0",
+        title="Will the Fed hold rates in September?",
+        subtitle="Fed maintains rate",
+        event_ticker="KXFEDDECISION-26SEP",
+        status="active",
+        yes_bid=70.0,
+        yes_ask=71.0,
+        no_bid=29.0,
+        no_ask=30.0,
+        volume_24h=185_775.0,
+        open_interest=3_129_264.0,
+        yes_ask_size=5_000.0,
+        close_time=dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30),
+        rules="If the Federal Reserve holds, then the market resolves to Yes.",
+    )
+    base.update(overrides)
+    return validate.kalshi.EventMarket(**base)
+
+
+def test_main_event_search_prints_a_pickable_line_per_market(capsys):
+    matches = [_event_market(), _event_market(ticker="KXRATECUT-26DEC31", title="Fed rate cut?")]
+    with patch("tradeval.kalshi.search", return_value=matches):
+        assert validate.main(["--event-search", "fed"]) == 0
+    out = capsys.readouterr().out
+    # Tab separated, because trade.sh draws its own picker from this.
+    assert out.splitlines()[0].startswith("KXFEDDECISION-26SEP-H0\t")
+    assert "yes 70/71c" in out and "30 days" in out
+
+
+def test_main_event_search_carries_the_quote_as_a_third_field(capsys):
+    """Bare numbers the shell can price the other side of the claim from."""
+    with patch("tradeval.kalshi.search", return_value=[_event_market()]):
+        assert validate.main(["--event-search", "fed"]) == 0
+    ticker, shown, quote = capsys.readouterr().out.rstrip("\n").split("\t")
+    assert quote == "70/71"
+    # And it is not part of what a person reads.
+    assert "70/71" not in shown.replace("yes 70/71c", "")
+
+
+def test_event_quote_field_is_empty_when_a_side_is_unquoted():
+    assert validate.event_quote_field(_event_market(yes_bid=None)) == ""
+
+
+def test_main_event_search_exits_nonzero_when_nothing_matched(capsys):
+    with patch("tradeval.kalshi.search", return_value=[]):
+        assert validate.main(["--event-search", "wat"]) == 1
+
+
+def test_main_event_grades_the_contract_and_prints_the_sheet(capsys):
+    with patch("tradeval.kalshi.fetch", return_value=_event_market()) as fetch, \
+         patch("tradeval.kalshi.siblings", return_value=[]):
+        code = validate.main(
+            ["--event", "KXFEDDECISION-26SEP-H0", "--probability", "85",
+             "--contracts", "100", "--account", "50000", "--no-color"]
+        )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fetch.call_args[0][0] == "KXFEDDECISION-26SEP-H0"
+    assert "Edge vs price" in out and "THE CONTRACT" in out and "WHAT IT PAYS" in out
+    # No ticker was resolved and no price history was fetched to get here.
+    assert "Event Contract (yes)" in out
+
+
+def test_main_event_takes_a_phrase_by_searching_for_it(capsys):
+    with patch("tradeval.kalshi.search", return_value=[_event_market()]) as search, \
+         patch("tradeval.kalshi.fetch", return_value=_event_market()), \
+         patch("tradeval.kalshi.siblings", return_value=[]):
+        assert validate.main(["--event", "fed decision", "--no-color", "--quiet"]) == 0
+    assert search.call_args[0][0] == "fed decision"
+
+
+def test_main_event_reports_a_market_that_does_not_exist(capsys):
+    with patch("tradeval.kalshi.fetch", side_effect=validate.kalshi.KalshiError("nope")), \
+         patch("tradeval.kalshi.search", return_value=[]):
+        assert validate.main(["--event", "KX-NOPE", "--no-color"]) == 1
+
+
+def test_main_event_rejects_a_probability_that_is_not_one(capsys):
+    assert validate.main(["--event", "KX-1", "--probability", "180"]) == 2
+    assert validate.main(["--event", "KX-1", "--event-side", "maybe"]) == 2
+    assert validate.main(["--event", "KX-1", "--event-price", "150"]) == 2
+
+
+def test_main_event_returns_the_no_go_code_when_it_is_a_no_go(capsys):
+    """Same contract as the shell: 3 means nothing here is worth trading."""
+    dead = _event_market(status="finalized")
+    with patch("tradeval.kalshi.fetch", return_value=dead), \
+         patch("tradeval.kalshi.siblings", return_value=[]):
+        code = validate.main(["--event", "KX-1", "--probability", "90", "--no-color"])
+    assert code == 3
+
+
+def test_find_event_market_falls_back_to_search_when_a_ticker_is_unknown():
+    hit = _event_market()
+    with patch("tradeval.kalshi.fetch", side_effect=[validate.kalshi.KalshiError("404"), hit]), \
+         patch("tradeval.kalshi.search", return_value=[hit]) as search:
+        assert validate.find_event_market("KX-TYPO-1", 8) is hit
+    assert search.called
+
+
+def test_format_event_match_says_what_it_is_and_what_it_costs():
+    line = validate.format_event_match(_event_market())
+    assert "Will the Fed hold rates in September? -- Fed maintains rate" in line
+    assert "yes 70/71c" in line
+
+
 def test_main_list_events_ends_with_the_month_end_count(capsys):
     assert validate.main(["--list-events"]) == 0
     assert "trading day" in capsys.readouterr().out

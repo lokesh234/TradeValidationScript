@@ -36,9 +36,28 @@ ALIASES: Dict[str, str] = {
 }
 
 
+# Asked for often enough to be worth answering properly. An event contract is
+# graded by its own sheet rather than by one of these, because it has no
+# company behind it to grade.
+ELSEWHERE = {
+    "4": "event",
+    "event": "event",
+    "events": "event",
+    "contract": "event",
+    "kalshi": "event",
+    "binary": "event",
+}
+
+
 def resolve_key(choice: str) -> str:
     """Map any accepted spelling of a trade type to its canonical key."""
     key = choice.strip().lower()
+    if ELSEWHERE.get(ALIASES.get(key, key)) == "event":
+        raise KeyError(
+            "An event contract is not a trade type: it has no company behind it "
+            "to grade. Use --event TICKER (or --event-search to find one), or "
+            "run ./trade.sh and pick 4."
+        )
     key = ALIASES.get(key, key)
     if key not in STRATEGIES:
         raise KeyError(

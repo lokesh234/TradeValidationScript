@@ -78,6 +78,42 @@ ask_number() {
     done
 }
 
+# ask_count <variable> <prompt> -- whole things only. Blank is allowed.
+ask_count() {
+    local __var="$1" __prompt="$2" __reply=""
+    while true; do
+        read -r -p "$__prompt: " __reply || { echo; exit 130; }
+        case "$__reply" in
+            "")       eval "$__var=''"; return ;;
+            *[!0-9]*) printf '  %sWhole contracts only.%s\n' "$DIM" "$OFF" ;;
+            *)        eval "$__var=\$__reply"; return ;;
+        esac
+    done
+}
+
+# ask_cents <variable> <prompt> -- a price on a contract that pays a dollar, so
+# it lives strictly between 0 and 100. Caught here rather than after the last
+# question, where validate.py would reject it and lose every other answer.
+ask_cents() {
+    local __var="$1" __prompt="$2" __reply=""
+    while true; do
+        read -r -p "$__prompt: " __reply || { echo; exit 130; }
+        case "$__reply" in
+            "") eval "$__var=''"; return ;;
+            *[!0-9.]*|*.*.*|.)
+                printf '  %sEnter a price in cents, 1 to 99.%s\n' "$DIM" "$OFF" ;;
+            *)
+                # Compared as a number: 99.5 is a price, 100 is not a bet.
+                if awk "BEGIN{exit !($__reply > 0 && $__reply < 100)}"; then
+                    eval "$__var=\$__reply"
+                    return
+                fi
+                printf '  %sA contract pays a dollar, so it costs between 1c and 99c.%s\n' \
+                    "$DIM" "$OFF" ;;
+        esac
+    done
+}
+
 confirm() {  # confirm <prompt> -- defaults to no
     local __reply=""
     read -r -p "$1 [y/N]: " __reply || { echo; exit 130; }
@@ -112,20 +148,109 @@ choose_strategy() {
         printf '  1) Earnings Gamble   %s0-10 days, event driven%s\n' "$DIM" "$OFF"
         printf '  2) Short Term        %s1 to 6 months%s\n'           "$DIM" "$OFF"
         printf '  3) Long Term         %s1 year or more%s\n'          "$DIM" "$OFF"
-        printf '  4) Browse Around     %swhere the money is going%s\n\n' "$DIM" "$OFF"
+        printf '  4) Event Contract    %sa binary claim, 0 to 100c%s\n' "$DIM" "$OFF"
+        printf '  5) Browse Around     %swhere the money is going%s\n\n' "$DIM" "$OFF"
 
-        ask reply "Choice [1-4]"
+        ask reply "Choice [1-5]"
         case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
             1|earnings|gamble|earnings-gamble) STRATEGY="earnings"; STRATEGY_LABEL="Earnings Gamble"; return ;;
             2|short|swing|short-term)          STRATEGY="short";    STRATEGY_LABEL="Short Term";     return ;;
             3|long|hold|invest|long-term)      STRATEGY="long";     STRATEGY_LABEL="Long Term";      return ;;
+            # Priced in cents on a claim rather than in dollars on a company,
+            # so the main loop hands it straight to its own prompts: there is
+            # no ticker to type and no instrument to choose.
+            4|event|events|contract|kalshi)    STRATEGY="event";    STRATEGY_LABEL="Event Contract"; return ;;
             # Browsing picks a ticker rather than a strategy, so the menu comes
             # back around to ask what to do with the one you found.
-            4|browse|browse-around|spend)      browse_around ;;
+            5|browse|browse-around|spend)      browse_around ;;
             q|quit|exit)                       exit 0 ;;
-            *) printf '  %sPick 1 to 4 (or q to quit).%s\n' "$DIM" "$OFF" ;;
+            *) printf '  %sPick 1 to 5 (or q to quit).%s\n' "$DIM" "$OFF" ;;
         esac
     done
+}
+
+# A binary claim on an exchange, found by phrase because nobody remembers that
+# the September Fed decision is KXFEDDECISION-26SEP-H0. The questions are not
+# the stock ones: there is no stop and no target on a contract that settles at
+# a dollar or at nothing, so what is asked for is the probability you would put
+# on it -- which is the only thing the market's own price can be wrong about.
+trade_event_contract() {
+    local out sym line quote n=0 phrase ticker side="yes" contracts price
+    local picked_quote="" range=""
+    EVENT_MARKETS=()
+    EVENT_QUOTES=()
+
+    printf '\n%sWhat are you betting on?%s\n' "$BOLD" "$OFF"
+    printf '%sA few words -- "fed cut september", "government shutdown" -- or a Kalshi ticker.%s\n\n' \
+        "$DIM" "$OFF"
+    while true; do
+        ask phrase "Search Kalshi (or b to go back)"
+        case "$(printf '%s' "$phrase" | tr '[:upper:]' '[:lower:]')" in
+            b|back|"") return 1 ;;
+        esac
+        out="$("$PY" "$ROOT/validate.py" --event-search "$phrase" 2>/dev/null)"
+        [ -n "$out" ] && break
+        printf '  %sNothing matched that. Try fewer words.%s\n' "$DIM" "$OFF"
+    done
+
+    printf '\n'
+    # Third field is the yes market as bare numbers -- kept, not printed, so
+    # the price question later can say what the book actually is.
+    while IFS="$(printf '\t')" read -r sym line quote; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        EVENT_MARKETS+=("$sym")
+        EVENT_QUOTES+=("$quote")
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$out
+EOF
+    [ "$n" -gt 0 ] || return 1
+
+    printf '\n'
+    while [ -z "${ticker:-}" ]; do
+        ask reply "Pick a number [1-$n], type a ticker, or b to go back"
+        case "$(printf '%s' "$reply" | tr '[:upper:]' '[:lower:]')" in
+            b|back|"") return 1 ;;
+            *[!0-9]*)
+                # A ticker typed here is the answer the list was going to give.
+                ticker="$(printf '%s' "$reply" | tr '[:lower:]' '[:upper:]')" ;;
+            *)
+                if [ "$reply" -ge 1 ] && [ "$reply" -le "$n" ]; then
+                    ticker="${EVENT_MARKETS[$((reply - 1))]}"
+                    picked_quote="${EVENT_QUOTES[$((reply - 1))]}"
+                else
+                    printf '  %sPick a number from 1 to %s.%s\n' "$DIM" "$n" "$OFF"
+                fi ;;
+        esac
+    done
+    printf '  %s-> %s%s\n' "$DIM" "$ticker" "$OFF"
+
+    # Both sides of a binary are tradeable, and the cheap one is often the
+    # side with the edge: doubting a 94c near-certainty costs 6c to try.
+    confirm "Bet against it instead (buy the no side)" && side="no"
+
+    # The price question says what the book is, for the side being bought: a
+    # 70/71c yes is a 29/30c no, and a number typed blind against the wrong
+    # side of the market is the easy mistake here.
+    if [ -n "$picked_quote" ]; then
+        local qb="${picked_quote%%/*}" qa="${picked_quote##*/}"
+        if [ "$side" = "no" ]; then
+            range=", the no side is $((100 - qa))/$((100 - qb))c"
+        else
+            range=", the yes side is $qb/${qa}c"
+        fi
+    fi
+
+    EVENT_ARGS=(--event "$ticker" --event-side "$side")
+    printf '\n%sHow much of it%s\n' "$BOLD" "$OFF"
+    ask_count contracts "  How many contracts (Enter for 1)"
+    [ -n "$contracts" ] && EVENT_ARGS+=(--contracts "$contracts")
+    ask_cents price "  Price you would pay in cents (Enter for the ask$range)"
+    [ -n "$price" ] && EVENT_ARGS+=(--event-price "$price")
+
+    printf '\n%sValidating %s -- Event Contract...%s\n' "$DIM" "$ticker" "$OFF"
+    "$PY" "$ROOT/validate.py" "${EVENT_ARGS[@]}"
 }
 
 # Two ways to go shopping: the sector and theme baskets a short term trade
@@ -523,6 +648,14 @@ LAST_STATUS=0
 while true; do
     TICKERS=""
     choose_strategy
+    # A claim on an event asks nothing the questions below ask, so it runs its
+    # own sheet and comes straight back to the menu.
+    if [ "$STRATEGY" = "event" ]; then
+        trade_event_contract
+        LAST_STATUS=$?
+        confirm "Validate another trade" || break
+        continue
+    fi
     HORIZON=""
     INSTRUMENT=""
     [ "$STRATEGY" = "short" ] && choose_horizon

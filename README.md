@@ -31,8 +31,10 @@ Which strategy are you trading?
   1) Earnings Gamble   0-10 days, event driven
   2) Short Term        1 to 6 months
   3) Long Term         1 year or more
+  4) Event Contract    a binary claim, 0 to 100c
+  5) Browse Around     where the money is going
 
-Choice [1-3]: 2
+Choice [1-5]: 2
 
 What are you trading?
 
@@ -146,6 +148,136 @@ the last of the month is not a session it says so and counts to the one that
 is (`Fri 29 May, the 31st falling on a Sunday`).
 
 Shown once per session, and `validate.py --list-events` prints it on its own.
+
+### Betting on the event itself
+
+The calendar says an FOMC meeting is coming. Option 4 grades the other way of
+trading it: a **Kalshi event contract**, a binary claim that settles at $1 if
+the thing happens and $0 if it does not. Its price is a probability with a
+dollar sign in front — 71c is the market saying 71% — so there is exactly one
+question worth asking, and the sheet is built around it: *is that number wrong,
+and by enough to pay for disagreeing with it?*
+
+Markets are found by phrase, because nobody remembers that the September Fed
+decision is `KXFEDDECISION-26SEP-H0`:
+
+```
+What are you betting on?
+A few words -- "fed cut september", "government shutdown" -- or a Kalshi ticker.
+
+Search Kalshi (or b to go back): fed decision september
+
+   1) Fed decision in September? -- Fed maintains rate  yes 70/71c  16 Sep 2026 (30 days)
+   2) Fed funds rate after September meeting? -- Above 3.75%  yes 31/32c  16 Sep 2026 (30 days)
+   3) How many dissenting votes at the September Fed meeting? -- 3  yes 31/35c  16 Sep 2026 (30 days)
+
+Pick a number [1-3], type a ticker, or b to go back: 1
+  -> KXFEDDECISION-26SEP-H0
+Bet against it instead (buy the no side) [y/N]: n
+```
+
+Then how many contracts, and what you would actually pay — the price question
+quotes the book for the side you chose, since a 70/71c yes is a 29/30c no and
+a number typed against the wrong side of the market is the easy mistake here:
+
+```
+How much of it
+
+  How many contracts (Enter for 1): 200
+  Price you would pay in cents (Enter for the ask, the yes side is 70/71c):
+```
+
+Then your own number, asked with the market's on screen so the estimate is
+typed next to the one it disagrees with:
+
+```
+  buying yes at 71c -- the market puts it at 70.5%
+  Your odds it resolves YES, 0-100 (Enter to skip): 78
+```
+
+That answer drives the heaviest check on the sheet, and skipping it is allowed
+— the rest still grades what a contract costs to own, which is a fact about the
+market rather than an opinion about the world:
+
+```
+  PASS   x3 Edge vs price         78% vs 71c
+              your 78% against 71c paid -- +7.0 points
+  PASS   x2 Bid-ask spread        1c wide
+              70c bid, 71c ask, 1% of what you pay
+  WARN   x1 Depth at the touch    134 resting
+              200 contracts wanted against 134 resting at the touch -- the rest
+              of the order walks up the book
+  PASS   x1 Fee drag              5.0% of the win
+              $2.89 in fees against $55.11 won, and 20% of the 7.0 points of edge
+  PASS   x2 Kelly size            $145 vs $3017
+              25% Kelly on this edge is $3017; you are risking $145
+  WARN   x1 Settlement terms      early close
+              this market can settle before its close date
+```
+
+The interactive flow does not ask for an account value, so the two checks that
+size against a bankroll — `Risk per trade` and `Kelly size` — report SKIP and
+say what to pass. `--account` on the command line turns both on.
+
+**What is different about grading a claim rather than a company.** There is no
+trend, no earnings and no balance sheet, so none of the stock checks apply and
+none of them are pretended at. What replaces them is the arithmetic of a
+binary:
+
+- **A negative edge vetoes the sheet.** If your own number says the contract
+  pays less than it costs, no amount of liquidity elsewhere fixes that, so it
+  is a critical FAIL rather than three points off a score. A *thin* positive
+  edge is only graded harshly — whether two points is real is a judgement about
+  your estimate, not a fact about the market.
+- **Kelly sizes the edge, not the conviction.** A 7-point edge at 71c is 24% of
+  bankroll at full Kelly, which is a stake only justified if the probability you
+  typed is exactly right — the one input nothing here can verify. The sheet
+  grades against a quarter of it.
+- **The fee is 7% of the price, always.** Kalshi charges
+  `0.07 x contracts x price x (1 - price)`, and a win pays `(1 - price)`, so the
+  two cancel: the fee takes 7% of the win at any price, and the expensive end of
+  the board is where that hurts. The check states it against the edge too, which
+  is the part the price alone does not tell you.
+- **Cash is the floor.** A 97c contract eight months out returns about 4.6% a
+  year if everything goes right, and Treasuries pay roughly that for being
+  certain — which is why the tape header now carries the [10- and 30-year
+  yields](#where-the-market-is). Where the return runs away instead (a 2c
+  lottery ticket annualizes into the thousands of percent) the check says so
+  plainly rather than printing a PASS that reads as an endorsement.
+- **There is no stop.** A binary resolves; it does not retrace. The whole stake
+  is the risk, so `Risk per trade` grades the entire cost against the account
+  rather than a distance to a stop that does not exist.
+- **Settlement terms can never FAIL**, because nothing here can read a rulebook
+  for you. They are on the sheet so the rulebook gets read: the wording is where
+  an obviously-correct call turns into a losing contract, and a market that can
+  close early settles on a date you did not size for.
+
+The event's other outcomes are priced beside the one being graded, since the
+mispriced one is often not the one the search returned:
+
+```
+ THE OTHER OUTCOMES
+  The same event, priced across every outcome it can take.
+
+  Outcome      Yes ask  Bid  24h volume  Ticker
+  Hike 25bps       30c  29c     114,860  KXFEDDECISION-26SEP-H25
+  Cut 25bps         2c   1c     212,056  KXFEDDECISION-26SEP-C25
+  Cut >25bps        1c   0c     210,832  KXFEDDECISION-26SEP-C26
+```
+
+Quotes are public, so no API key and no account are needed, and this tool never
+places an order. On the command line it is a flag rather than a `--type`, since
+there is no company to grade:
+
+```bash
+validate.py --event-search "government shutdown"
+validate.py --event KXFEDDECISION-26SEP-H0 --probability 78 \
+            --contracts 200 --account 50000
+validate.py --event "fed cut september" --event-side no --event-price 28
+```
+
+Thresholds live in `event_contract` in the config — edge demanded, spread
+tolerated, the Kelly fraction, what counts as thin.
 
 ### Where the money is going
 
@@ -1147,7 +1279,7 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--instrument` | Any trade type: `O` single contracts, `S` stock, `C` call debit spread, `P` put debit spread. Each grades a different trade. Prompts if omitted. |
 | `--side` | Options only: `C` calls, `P` puts, `B` both. Prompts if omitted. |
 | `--strikes` | Options only: strikes listed either side of the money. Default 5, capped at what the expiry carries. Prompts if omitted. |
-| `--contracts` | Options only: how many contracts to buy. Prompts with prices if omitted. |
+| `--contracts` | How many contracts to buy — option contracts, or event contracts with `--event`. Prompts with prices if omitted. |
 | `--contract` | Options only: trade one contract off the ladder — a strike (`90`) or a pairing (`250/260`). The payoff tables price only that one. Prompts if omitted; a label that isn't on the expiry says so and prices them all. |
 | `--min-reward-risk` | Spreads only: the reward:risk a pairing must clear, e.g. `1.5`. Prompts with prices if omitted; blank leaves it ungraded. |
 | `--account` | Account value, in dollars. |
@@ -1158,6 +1290,11 @@ spellings (`long-term`, `swing`, `gamble`, ...).
 | `--target-cap` | Long term only: a market cap you think it reaches (`5T`, `900B`). Prompts after the verdict if omitted. |
 | `--allow-earnings` | Short term only: permit holding through a scheduled report. |
 | `--spending` | Browse the market's big spending flows and their beneficiaries, then pick a ticker from one. Takes a number or a name; bare lists them. |
+| `--event` | Grade a Kalshi event contract instead of a stock, by ticker or by phrase. Not a `--type`: a binary claim has no company to grade. |
+| `--event-search` | List the Kalshi markets matching a phrase, then exit. |
+| `--event-side` | Which side of the claim to buy, `yes` or `no`. Default `yes`. |
+| `--probability` | Your own odds it resolves YES, 0–100. The check that decides the trade skips without it; prompts when there's a terminal to ask at. |
+| `--event-price` | Price you would actually pay, in cents. Defaults to the ask. |
 | `--buzz` | Score retail chatter out of 100. With `--spending`, scores the whole flow — one lookup per name. |
 | `--benchmark` | Relative-strength benchmark. Default `SPY`. |
 | `--period` | History window to download. Default `3y`. |
@@ -1323,7 +1460,8 @@ instead of editing the file:
 {
   "scoring":   { "go": 85 },
   "long_term": { "max_pe": 15, "min_fcf_yield_pct": 6 },
-  "short_term": { "min_reward_risk": 3.0, "holding_days": 10 }
+  "short_term": { "min_reward_risk": 3.0, "holding_days": 10 },
+  "event_contract": { "min_edge_pts": 10, "kelly_fraction": 0.5 }
 }
 ```
 

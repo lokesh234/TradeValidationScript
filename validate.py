@@ -34,6 +34,7 @@ from tradeval import (
     discover,
     flow_buzz,
     indices,
+    kalshi,
     macro,
     reddit_auth,
     sessions,
@@ -54,13 +55,22 @@ from tradeval.report import (
     weight_text,
 )
 from tradeval.strategies import STRATEGIES, Report, menu_lines, resolve_key
+from tradeval.strategies.event_contract import (
+    EventContractStrategy,
+    EventTrade,
+    resolve_side as resolve_event_side,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Score a trade idea against the checklist for its trade type.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Trade types:\n" + "\n".join(menu_lines()),
+        epilog="Trade types:\n"
+        + "\n".join(menu_lines())
+        + "\n\nEvent contracts are not a trade type -- they have no company to grade.\n"
+        "  --event TICKER      grade one Kalshi contract\n"
+        "  --event-search TEXT find one by phrase",
     )
     parser.add_argument("symbols", nargs="*", help="ticker(s) to validate")
     parser.add_argument(
@@ -92,7 +102,8 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--contracts",
         type=int,
-        help="options only: how many contracts to buy. Prompts with prices if omitted.",
+        help="how many contracts to buy -- option contracts, or event contracts "
+        "with --event. Prompts with prices if omitted.",
     )
     plan.add_argument(
         "--strikes",
@@ -157,6 +168,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="earnings only: show how industry peers moved on their own reports "
         "(one lookup per peer, adds roughly 10 seconds)",
+    )
+
+    event = parser.add_argument_group("event contracts")
+    event.add_argument(
+        "--event",
+        metavar="TICKER",
+        help="grade a Kalshi event contract instead of a stock, e.g. KXRATECUT-26DEC31. "
+        "A phrase works too and takes the closest match.",
+    )
+    event.add_argument(
+        "--event-search",
+        metavar="PHRASE",
+        help="list the Kalshi markets matching a phrase, then exit",
+    )
+    event.add_argument(
+        "--event-side",
+        metavar="YES|NO",
+        default="yes",
+        help="which side of the claim to buy (default: yes)",
+    )
+    event.add_argument(
+        "--probability",
+        type=float,
+        metavar="PCT",
+        help="your own odds that it resolves YES, 0-100. The check that decides "
+        "the trade skips without it.",
+    )
+    event.add_argument(
+        "--event-price",
+        type=float,
+        metavar="CENTS",
+        help="price you would actually pay, in cents (default: the ask)",
     )
 
     reddit = parser.add_argument_group("reddit buzz")
@@ -1273,6 +1316,153 @@ def resolve_buzz(symbols: List[str], args: argparse.Namespace, config: Config) -
     return buzz_scorer(args, config)(symbols)
 
 
+def event_quote_field(market) -> str:
+    """The yes market as two bare numbers, for a front end to work off.
+
+    Whole cents and no units, because the shell reads this to price the other
+    side of the same claim -- a 70/71c yes is a 29/30c no -- and cannot do
+    arithmetic on the sentence a person reads.
+    """
+    if market.yes_bid is None or market.yes_ask is None:
+        return ""
+    return "%.0f/%.0f" % (market.yes_bid, market.yes_ask)
+
+
+def format_event_match(market) -> str:
+    """One search hit as the picker shows it: what it is, and what it costs."""
+    quote = "n/a"
+    if market.yes_ask is not None:
+        quote = "yes %.0fc" % market.yes_ask
+        if market.yes_bid is not None:
+            quote = "yes %.0f/%.0fc" % (market.yes_bid, market.yes_ask)
+    when = market.resolves
+    days = market.days_to_close()
+    if days is not None and days >= 0:
+        when = "%s (%d days)" % (when, round(days))
+    title = market.title or market.series_title or market.ticker
+    if market.subtitle and market.subtitle.lower() not in title.lower():
+        title = "%s -- %s" % (title, market.subtitle)
+    return "%s  %s  %s" % (title, quote, when)
+
+
+def find_event_market(query: str, limit: int):
+    """The market a string names: a ticker if it is one, else the best match.
+
+    Kalshi tickers are shouted hyphenated things (KXRATECUT-26DEC31) that
+    nobody remembers, so anything that does not look like one -- or that looks
+    like one and turns out not to exist -- falls back to the search the menu
+    uses, and takes what it ranked first.
+    """
+    text = (query or "").strip()
+    if not text:
+        raise kalshi.KalshiError("No market given.")
+    looks_like_ticker = " " not in text and "-" in text
+    if looks_like_ticker:
+        try:
+            return kalshi.fetch(text)
+        except kalshi.KalshiError:
+            pass  # Fall through to the search, which is the friendlier answer.
+    matches = kalshi.search(text, limit=limit)
+    if not matches:
+        raise kalshi.KalshiError(
+            "Nothing on Kalshi matched '%s'. Try fewer words, or the market's ticker."
+            % text
+        )
+    # The search index carries a quote but not the depth or the rules, so the
+    # graded numbers always come from the market's own endpoint.
+    return kalshi.fetch(matches[0].ticker)
+
+
+def prompt_probability() -> Optional[float]:
+    """Ask for the estimate the whole sheet turns on."""
+    while True:
+        raw = input(
+            "  Your odds it resolves YES, 0-100 (Enter to skip): "
+        ).strip()
+        if not raw:
+            return None
+        try:
+            value = float(raw.rstrip("%"))
+        except ValueError:
+            print("  Enter a number between 0 and 100, or press Enter to skip.")
+            continue
+        if 0.0 <= value <= 100.0:
+            return value
+        print("  A probability lives between 0 and 100.")
+
+
+def run_event_contract(
+    args: argparse.Namespace, config: Config, palette, width: int
+) -> int:
+    """Grade one binary claim, the way a symbol run grades one company."""
+    rules = config.event_contract
+    try:
+        side = resolve_event_side(args.event_side)
+    except ValueError as exc:
+        print("Invalid --event-side '%s'. %s" % (args.event_side, exc), file=sys.stderr)
+        return 2
+    if args.probability is not None and not 0.0 <= args.probability <= 100.0:
+        print("--probability is a percentage between 0 and 100.", file=sys.stderr)
+        return 2
+    if args.event_price is not None and not 0.0 < args.event_price < 100.0:
+        print("--event-price is in cents, between 0 and 100.", file=sys.stderr)
+        return 2
+    # Checked here as well as below, because this path returns before the
+    # shared argument validation the symbol run does.
+    if args.contracts is not None and args.contracts < 1:
+        print("--contracts must be at least 1.", file=sys.stderr)
+        return 2
+
+    try:
+        market = find_event_market(args.event, rules.search_limit)
+    except kalshi.KalshiError as exc:
+        print(palette.red(str(exc)), file=sys.stderr)
+        return 1
+
+    probability = args.probability
+    if probability is None and sys.stdin.isatty() and not args.quiet:
+        # Asked here rather than skipped quietly: without an estimate the
+        # heaviest check on the sheet does not run. Asked with the market on
+        # screen, because the number being typed is a disagreement with it.
+        print("\n%s  %s" % (palette.bold(market.ticker), market.title))
+        quote = market.ask(side)
+        if quote is not None:
+            print(
+                palette.grey(
+                    "  buying %s at %.0fc -- the market puts it at %s"
+                    % (side, quote, ("%.1f%%" % (market.mid or quote)).replace(".0%", "%"))
+                )
+            )
+        try:
+            probability = prompt_probability()
+        except EOFError:
+            # End of input is an answer -- "no estimate" -- and the rest of the
+            # sheet still grades what the contract costs to own.
+            print()
+        except KeyboardInterrupt:
+            print("\nCancelled.")
+            return 130
+
+    trade = EventTrade(
+        side=side,
+        probability=probability,
+        contracts=args.contracts or 1,
+        account_size=args.account,
+        limit_price=args.event_price,
+    )
+    strategy = EventContractStrategy(
+        market,
+        trade,
+        config,
+        # The other outcomes of the same event, when it has any. A failure
+        # here costs a panel, never the report.
+        siblings=kalshi.siblings(market.event_ticker) if market.event_ticker else [],
+    )
+    report = strategy.run()
+    print(render(report, palette, verbose=not args.quiet, width=width))
+    return 0 if report.verdict.label != "NO-GO" else 3
+
+
 def validate_symbol(
     symbol: str,
     key: str,
@@ -1362,6 +1552,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         for line in indices.format_lines(quotes, palette):
             print(line)
         return 0 if quotes else 1
+
+    if args.event_search:
+        # Machine-readable for trade.sh, which draws its own picker.
+        try:
+            matches = kalshi.search(args.event_search, limit=config.event_contract.search_limit)
+        except kalshi.KalshiError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+        for market in matches:
+            print(
+                "%s\t%s\t%s"
+                % (market.ticker, format_event_match(market), event_quote_field(market))
+            )
+        return 0 if matches else 1
 
     if args.list_events:
         events = macro.upcoming(limit=6)
@@ -1488,6 +1692,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         for line in layout_panels([panel], palette, width):
             print(line)
         return 0
+
+    # A claim on an event is not a company, so it takes none of the machinery
+    # below: no history to fetch, no chain to price, no peers to read across.
+    if args.event:
+        return run_event_contract(args, config, palette, width)
 
     if args.instrument:
         try:
