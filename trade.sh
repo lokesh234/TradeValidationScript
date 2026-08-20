@@ -180,32 +180,62 @@ trade_event_contract() {
     EVENT_MARKETS=()
     EVENT_QUOTES=()
 
-    printf '\n%sWhat are you betting on?%s\n' "$BOLD" "$OFF"
-    printf '%sA few words -- "fed cut september", "government shutdown" -- or a Kalshi ticker.%s\n\n' \
-        "$DIM" "$OFF"
-    while true; do
-        ask phrase "Search Kalshi (or b to go back)"
-        case "$(printf '%s' "$phrase" | tr '[:upper:]' '[:lower:]')" in
-            b|back|"") return 1 ;;
-        esac
-        out="$("$PY" "$ROOT/validate.py" --event-search "$phrase" 2>/dev/null)"
-        [ -n "$out" ] && break
-        printf '  %sNothing matched that. Try fewer words.%s\n' "$DIM" "$OFF"
-    done
+    # What you are already watching, before asking you to search for something
+    # new. This is the list's best moment: a Kalshi ticker is unrememberable by
+    # design, so the alternative is searching your way back to a claim you have
+    # already found once.
+    if browse_tracked; then
+        printf '\n'
+        while true; do
+            ask reply "Pick a number [1-${#TRACKED_MARKETS[@]}], or Enter to search for something else"
+            case "$reply" in
+                "") break ;;
+                *[!0-9]*)
+                    printf '  %sA number, or Enter to search.%s\n' "$DIM" "$OFF" ;;
+                *)
+                    if [ "$reply" -ge 1 ] && [ "$reply" -le "${#TRACKED_MARKETS[@]}" ]; then
+                        ticker="${TRACKED_MARKETS[$((reply - 1))]}"
+                        picked_quote="${TRACKED_QUOTES[$((reply - 1))]}"
+                        break
+                    fi
+                    printf '  %sPick a number from 1 to %s.%s\n' \
+                        "$DIM" "${#TRACKED_MARKETS[@]}" "$OFF" ;;
+            esac
+        done
+    fi
 
-    printf '\n'
-    # Third field is the yes market as bare numbers -- kept, not printed, so
-    # the price question later can say what the book actually is.
-    while IFS="$(printf '\t')" read -r sym line quote; do
-        [ -z "$sym" ] && continue
-        n=$((n + 1))
-        EVENT_MARKETS+=("$sym")
-        EVENT_QUOTES+=("$quote")
-        printf '  %2d) %s\n' "$n" "$line"
-    done <<EOF
+    if [ -z "${ticker:-}" ]; then
+        printf '\n%sWhat are you betting on?%s\n' "$BOLD" "$OFF"
+        printf '%sA few words -- "fed cut september", "government shutdown" -- or a Kalshi ticker.%s\n\n' \
+            "$DIM" "$OFF"
+        while true; do
+            ask phrase "Search Kalshi (or b to go back)"
+            case "$(printf '%s' "$phrase" | tr '[:upper:]' '[:lower:]')" in
+                b|back|"") return 1 ;;
+            esac
+            out="$("$PY" "$ROOT/validate.py" --event-search "$phrase" 2>/dev/null)"
+            [ -n "$out" ] && break
+            printf '  %sNothing matched that. Try fewer words.%s\n' "$DIM" "$OFF"
+        done
+    fi
+
+    # Skipped whole when the claim came off the tracked list: there is nothing
+    # left to search for and nothing left to pick.
+    if [ -z "${ticker:-}" ]; then
+        printf '\n'
+        # Third field is the yes market as bare numbers -- kept, not printed,
+        # so the price question later can say what the book actually is.
+        while IFS="$(printf '\t')" read -r sym line quote; do
+            [ -z "$sym" ] && continue
+            n=$((n + 1))
+            EVENT_MARKETS+=("$sym")
+            EVENT_QUOTES+=("$quote")
+            printf '  %2d) %s\n' "$n" "$line"
+        done <<EOF
 $out
 EOF
-    [ "$n" -gt 0 ] || return 1
+        [ "$n" -gt 0 ] || return 1
+    fi
 
     printf '\n'
     while [ -z "${ticker:-}" ]; do
@@ -251,6 +281,9 @@ EOF
 
     printf '\n%sValidating %s -- Event Contract...%s\n' "$DIM" "$ticker" "$OFF"
     "$PY" "$ROOT/validate.py" "${EVENT_ARGS[@]}"
+    local status=$?
+    offer_to_track "$ticker"
+    return $status
 }
 
 # Two ways to go shopping: the sector and theme baskets a short term trade
@@ -487,6 +520,51 @@ $FAVOURITES_OUT
 EOF
     [ "$n" -gt 0 ] || return 1
     return 0
+}
+
+# The contracts you track, priced as they stand now. Same shape again: fill
+# the arrays, print them numbered, and leave the choosing to the caller. The
+# quote column is kept as bare numbers for the same reason the search picker
+# keeps it -- the price question later works off it.
+TRACKED_READ=0
+TRACKED_MARKETS=()
+TRACKED_QUOTES=()
+TRACKED_TICKERS=" "
+browse_tracked() {
+    TRACKED_MARKETS=()
+    TRACKED_QUOTES=()
+    TRACKED_TICKERS=" "
+    local out sym line quote n=0
+    out="$("$PY" "$ROOT/validate.py" --list-tracked 2>/dev/null)" || return 1
+    TRACKED_READ=1
+    [ -z "$out" ] && return 1
+    printf '\n%sContracts you are tracking:%s\n\n' "$BOLD" "$OFF"
+    while IFS="$(printf '\t')" read -r sym line quote; do
+        [ -z "$sym" ] && continue
+        n=$((n + 1))
+        TRACKED_MARKETS+=("$sym")
+        TRACKED_QUOTES+=("$quote")
+        TRACKED_TICKERS="$TRACKED_TICKERS$sym "
+        printf '  %2d) %s\n' "$n" "$line"
+    done <<EOF
+$out
+EOF
+    [ "$n" -gt 0 ] || return 1
+    return 0
+}
+
+# Offered after an event contract is graded, for one that is not already on
+# the list. A claim you have just read a checklist about is one you will want
+# to look at again before it settles.
+offer_to_track() {
+    local ticker="$1"
+    [ -n "$ticker" ] || return 0
+    [ "$TRACKED_READ" = "1" ] || return 0
+    case "$TRACKED_TICKERS" in *" $ticker "*) return 0 ;; esac
+    printf '\n'
+    confirm "Track $ticker" || return 0
+    "$PY" "$ROOT/validate.py" --track "$ticker"
+    TRACKED_TICKERS="$TRACKED_TICKERS$ticker "
 }
 
 # Offered after the verdict, for a stock that is not already on the list.
@@ -814,6 +892,9 @@ if [ "$#" -gt 0 ]; then
             # The list on its own, without walking into a validation.
             exec "$PY" "$ROOT/validate.py" --favourites $COLOR
             ;;
+        contracts|tracked)
+            exec "$PY" "$ROOT/validate.py" --tracked $COLOR
+            ;;
         help|--help|-h)
             "$PY" "$ROOT/validate.py" --help
             printf '\nExtras handled by this script:\n'
@@ -821,6 +902,7 @@ if [ "$#" -gt 0 ]; then
             printf '  ./trade.sh spend        browse where the money is going\n'
             printf '  ./trade.sh reddit       set up the Reddit buzz score\n'
             printf '  ./trade.sh stocks       the stocks you have saved\n'
+            printf '  ./trade.sh contracts    the event contracts you track\n'
             printf '  ./trade.sh db up|down|status|psql|logs|reset\n'
             printf '                          the local Postgres, in Docker\n'
             exit 0

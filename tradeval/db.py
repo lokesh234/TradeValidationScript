@@ -195,6 +195,22 @@ MIGRATIONS = (
         )
         """,
     ),
+    (
+        # A contract is not a company: it has an event it belongs to, a claim
+        # written out in words, and a date after which it is history rather
+        # than a position. Its own table, rather than a kind column on the one
+        # above, because none of those four columns mean anything for a stock.
+        "0002-contracts",
+        """
+        CREATE TABLE IF NOT EXISTS contracts (
+            ticker        text PRIMARY KEY,
+            event_ticker  text        NOT NULL DEFAULT '',
+            title         text        NOT NULL DEFAULT '',
+            note          text        NOT NULL DEFAULT '',
+            added_at      timestamptz NOT NULL DEFAULT now()
+        )
+        """,
+    ),
 )
 
 LEDGER = """

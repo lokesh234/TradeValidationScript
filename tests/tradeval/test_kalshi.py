@@ -251,6 +251,46 @@ def test_siblings_read_the_whole_event(monkeypatch):
     assert tickers == ["KXFEDDECISION-26SEP-H0", "OTHER"]
 
 
+def test_fetch_many_asks_for_the_whole_list_at_once(monkeypatch):
+    """A watchlist of twenty is one round trip, not twenty."""
+    seen = []
+    _patch_json(monkeypatch, {"markets": [V2_MARKET, dict(V2_MARKET, ticker="OTHER")]}, capture=seen)
+    got = kalshi.fetch_many(["KXFEDDECISION-26SEP-H0", "OTHER"])
+    assert sorted(got) == ["KXFEDDECISION-26SEP-H0", "OTHER"]
+    assert len(seen) == 1
+    assert seen[0][1]["tickers"] == "KXFEDDECISION-26SEP-H0,OTHER"
+
+
+def test_fetch_many_upper_cases_and_de_duplicates_what_it_asks_for(monkeypatch):
+    seen = []
+    _patch_json(monkeypatch, {"markets": [V2_MARKET]}, capture=seen)
+    kalshi.fetch_many(["kxfeddecision-26sep-h0", " KXFEDDECISION-26SEP-H0 ", ""])
+    assert seen[0][1]["tickers"] == "KXFEDDECISION-26SEP-H0"
+
+
+def test_fetch_many_splits_a_long_list_into_batches(monkeypatch):
+    seen = []
+    _patch_json(monkeypatch, {"markets": []}, capture=seen)
+    kalshi.fetch_many(["T%d" % n for n in range(45)], chunk=20)
+    assert [len(url_params[1]["tickers"].split(",")) for url_params in seen] == [20, 20, 5]
+
+
+def test_fetch_many_leaves_out_what_the_exchange_did_not_return(monkeypatch):
+    _patch_json(monkeypatch, {"markets": [V2_MARKET]})
+    got = kalshi.fetch_many(["KXFEDDECISION-26SEP-H0", "GONE-1"])
+    assert "GONE-1" not in got
+
+
+def test_fetch_many_degrades_to_nothing_rather_than_raising(monkeypatch):
+    def boom(self, url, params=None, headers=None):
+        raise HttpError("HTTP 500", 500)
+
+    monkeypatch.setattr(kalshi.HttpClient, "get_json", boom, raising=False)
+    # A list you were only pricing is still a list without the prices.
+    assert kalshi.fetch_many(["KXFEDDECISION-26SEP-H0"]) == {}
+    assert kalshi.fetch_many([]) == {}
+
+
 def test_search_drops_the_markets_that_have_already_settled(monkeypatch):
     """The index keeps them; they quote 0/100c and cannot be traded."""
     payload = {

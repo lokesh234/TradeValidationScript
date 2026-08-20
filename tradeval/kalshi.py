@@ -24,7 +24,7 @@ import datetime as dt
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from .http import HttpClient, HttpError
 
@@ -323,6 +323,39 @@ def fetch(ticker: str, timeout: float = 8.0) -> EventMarket:
     if not raw:
         raise KalshiError("Kalshi returned no market for '%s'." % ticker)
     return _market_from_v2(raw)
+
+
+def fetch_many(
+    tickers: Sequence[str], timeout: float = 8.0, chunk: int = 20
+) -> Dict[str, EventMarket]:
+    """Several markets in one request, for a list you are only pricing.
+
+    The documented endpoint takes a comma-separated filter, so a watchlist of
+    twenty costs one round trip rather than twenty. What comes back is the same
+    payload the per-market endpoint returns, so it is parsed the same way.
+
+    Missing rather than raising, like ``siblings``: a ticker the exchange has
+    forgotten is left out of the answer, and a request that fails leaves the
+    list unpriced instead of unprintable.
+    """
+    # Tidied before they are de-duplicated, not after: "kxfed-1" and " KXFED-1 "
+    # are one market, and asking for it twice is a wasted slot in the batch.
+    wanted = list(dict.fromkeys(t.strip().upper() for t in tickers if t and t.strip()))
+    out: Dict[str, EventMarket] = {}
+    for start in range(0, len(wanted), max(chunk, 1)):
+        batch = wanted[start : start + max(chunk, 1)]
+        try:
+            with _client(timeout) as http:
+                payload = http.get_json(
+                    MARKETS_URL, params={"tickers": ",".join(batch), "limit": len(batch)}
+                )
+        except HttpError:
+            continue
+        for raw in (payload or {}).get("markets") or []:
+            market = _market_from_v2(raw)
+            if market.ticker:
+                out[market.ticker] = market
+    return out
 
 
 def siblings(event_ticker: str, limit: int = 12, timeout: float = 8.0) -> List[EventMarket]:

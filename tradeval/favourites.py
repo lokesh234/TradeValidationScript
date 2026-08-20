@@ -1,13 +1,19 @@
-"""The stocks you follow, kept between runs.
+"""The things you follow, kept between runs.
 
-A list of symbols in the local Postgres, offered back at the ticker prompt for
-a short or long term trade -- the names you already watch are the ones you are
-most likely to be trading, and typing them out every time is how a watchlist
-ends up living in a text file somewhere instead.
+Two lists in the local Postgres. **Stocks** are offered back at the ticker
+prompt for a short or long term trade -- the names you already watch are the
+ones you are most likely to be trading, and typing them out every time is how
+a watchlist ends up living in a text file somewhere instead. **Contracts** are
+offered before the Kalshi search, for the better reason that nobody remembers
+that the September Fed decision is KXFEDDECISION-26SEP-H0.
+
+They stay two lists rather than one with a kind column: a contract carries an
+event, a claim written out in words and a date after which it is history, and
+none of that means anything for a company.
 
 Everything here goes through ``db.connect``, so everything here can fail with
 ``DatabaseUnavailable``. Callers in the interactive path treat that as "no
-list to offer" rather than as an error: the checklist has never needed this
+list to offer" rather than as an error: the checklist has never needed either
 list and still doesn't.
 """
 
@@ -195,6 +201,144 @@ def format_line(
         "" if change is None else "%+.1f%%" % change,
         item.age,
     )
+
+
+# -- the contracts you are tracking ------------------------------------------
+
+# Kalshi tickers are shouted hyphenated things -- KXFEDDECISION-26SEP-H0 --
+# and longer than any stock symbol.
+MAX_TICKER = 64
+
+
+@dataclass(frozen=True)
+class Contract:
+    """One tracked claim: the market, the event it sits in, and what it says."""
+
+    ticker: str
+    event_ticker: str = ""
+    title: str = ""
+    note: str = ""
+    added_at: Optional[dt.datetime] = None
+
+    @property
+    def age(self) -> str:
+        return Favourite(self.ticker, added_at=self.added_at).age
+
+
+def clean_ticker(ticker: str) -> str:
+    """A Kalshi market ticker as it is stored: upper case and checked."""
+    text = (ticker or "").strip().upper()
+    if not text:
+        raise InvalidSymbol("No market ticker given.")
+    if len(text) > MAX_TICKER:
+        raise InvalidSymbol("'%s...' is too long to be a market ticker." % text[:20])
+    for character in text:
+        if not (character.isalnum() or character in ".-_"):
+            raise InvalidSymbol("'%s' does not look like a market ticker." % text)
+    return text
+
+
+def tracked(config: Optional[db.Settings] = None, connection=None) -> List[Contract]:
+    """Every tracked contract, most recently added first."""
+    with _session(config, connection) as (session, _):
+        with session.cursor() as cursor:
+            cursor.execute(
+                "SELECT ticker, event_ticker, title, note, added_at FROM contracts "
+                "ORDER BY added_at DESC, ticker"
+            )
+            return [
+                Contract(ticker=row[0], event_ticker=row[1], title=row[2], note=row[3], added_at=row[4])
+                for row in cursor.fetchall()
+            ]
+
+
+def is_tracked(ticker: str, config: Optional[db.Settings] = None, connection=None) -> bool:
+    wanted = clean_ticker(ticker)
+    with _session(config, connection) as (session, _):
+        with session.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM contracts WHERE ticker = %s", (wanted,))
+            return cursor.fetchone() is not None
+
+
+def track(
+    ticker: str,
+    event_ticker: str = "",
+    title: str = "",
+    note: str = "",
+    config: Optional[db.Settings] = None,
+    connection=None,
+) -> bool:
+    """Start tracking a contract. True when it was new, False when it was there."""
+    wanted = clean_ticker(ticker)
+    with _session(config, connection) as (session, owned):
+        with session.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO contracts (ticker, event_ticker, title, note)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (ticker) DO UPDATE SET
+                    event_ticker = COALESCE(NULLIF(EXCLUDED.event_ticker, ''), contracts.event_ticker),
+                    title = COALESCE(NULLIF(EXCLUDED.title, ''), contracts.title),
+                    note  = COALESCE(NULLIF(EXCLUDED.note, ''), contracts.note)
+                RETURNING (xmax = 0) AS inserted
+                """,
+                (wanted, event_ticker.strip(), title.strip(), note.strip()),
+            )
+            row = cursor.fetchone()
+        if owned:
+            session.commit()
+    return bool(row[0]) if row else False
+
+
+def untrack(ticker: str, config: Optional[db.Settings] = None, connection=None) -> bool:
+    """Stop tracking a contract. True when there was one to stop tracking."""
+    wanted = clean_ticker(ticker)
+    with _session(config, connection) as (session, owned):
+        with session.cursor() as cursor:
+            cursor.execute("DELETE FROM contracts WHERE ticker = %s", (wanted,))
+            removed = cursor.rowcount > 0
+        if owned:
+            session.commit()
+    return removed
+
+
+def with_markets(saved: List[Contract]) -> "List[tuple[Contract, object]]":
+    """Every tracked contract paired with its market now, in one request."""
+    from . import kalshi  # late, so the list can be read without the network
+
+    live = kalshi.fetch_many([item.ticker for item in saved]) if saved else {}
+    return [(item, live.get(item.ticker)) for item in saved]
+
+
+def format_contract_line(item: Contract, market=None) -> str:
+    """One row of the picker: the claim, what it costs now, and when it ends.
+
+    A contract that has settled says so instead of quoting a price. That is the
+    whole point of keeping the list -- you come back to see how the thing you
+    were watching turned out, and a stale 71c would answer a question nobody
+    asked.
+    """
+    # What it was saved as, then what the exchange calls it now, then the
+    # ticker -- which is at least always there.
+    title = item.title or (market.title if market is not None else "") or item.ticker
+    if market is None:
+        state = ""
+    elif not market.open:
+        state = "settled" if not market.status else str(market.status)
+    elif market.yes_bid is not None and market.yes_ask is not None:
+        state = "yes %.0f/%.0fc" % (market.yes_bid, market.yes_ask)
+    elif market.yes_ask is not None:
+        state = "yes %.0fc" % market.yes_ask
+    else:
+        state = "no quote"
+
+    when = ""
+    if market is not None:
+        days = market.days_to_close()
+        when = market.resolves
+        if days is not None and days >= 0:
+            when = "%s (%d days)" % (when, round(days))
+    return "%-34s %14s  %s" % (title[:34], state, when or item.age)
 
 
 def with_quotes(saved: List[Favourite]) -> "List[tuple[Favourite, tuple]]":

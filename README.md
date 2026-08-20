@@ -1617,10 +1617,16 @@ tradeval/
 Adding a fourth trade type means subclassing `Strategy`, implementing
 `build_checks()`, and registering it in `strategies/__init__.py`.
 
-## Your stocks
+## Things you follow
 
-The stocks you save, kept in the local Postgres and offered back at the ticker
-prompt for a **short term** or **long term** trade — the names you already
+Two lists in the local Postgres: the stocks you save, and the event contracts
+you track. Neither is needed for a checklist to run — with no database
+reachable each says so in one line and gets out of the way.
+
+### Your stocks
+
+Saved stocks are offered back at the ticker prompt for a **short term** or
+**long term** trade — the names you already
 watch are the ones you are most likely to be trading:
 
 ```
@@ -1670,10 +1676,48 @@ and you're told which happened. With no database reachable the picker says so
 in one line and falls back to sectors, rather than quietly pretending you never
 saved anything.
 
+### Contracts you are tracking
+
+The same idea for event contracts, where it earns more: a Kalshi ticker is
+`KXFEDDECISION-26SEP-H0`, which nobody remembers, so without a list the only
+way back to a claim you already found is to search for it again. Tracked
+contracts are offered **before** the search:
+
+```
+Contracts you are tracking:
+
+   1) Any rate cut by end of 2026            yes 14/15c  1 Jan 2027 (134 days)
+   2) Fed decision in September              yes 72/73c  16 Sep 2026 (28 days)
+
+Pick a number [1-2], or Enter to search for something else:
+```
+
+Prices are current — one batched request for the whole list — and picking a
+number skips the search entirely. After an event contract is graded you're
+asked whether to track it.
+
+A contract that has **settled** says so where the price would be, instead of
+quoting a stale one. That's the point of keeping the list: you come back to see
+how the thing you were watching turned out. The claim is written down when you
+save it, so a market the exchange has stopped answering about still reads as a
+sentence rather than as a ticker.
+
+```bash
+./trade.sh contracts                  # the list, priced now
+validate.py --track KXFEDDECISION-26SEP-H0
+validate.py --untrack KXFEDDECISION-26SEP-H0
+validate.py --list-tracked            # TICKER<tab>description<tab>quote
+```
+
+Stocks and contracts are two tables, not one with a kind column: a contract
+carries an event, a claim in words and a settle date, and none of that means
+anything for a company. A stock and a contract may share a name without
+sharing a row.
+
 ## The local database
 
-A Postgres in Docker, beside the checkout. It holds [your stocks](#your-stocks),
-and whatever comes next. A validation that can't reach it is a validation with
+A Postgres in Docker, beside the checkout. It holds the two lists above, and
+whatever comes next. A validation that can't reach it is a validation with
 no record of it, not a failed one — every read and write degrades to "no list
 to offer" rather than an error.
 

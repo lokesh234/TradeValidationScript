@@ -49,7 +49,10 @@ def test_age_reads_as_a_person_would_say_it(days, word):
 
 
 def test_an_old_entry_falls_back_to_the_date():
-    assert _saved(90).age == (dt.date.today() - dt.timedelta(days=90)).isoformat()
+    # Compared in UTC, which is what the row is stored and aged in. Local
+    # dates would make this pass or fail depending on the hour it is run.
+    expected = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=90)).date()
+    assert _saved(90).age == expected.isoformat()
 
 
 def test_age_is_empty_when_nothing_was_recorded():
@@ -198,6 +201,119 @@ def test_every_write_validates_the_symbol_before_it_reaches_sql():
     assert connection.executed == []
 
 
+# -- the contracts you track -------------------------------------------------
+
+
+class _Market:
+    """Just the parts of a kalshi.EventMarket that a saved row is drawn from."""
+
+    def __init__(self, status="active", yes_bid=None, yes_ask=None, days=12.0, title=""):
+        self.status = status
+        self.yes_bid = yes_bid
+        self.yes_ask = yes_ask
+        self.title = title
+        self._days = days
+
+    @property
+    def open(self):
+        return self.status in ("active", "open")
+
+    @property
+    def resolves(self):
+        return "16 Sep 2026"
+
+    def days_to_close(self, now=None):
+        return self._days
+
+
+def test_a_kalshi_ticker_is_longer_and_hyphenated():
+    assert fav.clean_ticker(" kxfeddecision-26sep-h0 ") == "KXFEDDECISION-26SEP-H0"
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "not a ticker!", "K" * 100])
+def test_what_cannot_be_a_market_ticker_is_refused(raw):
+    with pytest.raises(fav.InvalidSymbol):
+        fav.clean_ticker(raw)
+
+
+def test_tracking_reports_whether_the_contract_was_new():
+    connection = FakeConnection([(True,)])
+    assert fav.track("kxfed-1", title="Will the Fed cut?", connection=connection) is True
+    sql, params = connection.executed[0]
+    assert params == ("KXFED-1", "", "Will the Fed cut?", "")
+    assert "ON CONFLICT (ticker) DO UPDATE" in sql
+
+
+def test_untracking_reports_whether_there_was_one():
+    assert fav.untrack("KXFED-1", connection=FakeConnection([("row",)])) is True
+    assert fav.untrack("KXFED-1", connection=FakeConnection([])) is False
+
+
+def test_tracked_reads_the_newest_first():
+    when = dt.datetime.now(dt.timezone.utc)
+    connection = FakeConnection([("KXFED-1", "KXFED", "Will the Fed cut?", "", when)])
+    saved = fav.tracked(connection=connection)
+    assert saved[0].ticker == "KXFED-1"
+    assert saved[0].title == "Will the Fed cut?"
+    assert "ORDER BY added_at DESC" in connection.executed[0][0]
+
+
+def test_a_tracked_row_quotes_the_market_it_is_watching():
+    item = fav.Contract("KXFED-1", title="Will the Fed cut?")
+    line = fav.format_contract_line(item, _Market(yes_bid=71.0, yes_ask=72.0))
+    assert "Will the Fed cut?" in line
+    assert "yes 71/72c" in line
+    assert "16 Sep 2026 (12 days)" in line
+
+
+def test_a_settled_contract_says_so_instead_of_quoting_a_stale_price():
+    """Coming back to see how it turned out is the point of keeping the list."""
+    item = fav.Contract("KXFED-1", title="Will the Fed cut?")
+    line = fav.format_contract_line(item, _Market(status="settled", yes_bid=0.0, yes_ask=100.0))
+    assert "settled" in line
+    assert "0/100c" not in line
+
+
+def test_a_tracked_row_reads_without_the_exchange():
+    item = fav.Contract("KXFED-1", title="Will the Fed cut?", added_at=_saved(0).added_at)
+    line = fav.format_contract_line(item, None)
+    assert "Will the Fed cut?" in line
+    assert line.rstrip().endswith("today")
+
+
+def test_a_row_falls_back_to_the_ticker_when_nothing_named_it():
+    assert "KXFED-1" in fav.format_contract_line(fav.Contract("KXFED-1"), None)
+
+
+def test_the_title_it_was_saved_with_wins_over_the_exchange_wording():
+    """A settled market stops answering; the claim you wrote down does not."""
+    item = fav.Contract("KXFED-1", title="Saved wording")
+    line = fav.format_contract_line(item, _Market(title="Renamed by the exchange"))
+    assert "Saved wording" in line and "Renamed" not in line
+
+
+def test_with_markets_prices_the_whole_list_in_one_request(monkeypatch):
+    from tradeval import kalshi
+
+    calls = []
+    market = _Market(yes_ask=71.0)
+    monkeypatch.setattr(
+        kalshi, "fetch_many", lambda tickers: calls.append(list(tickers)) or {"KXFED-1": market}
+    )
+    saved = [fav.Contract("KXFED-1"), fav.Contract("KXOTHER-1")]
+    priced = fav.with_markets(saved)
+    assert calls == [["KXFED-1", "KXOTHER-1"]]
+    assert priced[0][1] is market
+    assert priced[1][1] is None
+
+
+def test_with_markets_asks_for_nothing_when_the_list_is_empty(monkeypatch):
+    from tradeval import kalshi
+
+    monkeypatch.setattr(kalshi, "fetch_many", lambda tickers: pytest.fail("should not fetch"))
+    assert fav.with_markets([]) == []
+
+
 # -- the round trip, when there is a database to make it against -------------
 
 
@@ -237,3 +353,38 @@ def test_removing_takes_it_off_the_list(live):
     assert fav.remove("TEST.X", connection=live) is True
     assert fav.contains("TEST.X", connection=live) is False
     assert fav.remove("TEST.X", connection=live) is False
+
+
+def test_a_contract_survives_the_round_trip(live):
+    assert fav.track("TEST-1", event_ticker="TEST", title="A test claim", connection=live) is True
+    assert fav.is_tracked("test-1", connection=live) is True
+    saved = {item.ticker: item for item in fav.tracked(connection=live)}
+    assert saved["TEST-1"].title == "A test claim"
+    assert saved["TEST-1"].event_ticker == "TEST"
+    assert saved["TEST-1"].age == "today"
+
+
+def test_tracking_the_same_contract_twice_keeps_what_named_it(live):
+    assert fav.track("TEST-1", title="A test claim", connection=live) is True
+    assert fav.track("TEST-1", connection=live) is False
+    assert fav.tracked(connection=live)[0].title == "A test claim"
+
+
+def test_untracking_takes_it_off_the_list(live):
+    fav.track("TEST-1", connection=live)
+    assert fav.untrack("TEST-1", connection=live) is True
+    assert fav.is_tracked("TEST-1", connection=live) is False
+    assert fav.untrack("TEST-1", connection=live) is False
+
+
+def test_the_two_lists_do_not_collide(live):
+    """A stock and a contract can share a name without sharing a row."""
+    # Asserted as membership: the database this runs against is a real one,
+    # with whatever the person running the suite has saved in it.
+    fav.add("TEST", name="A Test Listing", connection=live)
+    fav.track("TEST", title="A test claim", connection=live)
+    assert "TEST" in [item.symbol for item in fav.listing(connection=live)]
+    assert "TEST" in [item.ticker for item in fav.tracked(connection=live)]
+    assert fav.remove("TEST", connection=live) is True
+    # Dropping the stock leaves the contract where it was.
+    assert fav.is_tracked("TEST", connection=live) is True

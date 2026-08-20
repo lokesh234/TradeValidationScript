@@ -324,6 +324,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="print your saved stocks as SYMBOL<tab>description, then exit",
     )
     other.add_argument(
+        "--track",
+        metavar="TICKER",
+        help="track an event contract, then exit",
+    )
+    other.add_argument(
+        "--untrack",
+        metavar="TICKER",
+        help="stop tracking an event contract, then exit",
+    )
+    other.add_argument(
+        "--tracked",
+        action="store_true",
+        help="print the event contracts you track, priced now, then exit",
+    )
+    other.add_argument(
+        "--list-tracked",
+        action="store_true",
+        help="print tracked contracts as TICKER<tab>description<tab>quote, then exit",
+    )
+    other.add_argument(
         "--profile",
         metavar="SYMBOL",
         help="print one company's stock info panel, then exit",
@@ -1201,6 +1221,85 @@ def favourite_list(machine_readable: bool, palette=None) -> int:
     return 0
 
 
+def track_add(ticker: str) -> int:
+    """Track a contract, naming it from the exchange. Used by trade.sh.
+
+    The claim is written down at the moment it is saved, so the list reads as
+    sentences rather than as tickers even after the market has settled and the
+    exchange has stopped answering about it.
+    """
+    try:
+        wanted = favourites.clean_ticker(ticker)
+    except favourites.InvalidSymbol as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    title = event_ticker = ""
+    try:
+        market = kalshi.fetch(wanted)
+        title, event_ticker = market.title, market.event_ticker
+    except kalshi.KalshiError as exc:
+        # A ticker the exchange does not know is a typo worth stopping on; an
+        # exchange that cannot be reached is not.
+        if "No Kalshi market" in str(exc):
+            print(exc, file=sys.stderr)
+            return 2
+        print("Tracking it unnamed -- %s" % exc, file=sys.stderr)
+    try:
+        added = favourites.track(wanted, event_ticker=event_ticker, title=title)
+    except db.DatabaseUnavailable as exc:
+        print("Not tracked: %s" % exc, file=sys.stderr)
+        return 1
+    print("%s %s" % (title or wanted, "is now tracked" if added else "was already tracked"))
+    return 0
+
+
+def track_remove(ticker: str) -> int:
+    """Stop tracking a contract. Used by trade.sh."""
+    try:
+        wanted = favourites.clean_ticker(ticker)
+    except favourites.InvalidSymbol as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    try:
+        removed = favourites.untrack(wanted)
+    except db.DatabaseUnavailable as exc:
+        print("Not untracked: %s" % exc, file=sys.stderr)
+        return 1
+    print("%s %s" % (wanted, "no longer tracked" if removed else "was not tracked"))
+    return 0 if removed else 1
+
+
+def track_list(machine_readable: bool, palette=None) -> int:
+    """The contracts you track, priced now: numbered for a person, tabs for trade.sh."""
+    try:
+        saved = favourites.tracked()
+    except db.DatabaseUnavailable as exc:
+        if not machine_readable:
+            print("Tracked contracts: %s" % exc, file=sys.stderr)
+        return 1
+    priced = favourites.with_markets(saved)
+    if machine_readable:
+        for item, market in priced:
+            print(
+                "%s\t%s\t%s"
+                % (
+                    item.ticker,
+                    favourites.format_contract_line(item, market),
+                    event_quote_field(market) if market is not None else "",
+                )
+            )
+        return 0
+    if not saved:
+        print("No tracked contracts yet. Track one with:  validate.py --track TICKER")
+        return 0
+    paint = palette or make_palette(no_color=True)
+    print(paint.bold("\nContracts you are tracking\n"))
+    for item, market in priced:
+        print("  " + favourites.format_contract_line(item, market))
+    print("")
+    return 0
+
+
 def db_status() -> int:
     """Exit 0 when the local Postgres answers, 1 otherwise. Used by trade.sh.
 
@@ -1806,6 +1905,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if args.favourites or args.list_favourites:
         return favourite_list(args.list_favourites, palette)
+
+    if args.track:
+        return track_add(args.track)
+
+    if args.untrack:
+        return track_remove(args.untrack)
+
+    if args.tracked or args.list_tracked:
+        return track_list(args.list_tracked, palette)
 
     if args.reddit_setup:
         return reddit_setup(args.reddit_credentials)
