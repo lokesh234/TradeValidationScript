@@ -148,7 +148,11 @@
       "Bash(TRADEVAL_DB_PORT=5599 bash -c 'printf \"3\\\\nb\\\\nAAPL\\\\n\" | timeout 60 /Users/lokeshgangaramaney/WebstormProjects/TradeValidationScripts/trade.sh 2>&1 | sed -n \"/Your stocks/,/Which sector/p\" | head -6')",
       "Bash(timeout 120 ./trade.sh)",
       "Bash(./trade.sh contracts *)",
-      "Bash(TRADEVAL_DB_PORT=5599 .venv/bin/python -m pytest -q)"
+      "Bash(TRADEVAL_DB_PORT=5599 .venv/bin/python -m pytest -q)",
+      "Bash(TRADEVAL_DB_PORT=5599 bash -c 'printf \"q\\\\n\" | timeout 120 ./trade.sh 2>&1 | sed -n \"/On the calendar/,/Which strategy/p\" | tail -6')",
+      "Bash(TRADEVAL_DB_NAME=postgres TRADEVAL_DB_USER=tradeval bash -c 'printf \"q\\\\n\" | timeout 120 ./trade.sh 2>&1 | grep -c \"Your stocks\\\\|Contracts you are tracking\"')",
+      "Bash(echo \"list-tracked exit=$?\")",
+      "Bash(TRADEVAL_DB_PORT=5599 bash -c 'printf \"q\\\\n\" | timeout 120 ./trade.sh 2>&1 | grep -c \"Your stocks\\\\|Contracts you are tracking\"')"
     ]
   }
 }

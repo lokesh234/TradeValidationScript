@@ -151,6 +151,45 @@ empty calendar as though nothing were scheduled. The test suite catches the
 mistakes an update actually makes: a date out of order, a release on a
 weekend, payrolls not on a Friday.
 
+### And what you are already watching
+
+The opener closes with your own two lists — the stocks you have saved and the
+contracts you are tracking, priced as they stand — so a session starts with the
+tape, the calendar, and the things you were last interested in:
+
+```
+Your stocks
+
+  NVDA   NVIDIA Corporation            $217.56    -1.0%  today
+  IREN   IREN Limited                   $42.84    +2.0%  yesterday
+
+Contracts you are tracking
+
+  Will the Federal Reserve Hike rates by...          yes 72/73c  16 Sep 2026 (28 days)
+```
+
+Read once and kept for the rest of the session, so choosing from either list at
+a prompt later costs nothing more.
+
+A list you have not started yet still prints its heading, with a line saying
+how it gets filled:
+
+```
+Contracts you are tracking
+
+  Nothing tracked yet -- you are offered the contract after an
+  event contract verdict.
+```
+
+Leaving it out was the tidier screen and the worse one — a section that is
+missing reads as a feature that is missing, and the lists you have not started
+are exactly the ones you have not been told about. It disappears as soon as
+there is a row to show.
+
+An unreachable database is the one case that prints nothing at all: there is
+nothing to say about a list that could not be read, and the prompt that needs
+it says so when it gets there. See [things you follow](#things-you-follow).
+
 The block closes with the count to month end, in **sessions rather than
 days** — `11 trading days to month end (Mon 31 Aug)` — since that is the number
 that matters when decay is running against a contract. `tradeval/sessions.py`
@@ -1620,8 +1659,10 @@ Adding a fourth trade type means subclassing `Strategy`, implementing
 ## Things you follow
 
 Two lists in the local Postgres: the stocks you save, and the event contracts
-you track. Neither is needed for a checklist to run — with no database
-reachable each says so in one line and gets out of the way.
+you track. Both are printed [when the script opens](#and-what-you-are-already-watching)
+and offered again at the prompt where they are useful. Neither is needed for a
+checklist to run — with no database reachable each says so in one line and gets
+out of the way.
 
 ### Your stocks
 

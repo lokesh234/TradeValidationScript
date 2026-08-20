@@ -194,13 +194,13 @@ def format_line(
     picker strictly needs.
     """
     price, change = quote or (None, None)
-    return "%-6s %-26s %10s %8s  %s" % (
+    return ("%-6s %-26s %10s %8s  %s" % (
         item.symbol,
         item.name[:26],
         "" if price is None else "$%s" % "{:,.2f}".format(price),
         "" if change is None else "%+.1f%%" % change,
         item.age,
-    )
+    )).rstrip()
 
 
 # -- the contracts you are tracking ------------------------------------------
@@ -208,6 +208,11 @@ def format_line(
 # Kalshi tickers are shouted hyphenated things -- KXFEDDECISION-26SEP-H0 --
 # and longer than any stock symbol.
 MAX_TICKER = 64
+
+# A claim is a sentence, and the exchange writes long ones. Wide enough to
+# tell two claims on the same event apart, narrow enough to leave room for the
+# price and the date on an eighty-column terminal.
+TITLE_WIDTH = 46
 
 
 @dataclass(frozen=True)
@@ -310,6 +315,16 @@ def with_markets(saved: List[Contract]) -> "List[tuple[Contract, object]]":
     return [(item, live.get(item.ticker)) for item in saved]
 
 
+def _shorten(text: str, width: int) -> str:
+    """Cut a long claim on a word, with an ellipsis, rather than mid-syllable."""
+    if len(text) <= width:
+        return text
+    cut = text[: width - 3].rstrip()
+    spaced = cut.rsplit(" ", 1)[0] if " " in cut else cut
+    # Only back up to the word break when it does not cost most of the line.
+    return (spaced if len(spaced) >= width - 12 else cut) + "..."
+
+
 def format_contract_line(item: Contract, market=None) -> str:
     """One row of the picker: the claim, what it costs now, and when it ends.
 
@@ -321,6 +336,7 @@ def format_contract_line(item: Contract, market=None) -> str:
     # What it was saved as, then what the exchange calls it now, then the
     # ticker -- which is at least always there.
     title = item.title or (market.title if market is not None else "") or item.ticker
+    title = _shorten(title, TITLE_WIDTH)
     if market is None:
         state = ""
     elif not market.open:
@@ -338,7 +354,9 @@ def format_contract_line(item: Contract, market=None) -> str:
         when = market.resolves
         if days is not None and days >= 0:
             when = "%s (%d days)" % (when, round(days))
-    return "%-34s %14s  %s" % (title[:34], state, when or item.age)
+    # Right-stripped: a row with neither a quote nor a date would otherwise
+    # end in a column's worth of spaces.
+    return ("%-*s %14s  %s" % (TITLE_WIDTH, title, state, when or item.age)).rstrip()
 
 
 def with_quotes(saved: List[Favourite]) -> "List[tuple[Favourite, tuple]]":

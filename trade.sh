@@ -123,9 +123,9 @@ confirm() {  # confirm <prompt> -- defaults to no
     esac
 }
 
-# What the market has scheduled, before any of it is traded. Printed once per
-# session rather than before every menu loop: it is context to open with, not
-# something to re-read after a typo.
+# What the market has scheduled and what you are already watching, before any
+# of it is traded. Printed once per session rather than before every menu loop:
+# it is context to open with, not something to re-read after a typo.
 CALENDAR_SHOWN=0
 show_calendar() {
     [ "$CALENDAR_SHOWN" = "1" ] && return 0
@@ -136,9 +136,52 @@ show_calendar() {
     # the header off.
     quotes="$("$PY" "$ROOT/validate.py" --list-indices $COLOR 2>/dev/null)"
     [ -n "$quotes" ] && printf '\n%sWhere the market closed%s\n\n%s\n' "$BOLD" "$OFF" "$quotes"
-    events="$("$PY" "$ROOT/validate.py" --list-events $COLOR 2>/dev/null)" || return 0
-    [ -z "$events" ] && return 0
-    printf '\n%sOn the calendar%s\n\n%s\n' "$BOLD" "$OFF" "$events"
+    events="$("$PY" "$ROOT/validate.py" --list-events $COLOR 2>/dev/null)" || true
+    [ -n "$events" ] && printf '\n%sOn the calendar%s\n\n%s\n' "$BOLD" "$OFF" "$events"
+    show_saved
+}
+
+# Both lists, unnumbered, as part of the opening screen -- the same rows the
+# pickers draw later, read once here and kept, so choosing from them costs
+# nothing more.
+#
+# An empty list still prints its heading, with a line saying how it gets
+# filled. Leaving it out entirely was the tidier screen and the worse one: a
+# section that is missing reads as a feature that is missing, and the two
+# lists a person has not started yet are exactly the two they have not been
+# told about. It disappears the moment there is a row to show.
+#
+# A database that cannot be reached is the one case that prints nothing at
+# all. There is nothing to say about a list that could not be read, and the
+# prompt that needed it says so when it gets there.
+show_saved() {
+    local sym line quote
+    if read_favourites; then
+        printf '\n%sYour stocks%s\n\n' "$BOLD" "$OFF"
+        if [ -z "$FAVOURITES_OUT" ]; then
+            printf '  %sNothing saved yet -- you are offered the stock after a short or\n' "$DIM"
+            printf '  long term verdict, or save one now with `./trade.sh --favourite NVDA`.%s\n' "$OFF"
+        fi
+        while IFS="$(printf '\t')" read -r sym line; do
+            [ -n "$sym" ] && printf '  %s\n' "$line"
+        done <<EOF
+$FAVOURITES_OUT
+EOF
+    fi
+    # Three fields here, not two: the quote the picker prices from rides along
+    # behind the line, and reading it into two variables prints it.
+    if read_tracked; then
+        printf '\n%sContracts you are tracking%s\n\n' "$BOLD" "$OFF"
+        if [ -z "$TRACKED_OUT" ]; then
+            printf '  %sNothing tracked yet -- you are offered the contract after an\n' "$DIM"
+            printf '  event contract verdict.%s\n' "$OFF"
+        fi
+        while IFS="$(printf '\t')" read -r sym line quote; do
+            [ -n "$sym" ] && printf '  %s\n' "$line"
+        done <<EOF
+$TRACKED_OUT
+EOF
+    fi
 }
 
 choose_strategy() {
@@ -483,6 +526,9 @@ read_favourites() {
     [ "$FAVOURITES_READ" = "1" ] && return 0
     FAVOURITES_OUT="$("$PY" "$ROOT/validate.py" --list-favourites 2>/dev/null)" || return 1
     FAVOURITES_READ=1
+    # Rebuilt, not added to: a re-read after a save has to replace what it
+    # knew rather than pile a second copy on top of it.
+    FAVOURITE_SYMBOLS=" "
     local sym rest
     while IFS="$(printf '\t')" read -r sym rest; do
         [ -n "$sym" ] && FAVOURITE_SYMBOLS="$FAVOURITE_SYMBOLS$sym "
@@ -527,29 +573,41 @@ EOF
 # quote column is kept as bare numbers for the same reason the search picker
 # keeps it -- the price question later works off it.
 TRACKED_READ=0
+TRACKED_OUT=""
 TRACKED_MARKETS=()
 TRACKED_QUOTES=()
 TRACKED_TICKERS=" "
-browse_tracked() {
+read_tracked() {
+    [ "$TRACKED_READ" = "1" ] && return 0
+    TRACKED_OUT="$("$PY" "$ROOT/validate.py" --list-tracked 2>/dev/null)" || return 1
+    TRACKED_READ=1
     TRACKED_MARKETS=()
     TRACKED_QUOTES=()
     TRACKED_TICKERS=" "
-    local out sym line quote n=0
-    out="$("$PY" "$ROOT/validate.py" --list-tracked 2>/dev/null)" || return 1
-    TRACKED_READ=1
-    [ -z "$out" ] && return 1
+    local sym line quote
+    while IFS="$(printf '\t')" read -r sym line quote; do
+        [ -z "$sym" ] && continue
+        TRACKED_MARKETS+=("$sym")
+        TRACKED_QUOTES+=("$quote")
+        TRACKED_TICKERS="$TRACKED_TICKERS$sym "
+    done <<EOF
+$TRACKED_OUT
+EOF
+    return 0
+}
+
+browse_tracked() {
+    read_tracked || return 1
+    [ "${#TRACKED_MARKETS[@]}" -gt 0 ] || return 1
+    local sym line quote n=0
     printf '\n%sContracts you are tracking:%s\n\n' "$BOLD" "$OFF"
     while IFS="$(printf '\t')" read -r sym line quote; do
         [ -z "$sym" ] && continue
         n=$((n + 1))
-        TRACKED_MARKETS+=("$sym")
-        TRACKED_QUOTES+=("$quote")
-        TRACKED_TICKERS="$TRACKED_TICKERS$sym "
         printf '  %2d) %s\n' "$n" "$line"
     done <<EOF
-$out
+$TRACKED_OUT
 EOF
-    [ "$n" -gt 0 ] || return 1
     return 0
 }
 
@@ -565,6 +623,10 @@ offer_to_track() {
     confirm "Track $ticker" || return 0
     "$PY" "$ROOT/validate.py" --track "$ticker"
     TRACKED_TICKERS="$TRACKED_TICKERS$ticker "
+    # The list held in this session no longer matches the one in the database.
+    # Dropped rather than patched: the next read prices it as well, and the
+    # only thing worse than re-reading it is a picker missing a row.
+    TRACKED_READ=0
 }
 
 # Offered after the verdict, for a stock that is not already on the list.
@@ -580,8 +642,11 @@ offer_to_save() {
     confirm "Save $TICKERS to your stocks" || return 0
     "$PY" "$ROOT/validate.py" --favourite "$TICKERS"
     # Saved or not, it has been asked about -- so the next loop does not ask
-    # again about the same ticker.
+    # again about the same ticker. The cached list is dropped for the same
+    # reason the contract one is: a picker missing a row you just saved is
+    # worse than reading it again.
     FAVOURITE_SYMBOLS="$FAVOURITE_SYMBOLS$TICKERS "
+    FAVOURITES_READ=0
 }
 
 # The companies reporting this week, for an earnings gamble that has not been
