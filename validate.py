@@ -28,7 +28,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval.analysis import dates, sessions, upside
+from tradeval.analysis import dates, sessions, spreads, upside
 from tradeval.chatter import buzz, flow_buzz, reddit_auth, stocktwits, x_api
 from tradeval.config import Config, validate_weights
 from tradeval.data import discover, indices, kalshi, macro, spending
@@ -912,15 +912,30 @@ def numbered_choices(labels: List[str]) -> str:
     return "   ".join("%d) %s" % (index, label) for index, label in enumerate(labels, start=1))
 
 
-def prompt_contract(labels: List[str], noun: str) -> Optional[str]:
-    """Trade one contract off the table, or leave the whole ladder priced."""
+def prompt_contract(
+    labels: List[str], noun: str, strikes: Optional[List[float]] = None
+) -> Optional[str]:
+    """Trade one contract off the table, or leave the whole ladder priced.
+
+    ``strikes`` are the ones a pairing may be built from, given for a spread.
+    The listed pairings all buy the strike nearest the money, which is one
+    opinion about a trade with two legs in it -- so a pair typed by hand is
+    taken as it is typed and checked against the chain rather than the list.
+    """
     print("  " + numbered_choices(labels))
+    prompt = "Which %s are you trading? [1-%d, a %s, or Enter to keep them all]: " % (
+        noun,
+        len(labels),
+        noun,
+    )
+    if strikes:
+        prompt = (
+            "Which %s are you trading? [1-%d, your own two strikes like %s, "
+            "or Enter to keep them all]: " % (noun, len(labels), _example_pair(labels, strikes))
+        )
     while True:
         try:
-            raw = input(
-                "Which %s are you trading? [1-%d, a %s, or Enter to keep them all]: "
-                % (noun, len(labels), noun)
-            ).strip()
+            raw = input(prompt).strip()
         except EOFError:
             print()  # close the prompt line so output does not run together
             return None
@@ -929,7 +944,50 @@ def prompt_contract(labels: List[str], noun: str) -> Optional[str]:
         picked = match_contract(raw, labels)
         if picked:
             return picked
+        typed = spreads.parse_pair(raw) if strikes else None
+        if typed:
+            problem = _pair_problem(typed, strikes)
+            if problem is None:
+                # Printed back so the reader sees the structure they described
+                # before it is priced, not only the numbers they typed.
+                low, high = sorted(typed)
+                print("  -> %s/%s" % (spreads.format_strike(low), spreads.format_strike(high)))
+                return raw
+            print("  " + problem)
+            continue
         print("  " + numbered_choices(labels))
+
+
+def _example_pair(labels: List[str], strikes: List[float]) -> str:
+    """A pairing to show in the prompt, taken from what is actually listed."""
+    if labels:
+        return labels[0]
+    return "%s/%s" % (spreads.format_strike(strikes[0]), spreads.format_strike(strikes[-1]))
+
+
+def _pair_problem(pair: "tuple[float, float]", strikes: List[float]) -> Optional[str]:
+    """Why those two strikes cannot be traded, or None when they can.
+
+    Checked here rather than after the report is built: a strike that is not
+    on the chain is a question the reader can answer in one keystroke while
+    the prompt is still on screen.
+    """
+    listed = {round(strike, 4) for strike in strikes}
+    missing = [
+        spreads.format_strike(strike) for strike in pair if round(strike, 4) not in listed
+    ]
+    if missing:
+        nearby = _nearest_strikes(pair[0], strikes)
+        return "No %s strike on this expiry. Nearest: %s." % (" or ".join(missing), nearby)
+    if pair[0] == pair[1]:
+        return "A spread needs two different strikes."
+    return None
+
+
+def _nearest_strikes(wanted: float, strikes: List[float], count: int = 6) -> str:
+    """The handful of listed strikes closest to what was typed."""
+    closest = sorted(strikes, key=lambda strike: abs(strike - wanted))[:count]
+    return ", ".join(spreads.format_strike(strike) for strike in sorted(closest))
 
 
 def size_position(strategy, args: argparse.Namespace, palette, width: int) -> None:
@@ -978,11 +1036,22 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     for line in layout_panels(chain, palette, width):
         print(line)
     print("")
+    # Recorded before the pick, not after: everything these tables are built
+    # from is settled by now, and a pairing typed at the prompt below needs to
+    # be able to ask for the table again -- it will not be in the one that was
+    # just printed.
+    ctx.chain_shown = bool(chain)
 
     if wants_pick:
         labels = strategy.contract_labels()
         if labels:
-            ctx.contract = prompt_contract(labels, "spread" if ctx.trades_spread else "strike")
+            # A spread is two choices, and the table only ever varies one of
+            # them, so the prompt takes a pair off the chain as readily as a
+            # row off the list.
+            strikes = strategy.spread_strikes() if ctx.trades_spread else None
+            strategy.choose_contract(
+                prompt_contract(labels, "spread" if ctx.trades_spread else "strike", strikes)
+            )
 
     if wants_shares:
         shares = prompt_shares(strategy.data.price)
@@ -992,11 +1061,6 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     if wants_count:
         ctx.contracts = prompt_contracts("spreads" if ctx.trades_spread else "contracts")
 
-    # Everything the chain tables depend on -- the strike count, the floor --
-    # is settled before they are drawn, so the report's copy would be the same
-    # table a screen later. Nothing asked for after this point changes them:
-    # the pick narrows only the payoff tables, and the count is priced there.
-    ctx.chain_shown = bool(chain)
 
 
 def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:

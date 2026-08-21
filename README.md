@@ -1024,7 +1024,8 @@ Skip the prompt with `--instrument S` (or `O`, `C`, `P`, or the long spellings
 
 `C` and `P` build **vertical debit spreads** instead: long the strike nearest
 the money, short each of the next ones out — five by default, or however many
-[strikes you asked for](#the-option-ladder). Holding the long leg still and
+[strikes you asked for](#the-option-ladder), or
+[whichever two strikes you name](#or-type-your-own). Holding the long leg still and
 walking the short leg outward is the decision actually being made — how much
 width to buy, and how much of the move to sell away:
 
@@ -1041,6 +1042,41 @@ width to buy, and how much of the move to sell away:
   8.1%. Every pairing above is inside that move -- the ladder runs out before the move
   does, so --strikes buys wider ones.
 ```
+
+#### Or type your own
+
+Every listed pairing buys the strike nearest the money, which is one opinion
+about a trade with **two** legs in it. So the prompt takes a pair off the chain
+as readily as a row off the list:
+
+```
+  1) 620/630   2) 620/640   3) 620/650   4) 620/660   5) 620/680
+Which spread are you trading? [1-5, your own two strikes like 620/630, or Enter to keep them all]: 640/700
+  -> 640/700
+```
+
+That pairing is then priced beside the built ones, at the top of the table:
+
+```
+  Strikes    Width   Debit  Max profit  Reward:risk  Breakeven  B/E move  To max
+  640/700  60 wide    $215      $5,785      26.91:1     642.15     +3.4%  +12.7%
+  620/630  10 wide    $485        $515       1.06:1     624.85     +0.6%   +1.5%
+```
+
+Written however you write it — `640/700`, `700-640`, `640 700`, `$640/$700`.
+There is only one debit spread across two strikes, so the order and the
+separator are yours to choose: for a call the lower strike is bought, for a put
+the higher one. It is checked against the chain while the prompt is still on
+screen, rather than after the report is built:
+
+```
+Which spread are you trading? [...]: 637/700
+  No 637 strike on this expiry. Nearest: 620, 630, 640, 650, 660, 680.
+```
+
+The same pair works on the command line as `--contract 640/700`, and the pair
+may reach past the printed window — the whole chain is available to it, not
+just the strikes the ladder happened to show.
 
 `To max` is the move that reaches the short strike, where the payoff stops.
 **Max loss is not a column**: for a debit spread it is the debit, in every row,

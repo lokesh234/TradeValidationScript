@@ -15,6 +15,7 @@ from tests.conftest import make_chain, make_market_data
 from tradeval.checks import Status
 from tradeval.config import Config
 from tradeval.context import TradeContext
+from tradeval.analysis.spreads import format_strike
 from tradeval.strategies.short_term import ShortTermStrategy
 
 
@@ -279,3 +280,72 @@ def test_check_spread_reward_risk_grades_against_floor():
     _with_chain(strategy, strikes_above=5)
     result = strategy._check_spread_reward_risk()
     assert result.status in (Status.PASS, Status.WARN, Status.FAIL)
+
+
+# -- a pairing typed by hand -------------------------------------------------
+
+
+def _spread_strategy(**kwargs):
+    strategy = _strategy(instrument="call_spread", option_side="call", **kwargs)
+    _with_chain(strategy)
+    return strategy
+
+
+def test_a_typed_pairing_leads_the_table_it_was_not_in():
+    """Both legs are the caller's there, which no built pairing can say."""
+    strategy = _spread_strategy()
+    listed = strategy.spread_strikes()
+    typed = "%s/%s" % (format_strike(listed[1]), format_strike(listed[-1]))
+    strategy.ctx.contract = typed
+    labels = [spread.label for spread in strategy.spreads]
+    assert labels[0] == typed
+    # And the pairings this tool builds are still under it.
+    assert len(labels) > 1
+
+
+def test_a_typed_pairing_is_matched_however_it_was_written():
+    strategy = _spread_strategy()
+    listed = strategy.spread_strikes()
+    low, high = format_strike(listed[1]), format_strike(listed[-1])
+    strategy.ctx.contract = "%s-%s" % (high, low)
+    assert [s.label for s in strategy.spreads][0] == "%s/%s" % (low, high)
+
+
+def test_a_strike_the_chain_does_not_carry_is_reported():
+    strategy = _spread_strategy()
+    strategy.ctx.contract = "1/2"
+    labels = [spread.label for spread in strategy.spreads]
+    assert "1/2" not in labels
+    assert any("No 1 or 2 strike" in note for note in strategy.notes)
+    # And the chain is named, so the next attempt can be right.
+    assert any("The chain has" in note for note in strategy.notes)
+
+
+def test_the_same_strike_twice_is_not_a_spread():
+    strategy = _spread_strategy()
+    listed = strategy.spread_strikes()
+    strategy.ctx.contract = "%s/%s" % (format_strike(listed[1]), format_strike(listed[1]))
+    assert strategy.spreads  # the pairings this tool builds are still there
+    assert any("two different strikes" in note for note in strategy.notes)
+
+
+def test_choosing_a_pairing_after_the_table_was_drawn_rebuilds_it():
+    """The pairings are cached to draw the table the choice is made from."""
+    strategy = _spread_strategy()
+    before = [spread.label for spread in strategy.spreads]
+    listed = strategy.spread_strikes()
+    typed = "%s/%s" % (format_strike(listed[1]), format_strike(listed[-1]))
+    assert typed not in before
+
+    strategy.choose_contract(typed)
+    assert [spread.label for spread in strategy.spreads][0] == typed
+    # The table on screen predates the pick, so the report prints it again.
+    assert strategy.ctx.chain_shown is False
+
+
+def test_choosing_a_listed_pairing_leaves_the_printed_table_alone():
+    strategy = _spread_strategy()
+    strategy.ctx.chain_shown = True
+    listed_label = strategy.spreads[0].label
+    strategy.choose_contract(listed_label)
+    assert strategy.ctx.chain_shown is True

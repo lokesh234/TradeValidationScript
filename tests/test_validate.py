@@ -72,6 +72,66 @@ def test_match_contract_by_label_position_or_number():
     assert validate.match_contract("", labels) is None
 
 
+def test_a_pairing_off_the_list_is_matched_however_it_is_written():
+    """The listed pairings vary one leg; a spread has two."""
+    labels = ["620/630", "620/640"]
+    assert validate.match_contract("620/640", labels) == "620/640"
+    # And one the list does not carry falls through to the pair handling.
+    assert validate.match_contract("640/700", labels) is None
+
+
+@pytest.mark.parametrize(
+    "pair, problem",
+    [
+        ((640.0, 700.0), None),
+        ((637.0, 700.0), "No 637 strike"),
+        ((637.0, 701.0), "No 637 or 701 strike"),
+        ((640.0, 640.0), "two different strikes"),
+    ],
+)
+def test_a_typed_pair_is_checked_against_the_chain(pair, problem):
+    strikes = [620.0, 630.0, 640.0, 650.0, 660.0, 680.0, 700.0]
+    result = validate._pair_problem(pair, strikes)
+    if problem is None:
+        assert result is None
+    else:
+        assert problem in result
+
+
+def test_a_missing_strike_names_the_ones_that_are_there():
+    strikes = [620.0, 630.0, 640.0, 650.0, 660.0, 680.0, 700.0]
+    problem = validate._pair_problem((637.0, 700.0), strikes)
+    assert "Nearest: 620, 630, 640, 650, 660, 680." in problem
+
+
+def test_prompt_contract_takes_a_pair_the_list_does_not_carry(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda *a: "640/700")
+    picked = validate.prompt_contract(["620/630"], "spread", [620.0, 630.0, 640.0, 700.0])
+    assert picked == "640/700"
+    # Echoed back as the structure, not only as the characters typed.
+    assert "-> 640/700" in capsys.readouterr().out
+
+
+def test_prompt_contract_re_asks_on_a_strike_that_is_not_there(monkeypatch, capsys):
+    replies = iter(["637/700", "640/700"])
+    monkeypatch.setattr("builtins.input", lambda *a: next(replies))
+    picked = validate.prompt_contract(["620/630"], "spread", [620.0, 630.0, 640.0, 700.0])
+    assert picked == "640/700"
+    assert "No 637 strike on this expiry" in capsys.readouterr().out
+
+
+def test_prompt_contract_without_a_chain_stays_a_list_pick(monkeypatch, capsys):
+    """A single strike is picked off the ladder; there is no pair to type.
+
+    The pair is not understood there, so the list comes back and the next
+    answer is taken -- Enter, here, which keeps the whole ladder priced.
+    """
+    replies = iter(["640/700", ""])
+    monkeypatch.setattr("builtins.input", lambda *a: next(replies))
+    assert validate.prompt_contract(["620", "630"], "strike") is None
+    assert capsys.readouterr().out.count("1) 620") == 2
+
+
 def test_numbered_choices_formats_a_menu_line():
     assert validate.numbered_choices(["A", "B"]) == "1) A   2) B"
 

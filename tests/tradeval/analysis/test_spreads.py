@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tradeval.data.market import OptionQuote
+from tradeval.analysis import spreads
 from tradeval.analysis.spreads import VerticalSpread, build_debit_spreads, format_strike
 
 
@@ -133,3 +134,66 @@ def test_build_debit_spreads_needs_at_least_two_quotes():
 def test_build_debit_spreads_drops_zero_width():
     quotes = [_quote("call", 100, 5.0), _quote("call", 100, 5.0)]
     assert build_debit_spreads(quotes) == []
+
+
+# -- a pairing typed by hand -------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("600/630", (600.0, 630.0)),
+        ("600-630", (600.0, 630.0)),
+        ("600 630", (600.0, 630.0)),
+        ("600:630", (600.0, 630.0)),
+        ("$1,600/$1,630", (1600.0, 1630.0)),
+        (" 527.5 / 532.5 ", (527.5, 532.5)),
+    ],
+)
+def test_parse_pair_takes_the_separators_a_person_reaches_for(raw, expected):
+    assert spreads.parse_pair(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "600", "4", "abc/def", "600/", "600/abc", None])
+def test_what_is_not_two_numbers_is_not_a_pair(raw):
+    """A bare number is a strike or a position in the list, not a pairing."""
+    assert spreads.parse_pair(raw) is None
+
+
+def _legs(kind, strikes):
+    return [_quote(kind, strike, 1.0 + index) for index, strike in enumerate(strikes)]
+
+
+def test_find_legs_buys_the_lower_strike_on_a_call():
+    quotes = _legs("call", [600.0, 630.0])
+    long_leg, short_leg = spreads.find_legs(quotes, 600.0, 630.0)
+    assert (long_leg.strike, short_leg.strike) == (600.0, 630.0)
+
+
+def test_find_legs_buys_the_higher_strike_on_a_put():
+    quotes = _legs("put", [600.0, 630.0])
+    long_leg, short_leg = spreads.find_legs(quotes, 600.0, 630.0)
+    assert (long_leg.strike, short_leg.strike) == (630.0, 600.0)
+
+
+@pytest.mark.parametrize("kind", ["call", "put"])
+def test_the_order_it_is_typed_in_names_the_same_structure(kind):
+    """There is only one debit spread across two strikes."""
+    quotes = _legs(kind, [600.0, 630.0])
+    forwards = spreads.find_legs(quotes, 600.0, 630.0)
+    backwards = spreads.find_legs(quotes, 630.0, 600.0)
+    assert [leg.strike for leg in forwards] == [leg.strike for leg in backwards]
+
+
+def test_find_legs_reports_a_strike_the_chain_does_not_carry():
+    quotes = _legs("call", [600.0, 630.0])
+    long_leg, short_leg = spreads.find_legs(quotes, 600.0, 637.0)
+    assert long_leg is not None and short_leg is None
+
+
+def test_strikes_on_lists_only_what_has_a_price():
+    quotes = _legs("call", [600.0, 630.0])
+    unpriced = _quote("call", 650.0, 1.0)
+    unpriced.mid = None
+    quotes.append(unpriced)
+    assert spreads.strikes_on(quotes) == [600.0, 630.0]

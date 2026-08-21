@@ -120,6 +120,50 @@ class VerticalSpread:
         return "%s/%s" % (format_strike(self.long_leg.strike), format_strike(self.short_leg.strike))
 
 
+def parse_pair(raw: str) -> "Optional[tuple[float, float]]":
+    """Two strikes from '600/630', however they were punctuated.
+
+    Accepts the separators a person reaches for -- a slash, a dash, a space --
+    and the commas and dollar signs a printed strike carries. Returns None for
+    anything that is not two numbers, which is how the caller tells a pair from
+    a position in the list.
+    """
+    text = (raw or "").replace("$", "").replace(",", "").strip()
+    for separator in ("/", "-", ":", " "):
+        if separator in text:
+            first, _, second = text.partition(separator)
+            try:
+                return float(first.strip()), float(second.strip())
+            except ValueError:
+                return None
+    return None
+
+
+def find_legs(
+    quotes: Sequence[OptionQuote], first: float, second: float
+) -> "tuple[Optional[OptionQuote], Optional[OptionQuote]]":
+    """The two quotes those strikes name, in the order a debit spread wants.
+
+    The near leg is bought and the far one sold, which for a call means the
+    lower strike is long and for a put the higher one is. Typing the pair the
+    other way round names the same structure -- there is only one debit spread
+    across two strikes -- so the order is settled here rather than being an
+    error the reader has to decode.
+    """
+    by_strike = {round(quote.strike, 4): quote for quote in quotes}
+    legs = [by_strike.get(round(strike, 4)) for strike in (first, second)]
+    if any(leg is None for leg in legs):
+        return legs[0], legs[1]
+    near, far = legs
+    wrong_way = near.strike > far.strike if near.kind == "call" else near.strike < far.strike
+    return (far, near) if wrong_way else (near, far)
+
+
+def strikes_on(quotes: Sequence[OptionQuote]) -> List[float]:
+    """Every strike with a two-sided price, in the order the chain lists them."""
+    return sorted({quote.strike for quote in quotes if quote.mid})
+
+
 def build_debit_spreads(
     quotes: Sequence[OptionQuote],
     count: int = 5,

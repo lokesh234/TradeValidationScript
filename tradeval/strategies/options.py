@@ -75,7 +75,15 @@ def _move_label(move: float, sign: str = "") -> str:
 
 
 def _same_contract(label: str, pick: str) -> bool:
-    """Labels match however they were punctuated: '1,860' is '1860'."""
+    """Labels match however they were punctuated.
+
+    '1,860' is '1860', and a pairing typed '630-600' is the one printed
+    '600/630': there is only one debit spread across two strikes, so the order
+    and the separator are the typist's business rather than the tool's.
+    """
+    typed, listed = spreads.parse_pair(pick), spreads.parse_pair(label)
+    if typed and listed:
+        return sorted(typed) == sorted(listed)
     return label.replace(",", "") == pick.replace(",", "").replace("$", "").strip()
 
 
@@ -210,7 +218,13 @@ class OptionsPlaybook:
     def option_panels(self) -> List[Panel]:
         """The chain tables for whichever structure is being traded."""
         pick = self.ctx.contract
-        if pick and not any(_same_contract(label, pick) for label in self.contract_labels()):
+        # A pairing that named a strike the chain does not carry has already
+        # said so, in the terms a spread is typed in. Saying it again here, in
+        # terms of the pairings this tool happened to build, helps nobody.
+        typed_pair = self.ctx.trades_spread and spreads.parse_pair(pick or "")
+        if pick and not typed_pair and not any(
+            _same_contract(label, pick) for label in self.contract_labels()
+        ):
             # A typo in --contract would otherwise price the whole ladder and
             # look like the pick was honoured.
             self.note(
@@ -374,6 +388,44 @@ class OptionsPlaybook:
             return items
         return [item for item in items if _same_contract(label(item), pick)] or items
 
+    def spread_legs(self, depth: Optional[int] = None) -> List[OptionQuote]:
+        """The priced strikes a spread of this kind can be built from.
+
+        The whole chain by default rather than the printed window: a pairing
+        typed by hand is usually reaching for a strike the window does not
+        show, and there is no reason it should not be allowed to.
+        """
+        kind = self.ctx.spread_kind
+        quote = self.front_quote
+        if kind is None or quote is None:
+            return []
+        ladder = self.data.option_ladder(quote.expiry, depth or self.max_strikes() or self.ctx.strikes)
+        if ladder is None:
+            return []
+        calls, puts = ladder
+        return [leg for leg in (calls if kind == "call" else puts) if leg.mid]
+
+    def spread_strikes(self) -> List[float]:
+        """Every strike a hand-typed pairing may name."""
+        return spreads.strikes_on(self.spread_legs())
+
+    def choose_contract(self, pick: Optional[str]) -> None:
+        """Record which contract is being traded, once it has been chosen.
+
+        The pairings are built and cached to draw the table the choice is made
+        from, and a pairing typed by hand belongs in that list -- so the cache
+        is dropped here rather than answering the next question with a list
+        that predates the answer.
+        """
+        self.ctx.contract = pick
+        listed = [spread.label for spread in self.spreads] if self.ctx.trades_spread else []
+        self.__dict__.pop("spreads", None)
+        # A pairing typed by hand was not in the table that was on screen when
+        # it was typed, so its width, debit and reward:risk have been quoted to
+        # nobody. The report prints the table again with it in.
+        if pick and self.ctx.trades_spread and not any(_same_contract(l, pick) for l in listed):
+            self.ctx.chain_shown = False
+
     @cached_property
     def spreads(self) -> List[spreads.VerticalSpread]:
         """Pairings off one long leg, walking the short strike out.
@@ -382,6 +434,11 @@ class OptionsPlaybook:
         width, so the pairings that clear a floor usually sit further out than
         the default window reaches. The chain is read to its full depth in that
         case so the short leg has somewhere to walk to.
+
+        A pairing named by hand is added at the front, whether or not the walk
+        would have produced it. Both legs are the caller's choice there -- the
+        long one included, which the generated pairings hold at the money -- so
+        it is the one structure on the table that was not this tool's idea.
         """
         kind = self.ctx.spread_kind
         quote = self.front_quote
@@ -396,7 +453,46 @@ class OptionsPlaybook:
             return []
         calls, puts = ladder
         legs = [q for q in (calls if kind == "call" else puts) if q.mid]
-        return spreads.build_debit_spreads(legs, self.ctx.strikes, floor)
+        built = spreads.build_debit_spreads(legs, self.ctx.strikes, floor)
+
+        typed = self._typed_spread()
+        if typed is not None and not any(s.label == typed.label for s in built):
+            built = [typed] + built
+        return built
+
+    def _typed_spread(self) -> Optional[spreads.VerticalSpread]:
+        """The pairing named in --contract, when it names two strikes.
+
+        Built off the full chain, so a pair reaching past the printed window
+        still resolves. A strike the chain does not carry is reported rather
+        than silently ignored, since the alternative is a table that prices
+        everything and looks like the pick was honoured.
+        """
+        pair = spreads.parse_pair(self.ctx.contract or "")
+        if pair is None:
+            return None
+        legs = self.spread_legs()
+        long_leg, short_leg = spreads.find_legs(legs, *pair)
+        missing = [
+            spreads.format_strike(strike)
+            for strike, leg in zip(pair, (long_leg, short_leg))
+            if leg is None
+        ]
+        if missing:
+            self.note(
+                "No %s strike on the %s expiry, so the pairings below are the "
+                "ones this tool built. The chain has %s."
+                % (
+                    " or ".join(missing),
+                    self.chain_expiry,
+                    ", ".join(spreads.format_strike(s) for s in self.spread_strikes()) or "none",
+                )
+            )
+            return None
+        if long_leg.strike == short_leg.strike:
+            self.note("A spread needs two different strikes.")
+            return None
+        return spreads.VerticalSpread(long_leg, short_leg)
 
     def _spread_panels(self, include_table: bool = True) -> List[Panel]:
         """The pairings and their payoffs.
@@ -753,11 +849,19 @@ class OptionsPlaybook:
             # pairing chosen, or the narrowest -- the cheapest way into the
             # structure -- when the choice was left open.
             built = self._chosen(self.spreads, lambda spread: spread.label)
-            costs = [s.cost for s in built if s.cost]
-            if costs:
-                cost = min(costs)
+            priced = [spread for spread in built if spread.cost]
+            if priced:
+                cheapest = min(priced, key=lambda spread: spread.cost)
+                cost = cheapest.cost
+                # Named from the pairing actually priced rather than from what
+                # was typed: a pick the chain could not honour has already been
+                # reported, and repeating it here would attach the note to a
+                # structure nobody is being quoted.
+                honoured = pick and any(_same_contract(s.label, pick) for s in built)
                 position = (
-                    "%s debit spread" % pick if pick else "narrowest %s debit spread" % self.ctx.spread_kind
+                    "%s debit spread" % cheapest.label
+                    if honoured
+                    else "narrowest %s debit spread" % self.ctx.spread_kind
                 )
         elif pick:
             # A chosen strike is the position, so it is what the risk cap

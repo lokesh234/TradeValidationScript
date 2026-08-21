@@ -155,7 +155,8 @@
       "Bash(TRADEVAL_DB_PORT=5599 bash -c 'printf \"q\\\\n\" | timeout 120 ./trade.sh 2>&1 | grep -c \"Your stocks\\\\|Contracts you are tracking\"')",
       "Bash(timeout 250 ./trade.sh)",
       "Bash(/bin/bash --version)",
-      "Bash(/bin/bash -c 'set -u; A=\\(\\); echo \"count: ${#A[@]}\"')"
+      "Bash(/bin/bash -c 'set -u; A=\\(\\); echo \"count: ${#A[@]}\"')",
+      "Bash(pkill -f \"pytest -q tests/test_validate.py\")"
     ]
   }
 }
