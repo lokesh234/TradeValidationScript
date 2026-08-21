@@ -28,27 +28,14 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 
 from typing import List, Optional  # noqa: E402
 
-from tradeval import (
-    buzz,
-    dates,
-    db,
-    discover,
-    favourites,
-    flow_buzz,
-    indices,
-    kalshi,
-    macro,
-    reddit_auth,
-    sessions,
-    spending,
-    stocktwits,
-    upside,
-    x_api,
-)
+from tradeval.analysis import dates, sessions, upside
+from tradeval.chatter import buzz, flow_buzz, reddit_auth, stocktwits, x_api
 from tradeval.config import Config, validate_weights
+from tradeval.data import discover, indices, kalshi, macro, spending
+from tradeval.store import db, favourites
 from tradeval.context import TradeContext
-from tradeval.data import DataError, MarketData, resolve_symbols
-from tradeval.report import (
+from tradeval.data.market import DataError, MarketData, resolve_symbols
+from tradeval.render.report import (
     detect_width,
     layout_panels,
     make_palette,
@@ -1819,7 +1806,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 palette.grey(
                     "  The published releases stop here -- what is left above is "
                     "worked out from the third-Friday rule. Refresh EVENTS in "
-                    "tradeval/macro.py from federalreserve.gov and bls.gov."
+                    "tradeval/data/macro.py from federalreserve.gov and bls.gov."
                 )
             )
         print(palette.grey("  " + sessions.month_end_line()))

@@ -75,7 +75,7 @@ checklist read without it is read out of context — an entry that looks
 extended is a different proposition on a day the whole market is up 2%:
 
 ```
-Where the market closed
+Where the market closed --------------------------------------------------------
 
   S&P 500         7,781.93    -0.22%
   Dow            53,718.26    -0.23%
@@ -114,7 +114,7 @@ not the report. `validate.py --list-indices` prints it on its own.
 The first screen opens with the macro calendar, before any ticker is typed:
 
 ```
-On the calendar
+On the calendar ----------------------------------------------------------------
 
   Fri 21 Aug  in 7 days   OPEX   monthly option expiry -- open interest comes off the board
   Fri 04 Sep  in 21 days  NFP    payrolls, the other half of the mandate
@@ -140,7 +140,7 @@ A rule with no committee behind it cannot go stale, so nothing to maintain.
 day. Good Friday, in practice.)
 
 `FOMC`, `CPI`, `NFP` and `PPI` are *written down*, because no rule generates
-them. They are hand-maintained in `tradeval/macro.py` from the published
+them. They are hand-maintained in `tradeval/data/macro.py` from the published
 schedules
 ([FOMC](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm),
 [BLS](https://www.bls.gov/schedule/news_release/)) — a rule will not do it,
@@ -155,15 +155,17 @@ weekend, payrolls not on a Friday.
 
 The opener closes with your own two lists — the stocks you have saved and the
 contracts you are tracking, priced as they stand — so a session starts with the
-tape, the calendar, and the things you were last interested in:
+tape, the calendar, and the things you were last interested in. Each block is
+headed by a cyan rule to the width of the terminal, the same way the report
+divides its own sections:
 
 ```
-Your stocks
+Your stocks --------------------------------------------------------------------
 
   NVDA   NVIDIA Corporation            $217.56    -1.0%  today
   IREN   IREN Limited                   $42.84    +2.0%  yesterday
 
-Contracts you are tracking
+Contracts you are tracking -----------------------------------------------------
 
   Will the Federal Reserve Hike rates by...          yes 72/73c  16 Sep 2026 (28 days)
 ```
@@ -175,7 +177,7 @@ A list you have not started yet still prints its heading, with a line saying
 how it gets filled:
 
 ```
-Contracts you are tracking
+Contracts you are tracking -----------------------------------------------------
 
   Nothing tracked yet -- you are offered the contract after an
   event contract verdict.
@@ -192,7 +194,7 @@ it says so when it gets there. See [things you follow](#things-you-follow).
 
 The block closes with the count to month end, in **sessions rather than
 days** — `11 trading days to month end (Mon 31 Aug)` — since that is the number
-that matters when decay is running against a contract. `tradeval/sessions.py`
+that matters when decay is running against a contract. `tradeval/analysis/sessions.py`
 works the market holidays out rather than listing them: most are the nth
 weekday of a month, the fixed ones move off a weekend by rule, and Good Friday
 follows Easter, so a year the tool has never seen still counts correctly. When
@@ -394,7 +396,7 @@ payment names "win on the level of rates, not the size of the bill, so cuts
 reverse the trade even as the deficit keeps growing"; the defence budgets are
 "appropriated, not delivered", and the primes already trade on the backlog.
 
-The sizes are rounded annual estimates kept by hand in `tradeval/spending.py`
+The sizes are rounded annual estimates kept by hand in `tradeval/data/spending.py`
 and they go stale — they are there to say which way the money runs, not to be
 quoted. **The prices beside the names are live.** Add a flow by appending a
 `SpendingFlow` to that file; each wants a size, a direction, what the money
@@ -839,7 +841,7 @@ and its institutional holders; nothing in any screener field says that every
 die NVIDIA sells was made by TSMC, or that the machines which made it came
 from ASML. That edge is what carries a shock between two tickers — an ASML
 order miss is an AMAT problem long before it is an NVDA one — so the edges are
-hand-maintained in `tradeval/relationships.py`, the same way the spending flows
+hand-maintained in `tradeval/data/relationships.py`, the same way the spending flows
 are, each with one line on what actually changes hands.
 
 Coverage is the AI and semiconductor complex, where the supply chain *is* the
@@ -1627,31 +1629,68 @@ over `--config` when both name the same check.
 
 ## Layout
 
+Five subpackages, grouped by the question you are asking when you go looking:
+where does this number come from, what is done to it, what is kept, what
+reaches the screen, and what grades a trade.
+
 ```
 trade.sh                  interactive front end; bootstraps .venv
-validate.py               CLI entry point
+validate.py               CLI entry point: flags, prompts, and the run itself
+docker-compose.yml        the local Postgres
 tradeval/
   config.py               every threshold, per strategy
-  data.py                 Yahoo Finance layer (all network access)
-  indicators.py           SMA, EMA, RSI, ATR, CAGR, drawdown
-  checks.py               CheckResult / Status / weighted scoring
-  news.py                 which headlines are actually about the ticker
-  x_api.py                X search (paid tier), off by default
-  macro.py                the scheduled FOMC / CPI / NFP / PPI calendar
-  sessions.py             market holidays and counting trading days
-  upside.py               what a target market cap implies and pays
-  indices.py              the S&P / Dow / Nasdaq / Russell header
-  relationships.py        hand-maintained supplier/customer edges
-  graph.py                drawing those edges in a terminal
-  names.py                company names with the legal form dropped
   context.py              the proposed trade: prices, sizing, account
-  report.py               terminal rendering
-  strategies/
-    base.py               Strategy ABC + shared checks
+  checks.py               CheckResult / Status / weighted scoring
+
+  data/                   where the numbers come from -- every network call
+    market.py             Yahoo Finance layer: prices, fundamentals, chains
+    http.py               the retrying client the keyed sources share
+    indices.py            the tape: indices, the VIX, the curve
+    macro.py              the scheduled FOMC / CPI / NFP / PPI calendar
+    kalshi.py             event contracts, and what one costs now
+    discover.py           sector and theme baskets, this week's reporters
+    peers.py              earnings read-across from industry peers
+    news.py               which headlines are actually about the ticker
+    relationships.py      hand-maintained supplier/customer edges
+    spending.py           where the money is going, by flow
+    names.py              company names with the legal form dropped
+
+  chatter/                what the crowd is saying, and the keys for it
+    buzz.py               the 0-100 score and the corpus behind it
+    stocktwits.py         the default source; no key needed
+    reddit_auth.py        the one browser sign-in, and the refresh token
+    x_api.py              X search (paid tier), off by default
+    flow_buzz.py          the same score folded across a spending flow
+
+  analysis/               arithmetic on numbers already fetched; no I/O
+    indicators.py         SMA, EMA, RSI, ATR, CAGR, drawdown
+    pricing.py            Black-Scholes, in the standard library
+    spreads.py            vertical debit spreads built from a chain
+    upside.py             what a target market cap implies and pays
+    dates.py              how a date is written when a person reads it
+    sessions.py           market holidays and counting trading days
+
+  store/                  what is kept between runs
+    db.py                 connection settings, and the schema migrations
+    favourites.py         your stocks, and the contracts you track
+
+  render/                 what reaches the terminal
+    report.py             panels, colour, column rules, the two-column split
+    graph.py              counterparties, drawn as a graph
+
+  strategies/             what grades a trade
+    base.py               Strategy ABC, shared checks, the stock info panel
+    options.py            the chain mixin: ladders, payoffs, contract picking
     earnings_gamble.py
     short_term.py
     long_term.py
+    event_contract.py
 ```
+
+`tests/` mirrors this tree, so the tests for a module sit at the same path
+under `tests/`. Imports inside the package are absolute (`from
+tradeval.data.market import MarketData`) rather than relative: with
+subpackages, a leading dot no longer tells you where a module lives.
 
 Adding a fourth trade type means subclassing `Strategy`, implementing
 `build_checks()`, and registering it in `strategies/__init__.py`.
@@ -1794,12 +1833,12 @@ it is worth on a loopback port; anything real belongs in the environment:
 | `TRADEVAL_DB_PASSWORD` | `tradeval` | |
 | `TRADEVAL_DB_TIMEOUT` | `5` | seconds to wait before giving up on it |
 
-Both the compose file and `tradeval/db.py` read these, so exporting one moves
+Both the compose file and `tradeval/store/db.py` read these, so exporting one moves
 the container and the client together. Point `TRADEVAL_DATABASE_URL` at a
 Postgres you already run and Docker never enters into it. The printed URL never
 carries the password.
 
-`tradeval/db.py` is the whole client: `settings()` reads the environment,
+`tradeval/store/db.py` is the whole client: `settings()` reads the environment,
 `connect()` opens a connection or raises `DatabaseUnavailable` with a sentence
 you can act on, and `available()` answers the same question without raising.
 `psycopg` is imported inside the call rather than at the top of the module, so
@@ -1826,16 +1865,17 @@ Tests live under `tests/`, mirroring `tradeval/`'s own layout:
 tests/
   conftest.py             shared builders: synthetic price history, a fully
                           populated MarketData, a fake option chain
-  tradeval/
-    test_*.py             one file per module in tradeval/
-    strategies/
-      test_*.py           one file per strategy, plus the shared base class
-                          and the options-chain mixin
   test_validate.py        the CLI's argument parsing and pure helpers
+  tradeval/
+    test_config.py        one file per module at the top of the package
+    test_context.py
+    test_checks.py
+    data/   chatter/   analysis/   store/   render/   strategies/
+                          one directory per subpackage, one file per module
 ```
 
 Nothing in the suite touches the network, and nothing in it needs the database:
-`tests/tradeval/test_db.py` covers the settings and the failure messages
+`tests/tradeval/store/test_db.py` covers the settings and the failure messages
 against a stub driver, so the suite is green with Docker switched off.
 `MarketData` and `Strategy` expose
 most of what they compute as `functools.cached_property`, which only runs the

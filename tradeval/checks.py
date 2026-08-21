@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import List, Optional, Sequence
 
-from .config import ScoringThresholds
+from tradeval.config import ScoringThresholds
 
 
 class Status(str, Enum):

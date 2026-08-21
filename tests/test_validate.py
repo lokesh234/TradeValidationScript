@@ -13,10 +13,10 @@ from unittest.mock import patch
 import pytest
 
 import validate
-from tradeval.buzz import BuzzScore
+from tradeval.chatter.buzz import BuzzScore
 from tradeval.checks import failed, passed
 from tradeval.config import Config
-from tradeval.report import Palette
+from tradeval.render.report import Palette
 
 
 def test_build_parser_defaults():
@@ -150,7 +150,7 @@ def test_resolve_buzz_returns_empty_without_flag():
 
 def test_resolve_buzz_uses_stocktwits_by_default():
     args = validate.build_parser().parse_args(["NVDA", "--buzz"])
-    with patch("tradeval.stocktwits.score_symbols", return_value={"NVDA": "stub"}) as mocked:
+    with patch("tradeval.chatter.stocktwits.score_symbols", return_value={"NVDA": "stub"}) as mocked:
         result = validate.resolve_buzz(["NVDA"], args, Config())
     mocked.assert_called_once()
     assert result == {"NVDA": "stub"}
@@ -296,7 +296,7 @@ def test_main_list_spending_buzz_folds_the_flow(capsys):
     def fake(symbols, rules):
         return {s: BuzzScore(symbol=s, score=50.0, mentions=3) for s in symbols}
 
-    with patch("tradeval.stocktwits.score_symbols", side_effect=fake):
+    with patch("tradeval.chatter.stocktwits.score_symbols", side_effect=fake):
         assert validate.main(["--list-spending-buzz", "6"]) == 0
     out = capsys.readouterr().out
     assert "ASML" in out
@@ -311,7 +311,7 @@ def test_main_list_spending_buzz_exits_nonzero_when_nothing_read(capsys):
     def fake(symbols, rules):
         return {s: BuzzScore.unavailable(s, "stream refused") for s in symbols}
 
-    with patch("tradeval.stocktwits.score_symbols", side_effect=fake):
+    with patch("tradeval.chatter.stocktwits.score_symbols", side_effect=fake):
         assert validate.main(["--list-spending-buzz", "6"]) == 1
     assert "stream refused" in capsys.readouterr().out
 
@@ -320,7 +320,7 @@ def test_buzz_scorer_follows_the_configured_source():
     args = validate.build_parser().parse_args(["--buzz"])
     config = Config()
     config.buzz.source = "reddit"
-    with patch("tradeval.buzz.score_symbols", return_value={"AAA": "stub"}) as mocked:
+    with patch("tradeval.chatter.buzz.score_symbols", return_value={"AAA": "stub"}) as mocked:
         assert validate.buzz_scorer(args, config)(["AAA"]) == {"AAA": "stub"}
     mocked.assert_called_once()
 
@@ -344,8 +344,8 @@ def test_main_list_events_prints_the_next_releases(capsys):
 
 def test_main_list_events_says_when_the_table_has_run_out(capsys):
     """Silence would read as "nothing scheduled", which is a different thing."""
-    with patch("tradeval.macro.upcoming", return_value=[]), \
-         patch("tradeval.macro.running_out", return_value=True):
+    with patch("tradeval.data.macro.upcoming", return_value=[]), \
+         patch("tradeval.data.macro.running_out", return_value=True):
         assert validate.main(["--list-events"]) == 1
     out = capsys.readouterr().out
     assert "Refresh EVENTS" in out
@@ -356,7 +356,7 @@ def test_main_list_indices_prints_the_market_header(capsys):
         validate.indices.IndexQuote("^GSPC", "S&P 500", 100.0, 1.25),
         validate.indices.IndexQuote("^TNX", "10-year yield", 4.28, None, 3.0, True),
     ]
-    with patch("tradeval.indices.snapshot", return_value=quotes):
+    with patch("tradeval.data.indices.snapshot", return_value=quotes):
         assert validate.main(["--list-indices"]) == 0
     out = capsys.readouterr().out
     assert "S&P 500" in out
@@ -365,7 +365,7 @@ def test_main_list_indices_prints_the_market_header(capsys):
 
 
 def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
-    with patch("tradeval.indices.snapshot", return_value=[]):
+    with patch("tradeval.data.indices.snapshot", return_value=[]):
         assert validate.main(["--list-indices"]) == 1
 
 
@@ -392,7 +392,7 @@ def _event_market(**overrides):
 
 def test_main_event_search_prints_a_pickable_line_per_market(capsys):
     matches = [_event_market(), _event_market(ticker="KXRATECUT-26DEC31", title="Fed rate cut?")]
-    with patch("tradeval.kalshi.search", return_value=matches):
+    with patch("tradeval.data.kalshi.search", return_value=matches):
         assert validate.main(["--event-search", "fed"]) == 0
     out = capsys.readouterr().out
     # Tab separated, because trade.sh draws its own picker from this.
@@ -402,7 +402,7 @@ def test_main_event_search_prints_a_pickable_line_per_market(capsys):
 
 def test_main_event_search_carries_the_quote_as_a_third_field(capsys):
     """Bare numbers the shell can price the other side of the claim from."""
-    with patch("tradeval.kalshi.search", return_value=[_event_market()]):
+    with patch("tradeval.data.kalshi.search", return_value=[_event_market()]):
         assert validate.main(["--event-search", "fed"]) == 0
     ticker, shown, quote = capsys.readouterr().out.rstrip("\n").split("\t")
     assert quote == "70/71"
@@ -415,13 +415,13 @@ def test_event_quote_field_is_empty_when_a_side_is_unquoted():
 
 
 def test_main_event_search_exits_nonzero_when_nothing_matched(capsys):
-    with patch("tradeval.kalshi.search", return_value=[]):
+    with patch("tradeval.data.kalshi.search", return_value=[]):
         assert validate.main(["--event-search", "wat"]) == 1
 
 
 def test_main_event_grades_the_contract_and_prints_the_sheet(capsys):
-    with patch("tradeval.kalshi.fetch", return_value=_event_market()) as fetch, \
-         patch("tradeval.kalshi.siblings", return_value=[]):
+    with patch("tradeval.data.kalshi.fetch", return_value=_event_market()) as fetch, \
+         patch("tradeval.data.kalshi.siblings", return_value=[]):
         code = validate.main(
             ["--event", "KXFEDDECISION-26SEP-H0", "--probability", "85",
              "--contracts", "100", "--account", "50000", "--no-color"]
@@ -435,16 +435,16 @@ def test_main_event_grades_the_contract_and_prints_the_sheet(capsys):
 
 
 def test_main_event_takes_a_phrase_by_searching_for_it(capsys):
-    with patch("tradeval.kalshi.search", return_value=[_event_market()]) as search, \
-         patch("tradeval.kalshi.fetch", return_value=_event_market()), \
-         patch("tradeval.kalshi.siblings", return_value=[]):
+    with patch("tradeval.data.kalshi.search", return_value=[_event_market()]) as search, \
+         patch("tradeval.data.kalshi.fetch", return_value=_event_market()), \
+         patch("tradeval.data.kalshi.siblings", return_value=[]):
         assert validate.main(["--event", "fed decision", "--no-color", "--quiet"]) == 0
     assert search.call_args[0][0] == "fed decision"
 
 
 def test_main_event_reports_a_market_that_does_not_exist(capsys):
-    with patch("tradeval.kalshi.fetch", side_effect=validate.kalshi.KalshiError("nope")), \
-         patch("tradeval.kalshi.search", return_value=[]):
+    with patch("tradeval.data.kalshi.fetch", side_effect=validate.kalshi.KalshiError("nope")), \
+         patch("tradeval.data.kalshi.search", return_value=[]):
         assert validate.main(["--event", "KX-NOPE", "--no-color"]) == 1
 
 
@@ -457,16 +457,16 @@ def test_main_event_rejects_a_probability_that_is_not_one(capsys):
 def test_main_event_returns_the_no_go_code_when_it_is_a_no_go(capsys):
     """Same contract as the shell: 3 means nothing here is worth trading."""
     dead = _event_market(status="finalized")
-    with patch("tradeval.kalshi.fetch", return_value=dead), \
-         patch("tradeval.kalshi.siblings", return_value=[]):
+    with patch("tradeval.data.kalshi.fetch", return_value=dead), \
+         patch("tradeval.data.kalshi.siblings", return_value=[]):
         code = validate.main(["--event", "KX-1", "--probability", "90", "--no-color"])
     assert code == 3
 
 
 def test_find_event_market_falls_back_to_search_when_a_ticker_is_unknown():
     hit = _event_market()
-    with patch("tradeval.kalshi.fetch", side_effect=[validate.kalshi.KalshiError("404"), hit]), \
-         patch("tradeval.kalshi.search", return_value=[hit]) as search:
+    with patch("tradeval.data.kalshi.fetch", side_effect=[validate.kalshi.KalshiError("404"), hit]), \
+         patch("tradeval.data.kalshi.search", return_value=[hit]) as search:
         assert validate.find_event_market("KX-TYPO-1", 8) is hit
     assert search.called
 
@@ -500,7 +500,7 @@ def test_buzz_scorer_can_be_pointed_at_x():
     args = validate.build_parser().parse_args(["--buzz"])
     config = Config()
     config.buzz.source = "x"
-    with patch("tradeval.x_api.score_symbols", return_value={"NVDA": "stub"}) as mocked:
+    with patch("tradeval.chatter.x_api.score_symbols", return_value={"NVDA": "stub"}) as mocked:
         assert validate.buzz_scorer(args, config)(["NVDA"]) == {"NVDA": "stub"}
     mocked.assert_called_once()
 
@@ -530,7 +530,7 @@ def test_show_sector_menu_hands_back_a_typed_ticker():
 
 def test_show_sector_menu_still_takes_a_sector():
     with patch("builtins.input", side_effect=["1"]), \
-         patch("tradeval.discover.sector_companies", return_value=[]):
+         patch("tradeval.data.discover.sector_companies", return_value=[]):
         companies, typed = validate.show_sector_menu()
     assert typed is None
 

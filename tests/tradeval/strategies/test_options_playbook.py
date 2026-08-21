@@ -91,7 +91,7 @@ def test_contract_labels_lists_strikes_with_a_price():
 
 
 def test_check_expiry_covers_horizon_pass_and_fail():
-    from tradeval.data import AtmQuote
+    from tradeval.data.market import AtmQuote
 
     strategy = _strategy(horizon="1m")
     strategy.front_quote = AtmQuote(

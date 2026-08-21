@@ -27,8 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from tradeval.config import Config  # noqa: E402
 from tradeval.context import TradeContext  # noqa: E402
-from tradeval.data import MarketData  # noqa: E402
-from tradeval.report import make_palette, render  # noqa: E402
+from tradeval.data.market import MarketData  # noqa: E402
+from tradeval.render.report import make_palette, render  # noqa: E402
 from tradeval.strategies import STRATEGIES  # noqa: E402
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")

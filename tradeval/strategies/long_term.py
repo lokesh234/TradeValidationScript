@@ -12,8 +12,8 @@ from typing import List, Optional
 
 import pandas as pd
 
-from .. import indicators as ind
-from ..checks import CheckResult, failed, passed, skipped, threshold_check, warned
+from tradeval.analysis import indicators as ind
+from tradeval.checks import CheckResult, failed, passed, skipped, threshold_check, warned
 from .base import Panel, Strategy, _human
 from .options import OptionsPlaybook
 

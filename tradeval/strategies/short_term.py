@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from typing import List
 
-from .. import indicators as ind
-from ..checks import CheckResult, failed, passed, skipped, warned
+from tradeval.analysis import indicators as ind
+from tradeval.checks import CheckResult, failed, passed, skipped, warned
 from .base import Panel, Strategy
 from .options import OptionsPlaybook
 

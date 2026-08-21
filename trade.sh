@@ -123,6 +123,26 @@ confirm() {  # confirm <prompt> -- defaults to no
     esac
 }
 
+# A heading carried to the edge of the terminal by a rule, in the colour the
+# report gives the same job -- the opening screen is four blocks of unrelated
+# numbers, and a bare bold line over each one leaves the eye to work out where
+# each block ends.
+#
+# The width comes from the terminal and falls back to the report's own default
+# when there is no terminal to ask, which is the piped case. Capped, because a
+# rule across a 300-column window is a stripe, not a divider.
+section() {
+    local label="$1" width dashes
+    width="$(tput cols 2>/dev/null)"
+    case "$width" in ""|*[!0-9]*) width=100 ;; esac
+    [ "$width" -gt 120 ] && width=120
+    dashes=$(( width - ${#label} - 1 ))
+    [ "$dashes" -lt 0 ] && dashes=0
+    printf '\n%s%s%s %s%s%s\n\n' \
+        "$BOLD$CYAN" "$label" "$OFF" \
+        "$CYAN" "$(printf '%*s' "$dashes" '' | tr ' ' '-')" "$OFF"
+}
+
 # What the market has scheduled and what you are already watching, before any
 # of it is traded. Printed once per session rather than before every menu loop:
 # it is context to open with, not something to re-read after a typo.
@@ -135,9 +155,9 @@ show_calendar() {
     # anything is judged against either. One request, and a failure just leaves
     # the header off.
     quotes="$("$PY" "$ROOT/validate.py" --list-indices $COLOR 2>/dev/null)"
-    [ -n "$quotes" ] && printf '\n%sWhere the market closed%s\n\n%s\n' "$BOLD" "$OFF" "$quotes"
+    [ -n "$quotes" ] && { section "Where the market closed"; printf '%s\n' "$quotes"; }
     events="$("$PY" "$ROOT/validate.py" --list-events $COLOR 2>/dev/null)" || true
-    [ -n "$events" ] && printf '\n%sOn the calendar%s\n\n%s\n' "$BOLD" "$OFF" "$events"
+    [ -n "$events" ] && { section "On the calendar"; printf '%s\n' "$events"; }
     show_saved
 }
 
@@ -157,7 +177,7 @@ show_calendar() {
 show_saved() {
     local sym line quote
     if read_favourites; then
-        printf '\n%sYour stocks%s\n\n' "$BOLD" "$OFF"
+        section "Your stocks"
         if [ -z "$FAVOURITES_OUT" ]; then
             printf '  %sNothing saved yet -- you are offered the stock after a short or\n' "$DIM"
             printf '  long term verdict, or save one now with `./trade.sh --favourite NVDA`.%s\n' "$OFF"
@@ -171,7 +191,7 @@ EOF
     # Three fields here, not two: the quote the picker prices from rides along
     # behind the line, and reading it into two variables prints it.
     if read_tracked; then
-        printf '\n%sContracts you are tracking%s\n\n' "$BOLD" "$OFF"
+        section "Contracts you are tracking"
         if [ -z "$TRACKED_OUT" ]; then
             printf '  %sNothing tracked yet -- you are offered the contract after an\n' "$DIM"
             printf '  event contract verdict.%s\n' "$OFF"

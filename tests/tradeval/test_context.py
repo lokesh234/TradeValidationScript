@@ -6,7 +6,7 @@ import pytest
 
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import MarketData
+from tradeval.data.market import MarketData
 
 
 def _ctx(data, **kwargs) -> TradeContext:

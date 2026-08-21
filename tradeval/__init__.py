@@ -5,9 +5,9 @@ making (earnings gamble, short term swing, long term hold) and get a scored
 GO / CAUTION / NO-GO verdict.
 """
 
-from .checks import CheckResult, Status, Verdict
-from .context import TradeContext
-from .data import MarketData
+from tradeval.checks import CheckResult, Status, Verdict
+from tradeval.context import TradeContext
+from tradeval.data.market import MarketData
 from .strategies import STRATEGIES, get_strategy
 
 __all__ = [

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from tests.conftest import make_chain, make_market_data
-from tradeval.buzz import BuzzScore
+from tradeval.chatter.buzz import BuzzScore
 from tradeval.checks import Status
 from tradeval.config import Config
 from tradeval.context import TradeContext

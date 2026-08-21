@@ -9,11 +9,14 @@ from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Dict, List, Optional
 
-from .. import dates, graph
-from .. import indicators as ind
-from .. import news, relationships, x_api
-from .. import buzz as buzz_scoring
-from ..checks import (
+from tradeval.analysis import dates
+from tradeval.render import graph
+from tradeval.analysis import indicators as ind
+from tradeval.chatter import x_api
+from tradeval.data import news
+from tradeval.data import relationships
+from tradeval.chatter import buzz as buzz_scoring
+from tradeval.checks import (
     CheckResult,
     Verdict,
     apply_weights,
@@ -23,7 +26,7 @@ from ..checks import (
     skipped,
     warned,
 )
-from ..context import TradeContext
+from tradeval.context import TradeContext
 
 
 UNAVAILABLE = "Not Available"
@@ -862,7 +865,7 @@ class Strategy(ABC):
                 "standing in the same spending flow. That is a weaker claim than a "
                 "trading relationship -- they collect the same money, which does not "
                 "mean they sell each other anything. Add real edges in "
-                "tradeval/relationships.py." % symbol
+                "tradeval/data/relationships.py." % symbol
             )
 
         return Panel(

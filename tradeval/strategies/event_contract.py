@@ -25,7 +25,7 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import List, Optional
 
-from ..checks import (
+from tradeval.checks import (
     CheckResult,
     apply_weights,
     failed,
@@ -34,8 +34,8 @@ from ..checks import (
     skipped,
     warned,
 )
-from ..config import Config, EventContractRules
-from ..kalshi import EventMarket, fee_dollars
+from tradeval.config import Config, EventContractRules
+from tradeval.data.kalshi import EventMarket, fee_dollars
 from .base import Panel, Report
 
 # What the strategy is called wherever a strategy is named.

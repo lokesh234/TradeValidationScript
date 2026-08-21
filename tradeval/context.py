@@ -6,8 +6,8 @@ import datetime as dt
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from .config import Config
-from .data import MarketData
+from tradeval.config import Config
+from tradeval.data.market import MarketData
 
 
 @dataclass

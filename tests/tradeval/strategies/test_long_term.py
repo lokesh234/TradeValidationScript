@@ -10,7 +10,7 @@ import pytest
 from unittest.mock import patch
 
 from tests.conftest import DEFAULT_INFO, make_chain, make_market_data
-from tradeval.buzz import Document
+from tradeval.chatter.buzz import Document
 from tradeval.checks import Status
 from tradeval.config import Config
 from tradeval.context import TradeContext
@@ -201,7 +201,7 @@ def test_a_partial_match_stays_quiet():
 
 
 def _news(title, hours_ago=2.0, summary=""):
-    from tradeval.data import NewsArticle
+    from tradeval.data.market import NewsArticle
 
     return NewsArticle(
         title=title,
@@ -347,7 +347,7 @@ def _x_strategy(**x_rules):
 def test_x_panel_is_off_by_default():
     """X bills per request, so it must never fire unasked."""
     assert Config().x.limit == 0
-    with patch("tradeval.x_api.fetch_posts") as fetch:
+    with patch("tradeval.chatter.x_api.fetch_posts") as fetch:
         assert _x_strategy().x_panel() is None
     fetch.assert_not_called()
 
@@ -359,7 +359,7 @@ def test_x_panel_shows_posts_when_switched_on():
         Document(text="quiet take", score=1, comments=0,
                  created=dt.datetime.now(dt.timezone.utc), author="nobody", subreddit="x"),
     ]
-    with patch("tradeval.x_api.fetch_posts", return_value=posts):
+    with patch("tradeval.chatter.x_api.fetch_posts", return_value=posts):
         panel = _x_strategy(limit=5).x_panel()
     assert panel is not None
     assert panel.title == "WHAT X IS SAYING -- NVDA"
@@ -374,31 +374,31 @@ def test_x_panel_honours_the_limit():
                  created=dt.datetime.now(dt.timezone.utc), author="a", subreddit="x")
         for i in range(10)
     ]
-    with patch("tradeval.x_api.fetch_posts", return_value=posts):
+    with patch("tradeval.chatter.x_api.fetch_posts", return_value=posts):
         panel = _x_strategy(limit=3).x_panel()
     assert len(panel.rows) == 3
 
 
 def test_x_panel_notes_the_failure_rather_than_breaking_the_run():
     """No token, wrong tier, no network -- all the same to the report."""
-    from tradeval.x_api import XUnavailable
+    from tradeval.chatter.x_api import XUnavailable
 
     strategy = _x_strategy(limit=5)
-    with patch("tradeval.x_api.fetch_posts", side_effect=XUnavailable("no X token configured")):
+    with patch("tradeval.chatter.x_api.fetch_posts", side_effect=XUnavailable("no X token configured")):
         assert strategy.x_panel() is None
     assert any("X chatter unavailable" in note for note in strategy.notes)
 
 
 def test_x_panel_is_none_when_nobody_posted():
-    with patch("tradeval.x_api.fetch_posts", return_value=[]):
+    with patch("tradeval.chatter.x_api.fetch_posts", return_value=[]):
         assert _x_strategy(limit=5).x_panel() is None
 
 
 def test_a_full_run_is_unaffected_when_x_cannot_be_read():
-    from tradeval.x_api import XUnavailable
+    from tradeval.chatter.x_api import XUnavailable
 
     strategy = _x_strategy(limit=5)
-    with patch("tradeval.x_api.fetch_posts", side_effect=XUnavailable("no X token")):
+    with patch("tradeval.chatter.x_api.fetch_posts", side_effect=XUnavailable("no X token")):
         report = strategy.run()
     assert report.verdict.label in ("GO", "CAUTION", "NO-GO")
     assert not any(p.title.startswith("WHAT X") for p in report.panels)
