@@ -2066,6 +2066,34 @@ Each request is graded against a **copy** of the config, so a body carrying its
 own `benchmark` or `weights` cannot write those terms into the next request's
 run. Point `TRADEVAL_CONFIG` at a file to change what that config starts from.
 
+### The schema, as a file
+
+`/docs` is the schema browsable, which is no use to a client generator or to a
+reviewer reading a diff. `scripts/swagger.py` builds the same OpenAPI 3.1
+document straight from `serve:app` — no port, no network, nothing fetched:
+
+```bash
+.venv/bin/python scripts/swagger.py                      # JSON on stdout
+.venv/bin/python scripts/swagger.py -o openapi.json
+.venv/bin/python scripts/swagger.py -f yaml -o openapi.yaml
+.venv/bin/python scripts/swagger.py --ui swagger.html    # a page to open
+.venv/bin/python scripts/swagger.py --check openapi.json # has it drifted?
+```
+
+It adds the two things the generated schema is poorer for missing: the example
+bodies documented above, and the failures. `serve.py` raises its 404s and 422s
+by hand as `{"detail": "..."}`, which is not the shape FastAPI's own parse
+failure returns, so 422 is declared as either of the two.
+
+The examples are checked against `ValidationRequest`'s own fields on the way
+out. Renaming a field breaks the script rather than leaving a body in the docs
+that the service [would now reject](#the-request).
+
+`--check` diffs against a committed copy and exits non-zero, which is the form
+worth wiring into CI: a schema that changed without anyone saying so is the
+thing you want the pull request to mention. Swagger 2.0 is not produced —
+FastAPI emits 3.1, and anything that still needs 2.0 wants a converter.
+
 ### Without the HTTP
 
 `serve.py` is thin on purpose — it parses a body, calls the service, serialises
@@ -2134,7 +2162,8 @@ first time it is read -- assigning straight to the instance (`data.history =
 some_dataframe`) pre-fills the cache instead, so a fixture can hand a strategy
 a realistic chart or option chain without a live Yahoo Finance connection.
 `scripts/smoke.py` still exists for an end-to-end check against a real,
-current ticker before a release.
+current ticker before a release, and [`scripts/swagger.py`](#the-schema-as-a-file)
+for the API schema as a file.
 
 The `api/` tests point the service at the same fixtures rather than at Yahoo, so
 they cost nothing to run; the ones covering `serve.py` skip themselves if
