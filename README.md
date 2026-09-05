@@ -2117,6 +2117,14 @@ across the tree — there are no `__init__.py` files under `tests/`, so two
 `test_http.py` collide on import. `tests/tradeval/api/test_serve.py` is named
 for `serve.py` partly for that reason.
 
+The same absent `__init__.py` files are why `pytest.ini` sets `pythonpath = .`.
+The package is imported from the checkout rather than installed, so `tradeval`
+is only importable with the root on `sys.path`: `python -m pytest` puts it
+there itself, but the `pytest` console script does not, and `tests/tradeval/`
+then answers `import tradeval` as an empty namespace package — a
+`ModuleNotFoundError` naming `tradeval.config` rather than the missing path.
+Naming the root in the config makes both spellings work.
+
 Nothing in the suite touches the network, and nothing in it needs the database:
 `tests/tradeval/store/test_db.py` covers the settings and the failure messages
 against a stub driver, so the suite is green with Docker switched off.
