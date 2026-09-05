@@ -156,7 +156,9 @@
       "Bash(timeout 250 ./trade.sh)",
       "Bash(/bin/bash --version)",
       "Bash(/bin/bash -c 'set -u; A=\\(\\); echo \"count: ${#A[@]}\"')",
-      "Bash(pkill -f \"pytest -q tests/test_validate.py\")"
+      "Bash(pkill -f \"pytest -q tests/test_validate.py\")",
+      "Bash(echo \"pyflakes exit: $?\")",
+      "Bash(python3 *)"
     ]
   }
 }

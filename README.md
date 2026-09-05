@@ -16,6 +16,10 @@ makes a long-term hold good.
 Any of the three can be traded in **shares, contracts or a debit spread** — see
 [what you're trading](#what-youre-trading).
 
+The terminal is one front end over the checklist rather than the checklist
+itself; the same run is available over HTTP, or as a function call. See
+[the API](#the-api).
+
 ## Quick start
 
 ```bash
@@ -1703,13 +1707,15 @@ over `--config` when both name the same check.
 
 ## Layout
 
-Five subpackages, grouped by the question you are asking when you go looking:
+Six subpackages, grouped by the question you are asking when you go looking:
 where does this number come from, what is done to it, what is kept, what
-reaches the screen, and what grades a trade.
+reaches the screen, what grades a trade, and how something other than a
+terminal asks for one.
 
 ```
 trade.sh                  interactive front end; bootstraps .venv
 validate.py               CLI entry point: flags, prompts, and the run itself
+serve.py                  HTTP entry point: FastAPI over tradeval/api
 docker-compose.yml        the local Postgres
 tradeval/
   config.py               every threshold, per strategy
@@ -1759,6 +1765,11 @@ tradeval/
     short_term.py
     long_term.py
     event_contract.py
+
+  api/                    the run with no terminal on either end
+    requests.py           ValidationRequest: a trade, in the shape of a trade
+    service.py            validate() -- fetch, grade, return; no I/O
+    serialize.py          Report -> JSON
 ```
 
 `tests/` mirrors this tree, so the tests for a module sit at the same path
@@ -1926,6 +1937,159 @@ connection — which is what keeps setting up the schema from being something yo
 have to remember to do. Once a migration has shipped it is never edited; a
 change to it is a new entry, because the old one has already run somewhere.
 
+## The API
+
+The checklist is the part worth keeping; the terminal is just where it happens
+to get read. `tradeval/api/` is the same run with the terminal taken off both
+ends — nothing in it prompts, and nothing in it prints.
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/uvicorn serve:app --reload
+```
+
+```bash
+curl -s localhost:8000/validate -H 'content-type: application/json' \
+  -d '{"symbol": "KO", "strategy": "long", "instrument": "stock"}'
+```
+
+| | Endpoint | |
+|---|---|---|
+| `POST` | `/validate` | grade one trade |
+| `POST` | `/validate/batch` | grade a list, with a summary row per name |
+| `GET` | `/strategies` | the three trade types, and what each is for |
+| `GET` | `/health` | |
+| `GET` | `/docs` | the generated schema, browsable |
+
+### The request
+
+Every question the interactive run asks is a field here, spelled the way the
+flag is spelled — the letters work too, so `"instrument": "C"` and
+`"strategy": "3"` mean what they mean at the prompt:
+
+```json
+{
+  "symbol": "KO",
+  "strategy": "long",
+  "instrument": "stock",
+  "account": 50000,
+  "risk": 1,
+  "entry": 88.0,
+  "stop": 82.0,
+  "target": 104.0
+}
+```
+
+Only `symbol` and `strategy` are required, and `{"symbol": "KO", "strategy":
+"long"}` on its own is a valid request. That is the same bargain the prompts
+make: [every detail is optional](#quick-start), and a check with nothing to work
+from reports SKIP rather than guessing. What you leave out costs you coverage,
+which the verdict reports rather than hides.
+
+Two things the request does that the prompts do by asking. A spread picks its
+own side of the chain, so `"instrument": "call_spread"` with `"side": "put"`
+grades a call spread — the pairing decides, not the caller. And an unnamed
+`direction` is inferred from the side, calls being a bullish bet and puts a
+bearish one, exactly as `--direction` is.
+
+Fields it does not recognise are **rejected rather than ignored**. A body
+carrying `"stoploss"` is a body whose author believes a stop was applied, and
+returning a verdict against no stop at all would be the wrong answer delivered
+confidently.
+
+### The response
+
+```json
+{
+  "symbol": "KO",
+  "name": "The Coca-Cola Company",
+  "strategy": { "key": "long", "name": "Long Term" },
+  "price": 88.07,
+  "as_of": "2026-09-04",
+  "verdict": {
+    "label": "CAUTION",
+    "score": 74.1,
+    "counted_weight": 29.0,
+    "skipped_weight": 2.0,
+    "coverage_pct": 93.5,
+    "vetoes": [],
+    "low_confidence": false
+  },
+  "results": [
+    {
+      "name": "Company size",
+      "status": "PASS",
+      "detail": "market cap vs a $2.00B floor",
+      "value": "$378.93B",
+      "weight": 1.0,
+      "critical": false,
+      "counted": true
+    }
+  ],
+  "position": { "shares": null, "size": null },
+  "panels": [ ... ]
+}
+```
+
+`verdict` and `results` are the same numbers the terminal is scored from, and
+`coverage_pct` is the one to read beside the score — 74 out of 100 across 94% of
+the weight is a different claim from 74 across half of it.
+
+**`panels` are display strings, and are labelled as such.** Each carries
+`"cells": "display"`, because a panel is the terminal table: its rows have
+already been through a money or percent formatter, so the cell reading
+`"$378.93B"` is text and not a number waiting to be parsed back out. They are
+passed through for a caller that wants to draw what the terminal draws. Anything
+you intend to compute on should come off `results`, `verdict` or the top-level
+fields, which are values. Moving the formatting out of the strategies and into
+`render/` is what would turn panels into data; until that happens, this is an
+honest description of them rather than a promise.
+
+### When it says no
+
+A request that cannot be graded as asked comes back **422**, and one whose
+symbol is the problem comes back **404** — nothing to fetch, or not enough
+history to grade. The two are worth keeping apart: the first is yours to fix,
+the second is the market's answer.
+
+```
+422  "Unknown trade type 'nope'. Choose one of: earnings, short, long"
+422  [{"loc": ["body"], "msg": "Value error, contracts must be at least 1"}]
+422  [{"loc": ["body", "stoploss"], "msg": "Unexpected keyword argument"}]
+```
+
+`/validate/batch` takes the CLI's view instead: one name that cannot be fetched
+should not cost you the others, so it returns what it graded under `reports`
+and the rest under `failures`, and is a 200 either way.
+
+Each request is graded against a **copy** of the config, so a body carrying its
+own `benchmark` or `weights` cannot write those terms into the next request's
+run. Point `TRADEVAL_CONFIG` at a file to change what that config starts from.
+
+### Without the HTTP
+
+`serve.py` is thin on purpose — it parses a body, calls the service, serialises
+what comes back. Nothing that decides anything about a trade lives in it, so
+anything else can call the same run directly and skip FastAPI entirely:
+
+```python
+from tradeval.api import ValidationRequest, validate, report_to_dict
+
+report = validate(ValidationRequest(symbol="KO", strategy="long"))
+print(report.verdict.label, report.verdict.score)
+payload = report_to_dict(report)          # the JSON above
+```
+
+`validate()` neither reads a terminal nor writes to one, which is the property
+the tests pin down rather than assume. It raises `DataError` for a symbol it
+cannot fetch and `ValidationError` for a request it cannot grade.
+
+`validate.py` is now a front end over this same service: it turns flags and
+prompt answers into a `ValidationRequest` and renders the `Report` it gets back.
+The prompting sits in the gap `prepare()` leaves open — the profile and the
+option ladder have to reach the screen before the questions they inform can be
+asked, which is a conversation an HTTP caller has no use for.
+
 ## Development
 
 ```bash
@@ -1944,9 +2108,14 @@ tests/
     test_config.py        one file per module at the top of the package
     test_context.py
     test_checks.py
-    data/   chatter/   analysis/   store/   render/   strategies/
+    data/   chatter/   analysis/   store/   render/   strategies/   api/
                           one directory per subpackage, one file per module
 ```
+
+Test files are named for their module but the basenames have to stay unique
+across the tree — there are no `__init__.py` files under `tests/`, so two
+`test_http.py` collide on import. `tests/tradeval/api/test_serve.py` is named
+for `serve.py` partly for that reason.
 
 Nothing in the suite touches the network, and nothing in it needs the database:
 `tests/tradeval/store/test_db.py` covers the settings and the failure messages
@@ -1958,6 +2127,10 @@ some_dataframe`) pre-fills the cache instead, so a fixture can hand a strategy
 a realistic chart or option chain without a live Yahoo Finance connection.
 `scripts/smoke.py` still exists for an end-to-end check against a real,
 current ticker before a release.
+
+The `api/` tests point the service at the same fixtures rather than at Yahoo, so
+they cost nothing to run; the ones covering `serve.py` skip themselves if
+FastAPI is not installed, since it is only needed for the HTTP front end.
 
 ## Caveats
 

@@ -29,6 +29,13 @@ warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance"
 from typing import List, Optional  # noqa: E402
 
 from tradeval.analysis import dates, sessions, spreads, upside
+from tradeval.api import ValidationRequest, prepare
+from tradeval.api.requests import (
+    SPREAD_SIDES,
+    resolve_instrument_choice,
+    resolve_side,
+)
+from tradeval.api.service import clamp_strikes as hold_to_maximum
 from tradeval.chatter import buzz, flow_buzz, reddit_auth, stocktwits, x_api
 from tradeval.config import Config, validate_weights
 from tradeval.data import discover, indices, kalshi, macro, spending
@@ -621,36 +628,14 @@ def resolve_horizon(key: str, args: argparse.Namespace, config: Config) -> str:
         return choice
     return prompt_horizon(config)
 
-# What you are actually buying for the event.
-INSTRUMENTS = {
-    "O": "options", "OPT": "options", "OPTION": "options", "OPTIONS": "options",
-    "S": "stock", "STOCK": "stock", "STOCKS": "stock", "SHARE": "stock", "SHARES": "stock",
-    "C": "call_spread", "CALL SPREAD": "call_spread", "CALL-SPREAD": "call_spread",
-    "CALL_SPREAD": "call_spread", "CALL DEBIT SPREAD": "call_spread",
-    "P": "put_spread", "PUT SPREAD": "put_spread", "PUT-SPREAD": "put_spread",
-    "PUT_SPREAD": "put_spread", "PUT DEBIT SPREAD": "put_spread",
-}
-
+# The menu stays here: the letters are shared with the API, but the wording
+# beside them is only ever read off a terminal.
 INSTRUMENT_MENU = [
     ("O", "Options", "single contracts on the report"),
     ("S", "Stock", "shares held through it"),
     ("C", "Call debit spread", "buy a strike, sell one above -- bullish"),
     ("P", "Put debit spread", "buy a strike, sell one below -- bearish"),
 ]
-
-# A spread picks its own side of the chain, so the calls-or-puts question
-# never comes up for one.
-SPREAD_SIDES = {"call_spread": "call", "put_spread": "put"}
-
-
-def resolve_instrument_choice(raw: str) -> str:
-    instrument = INSTRUMENTS.get(raw.strip().upper())
-    if instrument is None:
-        raise ValueError(
-            "Choose O for options, S for stock, C for a call debit spread "
-            "or P for a put debit spread."
-        )
-    return instrument
 
 
 def prompt_instrument() -> str:
@@ -690,24 +675,6 @@ class EventPlan:
     instrument: str = "options"
     side: str = "both"
     contracts: int = 1
-
-
-# Every accepted spelling of a chain side.
-SIDES = {
-    "C": "call", "CALL": "call", "CALLS": "call",
-    "P": "put", "PUT": "put", "PUTS": "put",
-    "B": "both", "BOTH": "both",
-}
-
-# Buying calls is a bullish bet, puts a bearish one.
-SIDE_DIRECTION = {"call": "long", "put": "short"}
-
-
-def resolve_side(raw: str) -> str:
-    side = SIDES.get(raw.strip().upper())
-    if side is None:
-        raise ValueError("Choose C for calls, P for puts, or B for both.")
-    return side
 
 
 def prompt_option_side() -> str:
@@ -850,11 +817,16 @@ def prompt_strikes(default: int, maximum: Optional[int]) -> int:
 
 
 def clamp_strikes(count: int, maximum: Optional[int]) -> int:
-    """Hold the request to what Yahoo actually lists, and say so when it bites."""
-    if maximum is None or count <= maximum:
-        return count
-    print("  This expiry only lists %d strikes from the money -- showing those." % maximum)
-    return maximum
+    """Hold the request to what Yahoo actually lists, and say so when it bites.
+
+    The clamp itself is the service's; the sentence explaining it is this front
+    end's, because an API caller reading a smaller ladder than it asked for can
+    count the rows.
+    """
+    held = hold_to_maximum(count, maximum)
+    if held != count:
+        print("  This expiry only lists %d strikes from the money -- showing those." % maximum)
+    return held
 
 
 def prompt_shares(price: float) -> Optional[int]:
@@ -1763,6 +1735,47 @@ def run_event_contract(
     return 0 if report.verdict.label != "NO-GO" else 3
 
 
+def build_request(
+    symbol: str,
+    key: str,
+    args: argparse.Namespace,
+    plan: EventPlan,
+    horizon: Optional[str],
+    earnings_date: Optional[dt.date],
+    buzz_score: Optional[object],
+) -> ValidationRequest:
+    """The flags and the answers to the prompts, as one description of a trade.
+
+    Everything the parser and the prompts between them settled, in the shape
+    the service takes. Past this point there is nothing argparse-shaped left.
+    """
+    return ValidationRequest(
+        symbol=symbol,
+        strategy=key,
+        direction=args.direction,
+        entry=args.entry,
+        stop=args.stop,
+        target=args.target,
+        instrument=plan.instrument,
+        side=plan.side,
+        contracts=plan.contracts,
+        size=args.size,
+        premium=args.premium,
+        account=args.account,
+        risk=args.risk,
+        strikes=args.strikes,
+        contract=args.contract,
+        min_reward_risk=args.min_reward_risk,
+        horizon=horizon,
+        earnings_date=earnings_date,
+        allow_earnings=args.allow_earnings,
+        include_peers=bool(args.peers) and key == "earnings",
+        benchmark=args.benchmark,
+        period=args.period,
+        buzz=buzz_score,
+    )
+
+
 def validate_symbol(
     symbol: str,
     key: str,
@@ -1775,44 +1788,40 @@ def validate_symbol(
     width: int = 0,
     ask_weights: bool = False,
 ) -> Report:
-    data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
+    palette = palette or make_palette(no_color=True)
+    width = width or detect_width()
     plan = plan or resolve_event_plan(key, args)
-    # An explicit --direction wins; otherwise the chosen side implies it.
-    direction = args.direction or SIDE_DIRECTION.get(plan.side, "long")
-    ctx = TradeContext(
-        data=data,
-        config=config,
-        direction=direction,
-        account_size=args.account,
-        risk_pct=args.risk,
-        entry=args.entry,
-        stop=args.stop,
-        target=args.target,
-        premium=args.premium,
-        size=args.size,
-        allow_earnings=args.allow_earnings,
-        earnings_date=resolve_earnings_date(data, key, args),
-        instrument=plan.instrument,
-        option_side=plan.side,
-        contracts=plan.contracts,
-        min_reward_risk=args.min_reward_risk,
-        contract=args.contract,
-        strikes=(config.earnings if key == "earnings" else config.options).ladder_strikes,
-        buzz=(buzz_scores or {}).get(symbol),
-        include_peers=bool(args.peers) and key == "earnings",
-        horizon=horizon or config.short_term.default_horizon,
+
+    # Downloaded here rather than left to the service: which scheduled report
+    # is being traded is a question about this symbol's calendar, so it cannot
+    # be put to the reader until the symbol is on hand. Handed on below so the
+    # answer does not cost a second download.
+    data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
+    request = build_request(
+        symbol,
+        key,
+        args,
+        plan,
+        horizon,
+        resolve_earnings_date(data, key, args),
+        (buzz_scores or {}).get(symbol),
     )
-    strategy = STRATEGIES[key](ctx)
+
+    strategy = prepare(request, config, data=data)
     # Sizing is asked here, after the chain is priced and before the checks
     # that spend those answers.
-    size_position(strategy, args, palette or make_palette(no_color=True), width or detect_width())
+    size_position(strategy, args, palette, width)
     if ask_weights:
         # After the checks are built, because the offer is to reweight what is
         # actually on this sheet -- which checks run depends on the strategy
         # and on whether it is being traded in shares, contracts or a spread.
-        config.weights = prompt_custom_weights(
-            strategy.built_checks(), palette or make_palette(no_color=True)
-        )
+        weights = prompt_custom_weights(strategy.built_checks(), palette)
+        # Written to both copies on purpose. The strategy runs against a config
+        # of its own, so that one is what this report is scored by; the caller's
+        # is what the symbols still queued behind it will be built from, and the
+        # question is only asked once for the whole run.
+        strategy.ctx.config.weights = weights
+        config.weights = weights
     return strategy.run()
 
 

@@ -1,2 +1,4 @@
 -r requirements.txt
 pytest>=8.0
+# fastapi's TestClient is built on it; without it the serve.py tests skip.
+httpx>=0.27

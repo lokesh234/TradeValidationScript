@@ -13,3 +13,8 @@ requests>=2.31
 # but it is a declared dependency rather than an optional extra so that a
 # clone which runs ./trade.sh has it.
 psycopg[binary]>=3.1
+# serve.py only. The checklist itself does not import these -- validate.py and
+# trade.sh run on a clone that skips them -- but a clone that wants the HTTP
+# front end should not have to work out what it needs.
+fastapi>=0.110
+uvicorn[standard]>=0.27
