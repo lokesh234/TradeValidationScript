@@ -116,6 +116,50 @@ class VerticalSpread:
         return legs[0] - legs[1]
 
     @property
+    def priced_at(self) -> Optional[float]:
+        """The debit as cents on the dollar of width -- the structure as a bet.
+
+        A spread pays at most its width, so paying 22c per dollar of width is
+        the same shape of trade as paying 22c for an event contract that
+        settles at a dollar. It is reward:risk in the other unit -- 22c is
+        3.5:1 -- but it is the unit a probability is quoted in, which is what
+        makes it comparable to the odds below it.
+        """
+        if self.debit is None or self.width <= 0:
+            return None
+        return self.debit / self.width * 100.0
+
+    def chance_of_max(
+        self,
+        spot: float,
+        days_left: float,
+        volatility: Optional[float],
+        rate: float = 0.04,
+    ) -> Optional[float]:
+        """The chain's own odds of the finish that pays the maximum, 0-100.
+
+        Max profit needs the stock at or beyond the short strike at expiry, so
+        this is that strike's N(d2) -- the probability already inside the
+        options' prices.
+
+        It usually reads below what the spread costs per dollar of width, and
+        the gap is not a mispricing: a vertical also pays part of the width for
+        a finish between the strikes, and that part has to be paid for too.
+
+        The two converge as the strikes close up, and cross at a strike apart:
+        with no middle of the range left to pay for, what is left is the carry.
+        A payout that only arrives at expiry is worth discounting, so the
+        structure trades a shade under the bare probability rather than above
+        it -- which is true of an event contract on the same claim as well.
+        """
+        if volatility is None:
+            return None
+        odds = pricing.finish_beyond(
+            self.kind, spot, self.short_leg.strike, days_left, volatility, rate
+        )
+        return None if odds is None else odds * 100.0
+
+    @property
     def label(self) -> str:
         return "%s/%s" % (format_strike(self.long_leg.strike), format_strike(self.short_leg.strike))
 

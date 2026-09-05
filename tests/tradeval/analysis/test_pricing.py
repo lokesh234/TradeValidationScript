@@ -92,3 +92,39 @@ def test_profit_after_move_subtracts_entry_cost():
 def test_profit_after_move_none_for_bad_entry():
     assert pricing.profit_after_move("call", entry_price=0, spot=100, strike=100, move_pct=5, days_left=5, volatility=0.3) is None
     assert pricing.profit_after_move("call", entry_price=None, spot=100, strike=100, move_pct=5, days_left=5, volatility=0.3) is None
+
+
+# -- the odds already inside the price ---------------------------------------
+
+
+def test_finish_beyond_reads_the_second_black_scholes_term():
+    """N(d2): the model's own probability that a call expires in the money."""
+    odds = pricing.finish_beyond("call", 100.0, 100.0, 365, 0.30)
+    # At the money over a year, a shade under a coin flip: the drift term in
+    # d2 carries -sigma^2/2.
+    assert 0.40 < odds < 0.50
+
+
+def test_a_call_and_a_put_on_the_same_strike_split_the_odds():
+    call = pricing.finish_beyond("call", 100.0, 110.0, 180, 0.35)
+    put = pricing.finish_beyond("put", 100.0, 110.0, 180, 0.35)
+    assert call + put == pytest.approx(1.0)
+
+
+def test_further_out_of_the_money_is_longer_odds():
+    near = pricing.finish_beyond("call", 100.0, 105.0, 90, 0.40)
+    far = pricing.finish_beyond("call", 100.0, 130.0, 90, 0.40)
+    assert near > far
+    assert 0.0 < far < 0.15
+
+
+def test_at_expiry_the_question_is_already_settled():
+    assert pricing.finish_beyond("call", 120.0, 100.0, 0, 0.40) == 1.0
+    assert pricing.finish_beyond("call", 90.0, 100.0, 0, 0.40) == 0.0
+    assert pricing.finish_beyond("put", 90.0, 100.0, 0, 0.40) == 1.0
+
+
+def test_no_volatility_is_no_reading():
+    assert pricing.finish_beyond("call", 100.0, 110.0, 90, 0.0) is None
+    assert pricing.finish_beyond("call", 100.0, 110.0, 90, None) is None
+    assert pricing.finish_beyond("call", 0.0, 110.0, 90, 0.4) is None

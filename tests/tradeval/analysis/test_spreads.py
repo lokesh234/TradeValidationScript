@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from tradeval.data.market import OptionQuote
+from tradeval.analysis import pricing
 from tradeval.analysis import spreads
 from tradeval.analysis.spreads import VerticalSpread, build_debit_spreads, format_strike
 
@@ -197,3 +198,93 @@ def test_strikes_on_lists_only_what_has_a_price():
     unpriced.mid = None
     quotes.append(unpriced)
     assert spreads.strikes_on(quotes) == [600.0, 630.0]
+
+
+# -- the structure priced as a bet -------------------------------------------
+
+
+def test_costs_is_the_debit_per_dollar_of_width():
+    spread = VerticalSpread(_quote("call", 100.0, 3.0), _quote("call", 110.0, 1.0))
+    assert spread.debit == pytest.approx(2.0)
+    assert spread.priced_at == pytest.approx(20.0)  # 2.00 of a 10 wide
+
+
+def test_costs_is_reward_risk_in_the_other_unit():
+    """22c and 3.5:1 are the same fact; one of them is a probability's unit."""
+    spread = VerticalSpread(_quote("call", 100.0, 3.0), _quote("call", 110.0, 1.0))
+    assert spread.priced_at == pytest.approx(100.0 / (1.0 + spread.reward_risk))
+
+
+def test_costs_needs_a_two_sided_price():
+    crossed = VerticalSpread(_quote("call", 100.0, 1.0), _quote("call", 110.0, 3.0))
+    assert crossed.debit is None
+    assert crossed.priced_at is None
+
+
+def test_the_odds_are_read_at_the_short_strike():
+    """Max profit needs the finish past the leg that caps it."""
+    spread = VerticalSpread(_quote("call", 100.0, 3.0), _quote("call", 110.0, 1.0))
+    odds = spread.chance_of_max(100.0, 180, 0.35)
+    assert odds == pytest.approx(pricing.finish_beyond("call", 100.0, 110.0, 180, 0.35) * 100.0)
+
+
+def test_a_put_spread_reads_its_odds_downward():
+    spread = VerticalSpread(_quote("put", 100.0, 3.0), _quote("put", 90.0, 1.0))
+    odds = spread.chance_of_max(100.0, 180, 0.35)
+    assert odds == pytest.approx(pricing.finish_beyond("put", 100.0, 90.0, 180, 0.35) * 100.0)
+    assert 0.0 < odds < 50.0
+
+
+def test_no_volatility_leaves_the_odds_unread():
+    spread = VerticalSpread(_quote("call", 100.0, 3.0), _quote("call", 110.0, 1.0))
+    assert spread.chance_of_max(100.0, 180, None) is None
+
+
+@pytest.mark.parametrize("width", [5.0, 20.0, 50.0])
+def test_what_it_costs_sits_above_the_bare_odds_of_the_maximum(width):
+    """A vertical also pays part of the width between the strikes.
+
+    Priced at the model's own value with one volatility, the debit per dollar
+    of width runs above the probability of the finish that pays the maximum --
+    the difference is the part-payouts in between, which are not free.
+    """
+    spot, days, vol = 100.0, 180.0, 0.35
+    legs = [
+        _quote("call", strike, pricing.black_scholes("call", spot, strike, days, vol))
+        for strike in (100.0, 100.0 + width)
+    ]
+    spread = VerticalSpread(*legs)
+    assert spread.priced_at >= spread.chance_of_max(spot, days, vol)
+
+
+def test_a_strike_apart_it_is_the_digital_bet_less_the_carry():
+    """The one case where costs reads under the odds.
+
+    At a strike apart there is almost no middle of the range left to pay for,
+    and what remains is the discounting: the payout only arrives at expiry, so
+    the structure trades a shade under the bare probability rather than above
+    it. Worth pinning down, since it is the exception the note describes.
+    """
+    spot, days, vol = 100.0, 180.0, 0.35
+    legs = [
+        _quote("call", strike, pricing.black_scholes("call", spot, strike, days, vol))
+        for strike in (100.0, 101.0)
+    ]
+    spread = VerticalSpread(*legs)
+    gap = spread.priced_at - spread.chance_of_max(spot, days, vol)
+    assert -1.0 < gap < 0.0
+
+
+def test_the_two_converge_as_the_strikes_close_up():
+    """At one strike apart the structure is the digital bet it is compared to."""
+    spot, days, vol = 100.0, 180.0, 0.35
+    gaps = []
+    for width in (25.0, 1.0):
+        legs = [
+            _quote("call", strike, pricing.black_scholes("call", spot, strike, days, vol))
+            for strike in (100.0, 100.0 + width)
+        ]
+        spread = VerticalSpread(*legs)
+        gaps.append(spread.priced_at - spread.chance_of_max(spot, days, vol))
+    assert gaps[1] < gaps[0]
+    assert gaps[1] < 2.0  # cents

@@ -339,13 +339,65 @@ def test_choosing_a_pairing_after_the_table_was_drawn_rebuilds_it():
 
     strategy.choose_contract(typed)
     assert [spread.label for spread in strategy.spreads][0] == typed
-    # The table on screen predates the pick, so the report prints it again.
-    assert strategy.ctx.chain_shown is False
 
 
-def test_choosing_a_listed_pairing_leaves_the_printed_table_alone():
+def test_a_typed_pairing_is_priced_on_its_own_where_it_was_typed():
+    """It was in no table the reader has seen, so it gets one row."""
     strategy = _spread_strategy()
-    strategy.ctx.chain_shown = True
-    listed_label = strategy.spreads[0].label
-    strategy.choose_contract(listed_label)
-    assert strategy.ctx.chain_shown is True
+    listed = strategy.spread_strikes()
+    typed = "%s/%s" % (format_strike(listed[1]), format_strike(listed[-1]))
+    strategy.choose_contract(typed)
+
+    panel = strategy.chosen_spread_panel()
+    assert panel is not None
+    assert [row[0] for row in panel.rows] == [typed]
+    # Under its own title, so it does not read as the ladder printed twice.
+    assert panel.title.startswith("YOUR CALL SPREAD -- %s" % typed)
+    assert "The pairing you named" in panel.note
+
+
+def test_a_pairing_taken_off_the_list_is_not_reprinted():
+    """It is already on screen; printing it again is the duplicate."""
+    strategy = _spread_strategy()
+    strategy.choose_contract(strategy.spreads[0].label)
+    assert strategy.chosen_spread_panel() is None
+
+
+def test_nothing_is_reprinted_when_no_pairing_was_chosen():
+    strategy = _spread_strategy()
+    strategy.choose_contract(None)
+    assert strategy.chosen_spread_panel() is None
+
+
+def test_the_spread_table_prices_each_pairing_as_a_bet():
+    """Cents per dollar of width, beside the odds the chain puts on it."""
+    strategy = _spread_strategy()
+    panel = strategy.price_panels()[0]
+    assert panel.headers[5:7] == ["Costs", "IV odds"]
+    costs, odds = panel.rows[0][5], panel.rows[0][6]
+    assert costs.endswith("c") and odds.endswith("%")
+    assert 0 < float(costs.rstrip("c")) < 100
+    assert 0 < float(odds.rstrip("%")) < 100
+
+
+def test_the_odds_are_read_to_expiry_not_to_the_marking_date():
+    """Max profit is an expiry question whatever the payoff tables mark at."""
+    strategy = _spread_strategy()
+    panel = strategy.price_panels()[0]
+    spread = strategy.spreads[0]
+    expected = spread.chance_of_max(
+        strategy.data.price, float(strategy.front_quote.days_out), strategy.reprice_volatility
+    )
+    assert panel.rows[0][6] == "%.0f%%" % expected
+
+
+def test_a_wider_pairing_is_cheaper_and_longer_odds():
+    """The two columns move together, which is what makes the pair readable."""
+    strategy = _spread_strategy()
+    rows = strategy.price_panels()[0].rows
+    if len(rows) < 2:
+        pytest.skip("chain too shallow for two pairings")
+    costs = [float(row[5].rstrip("c")) for row in rows]
+    odds = [float(row[6].rstrip("%")) for row in rows]
+    assert costs == sorted(costs, reverse=True)
+    assert odds == sorted(odds, reverse=True)

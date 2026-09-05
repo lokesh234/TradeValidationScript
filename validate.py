@@ -1052,6 +1052,14 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
             strategy.choose_contract(
                 prompt_contract(labels, "spread" if ctx.trades_spread else "strike", strikes)
             )
+            # A pairing typed by hand was in none of the tables above, so it is
+            # priced here on its own -- once, where it was chosen, rather than
+            # by reprinting a ladder the reader has already read.
+            chosen = strategy.chosen_spread_panel()
+            if chosen is not None:
+                for line in layout_panels([chosen], palette, width):
+                    print(line)
+                print("")
 
     if wants_shares:
         shares = prompt_shares(strategy.data.price)

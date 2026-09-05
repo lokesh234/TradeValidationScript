@@ -96,6 +96,39 @@ def black_scholes(
     return discount * norm_cdf(-d2) - spot * norm_cdf(-d1)
 
 
+def finish_beyond(
+    kind: str,
+    spot: float,
+    strike: float,
+    days: float,
+    volatility: float,
+    rate: float = 0.04,
+) -> Optional[float]:
+    """The market's own odds of finishing past a strike, as a fraction of 1.
+
+    N(d2) is the second term of Black-Scholes read on its own: the probability
+    the model assigns to a call expiring in the money, and N(-d2) the same for
+    a put. It is the *risk-neutral* probability -- the one embedded in the
+    price, which is what the option market is quoting rather than a forecast of
+    what will happen.
+
+    That is the same number an event contract prints on its face. A claim
+    trading at 31c is the exchange saying 31%, and a call spread whose short
+    strike carries an N(d2) of 0.31 is the chain saying the same thing about
+    the finish that pays the spread its maximum.
+    """
+    if spot <= 0 or strike <= 0 or volatility is None or volatility <= 0:
+        return None
+    years = days / DAYS_PER_YEAR
+    if years <= 0:
+        # At expiry there is nothing left to be uncertain about: the question
+        # is settled by where the stock is, not by what it might still do.
+        return 1.0 if intrinsic(kind, spot, strike) > 0 else 0.0
+    sigma_t = volatility * math.sqrt(years)
+    d2 = (math.log(spot / strike) + (rate - 0.5 * volatility ** 2) * years) / sigma_t
+    return norm_cdf(d2) if kind == "call" else norm_cdf(-d2)
+
+
 def value_after_move(
     kind: str,
     spot: float,

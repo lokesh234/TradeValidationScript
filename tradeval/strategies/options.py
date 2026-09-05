@@ -417,14 +417,34 @@ class OptionsPlaybook:
         is dropped here rather than answering the next question with a list
         that predates the answer.
         """
-        self.ctx.contract = pick
+        # Read before the pick is recorded, not after. The question is whether
+        # this pairing was in the table the reader chose from, and a list built
+        # with the pick already set is a list that contains it by construction.
         listed = [spread.label for spread in self.spreads] if self.ctx.trades_spread else []
+        self.ctx.contract = pick
         self.__dict__.pop("spreads", None)
-        # A pairing typed by hand was not in the table that was on screen when
-        # it was typed, so its width, debit and reward:risk have been quoted to
-        # nobody. The report prints the table again with it in.
-        if pick and self.ctx.trades_spread and not any(_same_contract(l, pick) for l in listed):
-            self.ctx.chain_shown = False
+        # Whether this pairing was one of the ones already on screen. A typed
+        # one was not, so its width, debit and odds have been quoted to nobody
+        # -- and it gets its own row below the prompt. Reprinting the whole
+        # table instead would put five pairings on screen twice to show one.
+        self._typed_choice = bool(
+            pick and self.ctx.trades_spread and not any(_same_contract(l, pick) for l in listed)
+        )
+
+    def chosen_spread_panel(self) -> Optional[Panel]:
+        """The pairing just typed, priced on its own. None when it was listed.
+
+        Printed once, where the choice was made. The report does not carry the
+        pairings table again: the payoff tables under it are already about this
+        structure and nothing else, and the ladder they came from has not
+        changed since it was drawn.
+        """
+        if not getattr(self, "_typed_choice", False):
+            return None
+        chosen = self._chosen(self.spreads, lambda spread: spread.label)
+        if len(chosen) != 1:
+            return None
+        return self._spread_table(chosen, for_choice=True)
 
     @cached_property
     def spreads(self) -> List[spreads.VerticalSpread]:
@@ -509,8 +529,14 @@ class OptionsPlaybook:
         panels.extend(self._spread_profit_panels(built))
         return panels
 
-    def _spread_table(self, built: List[spreads.VerticalSpread]) -> Panel:
+    def _spread_table(
+        self, built: List[spreads.VerticalSpread], for_choice: bool = False
+    ) -> Panel:
         """What each pairing costs and what it can pay, one spread at a time.
+
+        ``for_choice`` prints the one pairing that was named rather than the
+        ladder: both legs were chosen there, so the sentence about holding the
+        long leg at the money does not apply to it.
 
         Deliberately not scaled by the contract count. This table describes the
         structures available; the payoff tables below describe the position you
@@ -522,8 +548,14 @@ class OptionsPlaybook:
         """
         spot = self.data.price
         implied = self.implied_move_pct
+        # The finish that pays the maximum is an expiry question, so it is
+        # priced to expiry whatever the payoff tables are marked at.
+        quote = self.front_quote
+        days_to_expiry = float(quote.days_out) if quote else 0.0
+        volatility = self.reprice_volatility
         rows = []
         for spread in built:
+            odds = spread.chance_of_max(spot, days_to_expiry, volatility)
             rows.append(
                 [
                     spread.label,
@@ -531,6 +563,8 @@ class OptionsPlaybook:
                     _money_cell(spread.cost),
                     _money_cell(spread.max_profit),
                     "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
+                    "%.0fc" % spread.priced_at if spread.priced_at is not None else "-",
+                    "%.0f%%" % odds if odds is not None else "-",
                     "{:,.2f}".format(spread.breakeven) if spread.breakeven else "-",
                     _signed_pct(spread.breakeven_move_pct(spot)),
                     _signed_pct(self._directional(spread.target_move_pct(spot))),
@@ -540,16 +574,44 @@ class OptionsPlaybook:
         marked, marker, outruns = self._spread_marker(built, spot, implied)
         kind = self.ctx.spread_kind or "call"
         self._check_budget_covers_a_spread(built)
-        note = (
-            "Long the strike nearest the money, short each strike further out. "
-            "Max profit needs the stock at or beyond the short strike by expiry; "
-            "max loss is the debit and nothing worse. Figures are per spread -- "
-            "the payoff tables below carry the sizing."
+        if for_choice:
+            note = (
+                "The pairing you named: long %s, short %s. Max profit needs the "
+                "stock at or beyond %s by expiry; max loss is the debit and "
+                "nothing worse. Figures are per spread -- the payoff tables "
+                "below carry the sizing."
+                % (
+                    spreads.format_strike(built[0].long_leg.strike),
+                    spreads.format_strike(built[0].short_leg.strike),
+                    spreads.format_strike(built[0].short_leg.strike),
+                )
+            )
+        else:
+            note = (
+                "Long the strike nearest the money, short each strike further out. "
+                "Max profit needs the stock at or beyond the short strike by expiry; "
+                "max loss is the debit and nothing worse. Figures are per spread -- "
+                "the payoff tables below carry the sizing."
+            )
+        note += (
+            "  Costs is the debit per dollar of width, which is the structure "
+            "priced as an event contract: 22c buys a dollar, the same way a "
+            "claim at 22c does. IV odds is what the chain's own volatility puts "
+            "on that finish -- the short strike's N(d2), the probability already "
+            "inside the option prices. Costs normally reads above it, and the "
+            "gap is not free money: a vertical also pays part of the width for "
+            "a finish between the strikes, and that part is in the debit too. "
+            "The two converge as the strikes close up -- a strike apart, the "
+            "structure is the digital bet it is being compared to, priced a "
+            "shade under the odds because the money only comes back at expiry."
         )
-        note += self._floor_note(built)
+        # The floor and the ladder's reach describe the search that produced
+        # the list. A pairing named by hand came out of no search.
+        if not for_choice:
+            note += self._floor_note(built)
         if implied is not None:
             note += "  The options price a move of %.1f%%." % implied
-        if outruns:
+        if outruns and not for_choice:
             # Nothing here is priced as out of reach, which is worth saying
             # plainly rather than leaving a marker to imply a limit that the
             # table never actually hits.
@@ -558,11 +620,19 @@ class OptionsPlaybook:
                 "before the move does, so --strikes buys wider ones."
             )
         return Panel(
-            title="%s DEBIT SPREADS -- %s expiry, per spread"
-            % (kind.upper(), dates.format_date(self.front_quote.expiry)),
+            # Titled for what it is: the ladder, or the one pairing that was
+            # named. Two tables under one title, a screen apart, would read as
+            # the same table printed twice.
+            title=(
+                "YOUR %s SPREAD -- %s, %s expiry"
+                % (kind.upper(), built[0].label, dates.format_date(self.front_quote.expiry))
+                if for_choice
+                else "%s DEBIT SPREADS -- %s expiry, per spread"
+                % (kind.upper(), dates.format_date(self.front_quote.expiry))
+            ),
             headers=[
                 "Strikes", "Width", "Debit", "Max profit",
-                "Reward:risk", "Breakeven", "B/E move", "To max",
+                "Reward:risk", "Costs", "IV odds", "Breakeven", "B/E move", "To max",
             ],
             rows=rows,
             highlight=marked,

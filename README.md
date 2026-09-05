@@ -1030,13 +1030,13 @@ walking the short leg outward is the decision actually being made — how much
 width to buy, and how much of the move to sell away:
 
 ```
- CALL DEBIT SPREADS -- 14th August, 2026 [2026-08-14] expiry, per spread
-  Strikes   Width  Debit  Max profit  Reward:risk  Breakeven  B/E move  To max
-  120/121  1 wide    $45         $55       1.22:1     120.45     +0.0%   +0.5%
-  120/122  2 wide    $85        $115       1.35:1     120.85     +0.3%   +1.3%
-  120/123  3 wide   $130        $170       1.31:1     121.30     +0.7%   +2.1%
-  120/124  4 wide   $173        $227       1.32:1     121.72     +1.1%   +3.0%
-  120/125  5 wide   $203        $297       1.47:1     122.03     +1.3%   +3.8%
+ CALL DEBIT SPREADS -- 25th September, 2026 [2026-09-25] expiry, per spread
+  Strikes    Width  Debit  Max profit  Reward:risk  Costs  IV odds  Breakeven  B/E move  To max
+  210/215   5 wide   $212        $288       1.35:1    42c      39%     212.12     +1.7%   +3.1%
+  210/220  10 wide   $390        $610       1.56:1    39c      32%     213.90     +2.6%   +5.5%
+  210/225  15 wide   $530        $970       1.83:1    35c      26%     215.30     +3.3%   +7.9%
+  210/230  20 wide   $640      $1,360       2.13:1    32c      20%     216.40     +3.8%  +10.3%
+  210/235  25 wide   $724      $1,776       2.46:1    29c      16%     217.24     +4.2%  +12.7%
   Long the strike nearest the money, short each strike further out. ... Figures are
   per spread -- the payoff tables below carry the sizing. The options price a move of
   8.1%. Every pairing above is inside that move -- the ladder runs out before the move
@@ -1055,13 +1055,20 @@ Which spread are you trading? [1-5, your own two strikes like 620/630, or Enter 
   -> 640/700
 ```
 
-That pairing is then priced beside the built ones, at the top of the table:
+It was in none of the tables above it, so it is priced on its own, once, right
+there:
 
 ```
-  Strikes    Width   Debit  Max profit  Reward:risk  Breakeven  B/E move  To max
-  640/700  60 wide    $215      $5,785      26.91:1     642.15     +3.4%  +12.7%
-  620/630  10 wide    $485        $515       1.06:1     624.85     +0.6%   +1.5%
+ YOUR CALL SPREAD -- 640/700, 17th December, 2027 [2027-12-17] expiry
+  Strikes    Width  Debit  Max profit  Reward:risk  Costs  IV odds  Breakeven  B/E move  To max
+  640/700  60 wide   $215      $5,785      26.91:1     4c       9%     642.15     +3.4%  +12.7%
+  The pairing you named: long 640, short 700. ...
 ```
+
+The ladder is not printed again underneath it: those pairings are already on
+screen, and the payoff tables that follow are about this structure and nothing
+else. A pairing picked off the list gets no extra table either — it was in the
+one you picked it from.
 
 Written however you write it — `640/700`, `700-640`, `640 700`, `$640/$700`.
 There is only one debit spread across two strikes, so the order and the
@@ -1077,6 +1084,37 @@ Which spread are you trading? [...]: 637/700
 The same pair works on the command line as `--contract 640/700`, and the pair
 may reach past the printed window — the whole chain is available to it, not
 just the strikes the ladder happened to show.
+
+#### The spread as a bet
+
+`Costs` and `IV odds` are the same structure read the way an event contract is
+read. **`Costs`** is the debit per dollar of width: a spread pays at most its
+width, so 42c per dollar is the same shape of trade as paying 42c for a
+contract that settles at a dollar. It is reward:risk in the other unit — 42c is
+1.35:1 — but it is the unit a probability comes in, which is what makes the
+next column comparable.
+
+**`IV odds`** is what the chain's own volatility puts on that finish: the short
+strike's N(d2), the second term of Black-Scholes read on its own. It is the
+*risk-neutral* probability — the one already inside the option prices, not a
+forecast — which is exactly what a claim trading at 39c on an exchange is
+saying about itself.
+
+Reading the pair down the table is the point:
+
+```
+  210/215   5 wide   42c      39%     <- almost a pure bet on the finish
+  210/235  25 wide   29c      16%     <- 13c of the debit is the middle of the range
+```
+
+`Costs` normally sits above `IV odds`, and the gap is not free money: a
+vertical also pays part of the width for a finish *between* the strikes, and
+that part is in the debit too. The wider the spread, the more of what you pay
+is buying that middle rather than the maximum. The two converge as the strikes
+close up — and cross at a strike apart, where there is no middle left to pay
+for and the structure trades a shade *under* the bare odds because the payout
+only arrives at expiry. An event contract on the same claim is discounted for
+the same reason.
 
 `To max` is the move that reaches the short strike, where the payoff stops.
 **Max loss is not a column**: for a debit spread it is the debit, in every row,
