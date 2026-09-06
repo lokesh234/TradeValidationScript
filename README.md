@@ -1953,6 +1953,8 @@ curl -s localhost:8000/validate -H 'content-type: application/json' \
   -d '{"symbol": "KO", "strategy": "long", "instrument": "stock"}'
 ```
 
+The same thing runs on Lambda for about nothing — see [hosting it](#hosting-it).
+
 | | Endpoint | |
 |---|---|---|
 | `POST` | `/validate` | grade one trade |
@@ -2163,6 +2165,152 @@ prompt answers into a `ValidationRequest` and renders the `Report` it gets back.
 The prompting sits in the gap `prepare()` leaves open — the profile and the
 option ladder have to reach the screen before the questions they inform can be
 asked, which is a conversation an HTTP caller has no use for.
+
+### Hosting it
+
+`deploy/deploy.sh` puts the same `serve:app` on AWS Lambda behind a public
+Function URL, and is safe to run again after a change:
+
+```bash
+deploy/deploy.sh
+```
+
+It builds `deploy/Dockerfile` for arm64, pushes it to ECR, creates or updates
+the function, and prints the URL:
+
+```bash
+curl -s "$URL/health" -H "x-tradeval-key: $TRADEVAL_API_KEY"
+curl -s "$URL/validate" -H "x-tradeval-key: $TRADEVAL_API_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"symbol": "NVDA", "strategy": "short", "instrument": "stock"}'
+```
+
+Every request needs the key -- see [the shared secret](#the-shared-secret)
+below. The deploy prints it once, on the run that generates it.
+
+**Lambda rather than a server, because the checklist is not a service that
+needs to be up.** It is a function that runs when somebody asks a question,
+takes two or three seconds, and then has nothing to do. Anything with a machine
+underneath it bills for the waiting -- the cheapest always-on options start
+around $3-5/month before a single request -- while Lambda bills per
+millisecond of actual work. The always-free tier is 400,000 GB-seconds a month,
+which at this memory size is roughly 85,000 validations. What is left is about
+five cents a month of ECR storage for the image.
+
+A Function URL rather than API Gateway for the same reason and one more: an
+HTTP API adds $1 per million requests, and cuts a response off at 29 seconds.
+`/validate/batch` across a handful of symbols can outlast that. A Function URL
+costs nothing and allows fifteen minutes.
+
+`deploy/lambda_handler.py` is the whole adapter. Mangum turns the URL's event
+into the ASGI call uvicorn would have made and hands it to the same `app`
+object, so there is no second copy of the routing and nothing in the deployment
+decides anything about a trade. Two things it settles before importing
+`serve`: yfinance keeps a small sqlite cache of exchange timezones under the
+platform's user-cache directory, which on Lambda is a path that does not exist
+and could not be written if it did, so it is pointed at `/tmp` -- and `HOME`
+goes with it, for anything else that reaches for a home directory on the way
+up.
+
+**The database does not come along.** Nothing the service exposes over HTTP
+reads it: saved stocks and tracked contracts are still script-only, for
+[the reason given above](#building-a-mobile-trade-flow). So there is no RDS
+instance in this deployment, which is the line item that would otherwise cost
+more than everything else here combined. `deploy/requirements-lambda.txt` drops
+`psycopg` along with `uvicorn`, since Lambda is the server.
+
+What is deployed is the *runtime* configuration, not the tuning: `Config()`'s
+defaults are what a request is graded against, and
+[`TRADEVAL_CONFIG`](#tuning-the-rules) is not set. Point it at a file baked
+into the image to deploy your own weights.
+
+#### The shared secret
+
+The URL is public -- `--auth-type NONE` means Lambda checks nothing -- so a
+header does the checking instead. Every request must carry the key:
+
+```bash
+export TRADEVAL_API_KEY=...        # printed by the deploy that generated it
+curl -s "$URL/health" -H "x-tradeval-key: $TRADEVAL_API_KEY"
+```
+
+Anything without it gets a 401 and never reaches a route. Anything with the
+wrong one gets the same 401, compared with `hmac.compare_digest` so that the
+time taken to say no does not leak how much of the key was right.
+
+The check lives in `deploy/lambda_handler.py` rather than in `serve.py`,
+because it answers a question only the deployment has: a local
+`uvicorn serve:app` is reachable from one machine and needs no key to say so.
+It is ASGI rather than a FastAPI dependency, so it runs ahead of routing --
+a caller who does not have the key should not be able to tell a real path from
+a typo, and a 404 for one and a 401 for the other tells them. There is no
+exemption for `/health` or `/docs`: an unauthenticated health check is still a
+free invocation, and a few thousand a second cost real money.
+
+**With no key configured at all, it refuses everything with a 503.** A
+deployment that lost its key should be an outage you notice rather than a
+public endpoint you don't.
+
+The key lives in the function's environment, which is the cheapest place that
+is not the repo -- Secrets Manager wants $0.40/month per secret to hold 43
+characters. `deploy.sh` prints a generated key once and never again; after
+that:
+
+```bash
+aws lambda get-function-configuration --function-name tradeval \
+    --query 'Environment.Variables.TRADEVAL_API_KEY' --output text
+```
+
+A redeploy keeps the key it finds rather than rotating it, so re-running the
+script does not lock out whatever is already calling. To rotate deliberately,
+name the new one:
+
+```bash
+TRADEVAL_API_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))') deploy/deploy.sh
+```
+
+`x-tradeval-key` is listed in the Function URL's CORS configuration because
+the URL answers the browser's preflight itself, without invoking the function.
+A header it does not list is one no browser will send.
+
+**What this is and is not.** It is a bearer token over TLS: enough to keep the
+URL from being useful to whoever finds it, and enough that the bill stays
+yours. It is not per-user auth, it does not expire, and every caller shares it,
+so anyone who has it can spend your rate limits. If this ever needs to be more
+than that, `--auth-type AWS_IAM` costs nothing and makes each caller sign its
+own requests.
+
+Two things still bound the damage. A new account's Lambda concurrency quota is
+10, so ten requests is as parallel as abuse gets -- a ceiling of about $17 a
+day if every slot were saturated around the clock. And the account has a
+$25/month budget that mails on the way up, though a budget notifies rather
+than caps: AWS has no spend limit to set.
+
+**Auth type `NONE` still consults the resource policy, and since October 2025 a
+Function URL needs two statements rather than one** -- `lambda:InvokeFunctionUrl`
+and `lambda:InvokeFunction`. The console writes both when you tick the box; the
+CLI writes neither. With only the first, every request comes back 403 with a
+message about auth types, which is a misleading thing to read while staring at
+an auth type that is already `NONE`. `deploy.sh` writes both, and scopes the
+second with `InvokedViaFunctionUrl` so that "public" means public over the URL
+rather than every AWS account on earth being able to invoke the function
+directly.
+
+#### What it costs to answer
+
+A cold start is about 1.5 seconds of import -- pandas, numpy and lxml -- and a
+warm request that only reads its own memory answers in milliseconds. A real
+validation is two to three seconds, nearly all of it waiting on Yahoo.
+
+The function is set to 2048MB, which is not about memory: `/health` peaks under
+200MB and a validation does not approach the ceiling. Lambda scales CPU with
+the memory you ask for, and the import is the whole cold start. At 1024MB it
+takes about three seconds; at 2048MB about 1.5. Since the bill is duration
+times memory, the faster and fatter option costs about the same and answers
+twice as quickly.
+
+Log retention is set to seven days. It is the one thing here that grows without
+being asked to, and the default is forever.
 
 ## Development
 
