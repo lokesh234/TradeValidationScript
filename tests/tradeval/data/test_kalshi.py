@@ -312,3 +312,15 @@ def test_search_drops_the_markets_that_have_already_settled(monkeypatch):
 def test_search_keeps_a_market_with_no_close_time_rather_than_guessing(monkeypatch):
     _patch_json(monkeypatch, {"current_page": [{"markets": [{"ticker": "NOCLOSE"}]}]})
     assert [m.ticker for m in kalshi.search("x")] == ["NOCLOSE"]
+
+
+def test_every_client_shares_the_exchange_s_pace():
+    """A client is built per call here, so the limiter cannot belong to one."""
+    from tradeval.data.limits import for_provider
+
+    first = kalshi._client(timeout=1.0)
+    second = kalshi._client(timeout=1.0)
+    assert first is not second
+    assert first.limiter is second.limiter is for_provider("kalshi")
+    first.close()
+    second.close()

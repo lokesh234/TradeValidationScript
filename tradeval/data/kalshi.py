@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
 from tradeval.data.http import HttpClient, HttpError
+from tradeval.data.limits import for_provider
 
 API = "https://api.elections.kalshi.com"
 SEARCH_URL = API + "/v1/search/series"
@@ -263,7 +264,9 @@ def _market_from_search(raw: Dict[str, Any], parent: Dict[str, Any]) -> EventMar
 
 
 def _client(timeout: float) -> HttpClient:
-    return HttpClient(USER_AGENT, timeout=timeout, retries=2)
+    # A client per call, so the pace it keeps has to outlive it: the limiter is
+    # the process's one for Kalshi, not this instance's.
+    return HttpClient(USER_AGENT, timeout=timeout, retries=2, limiter=for_provider("kalshi"))
 
 
 def search(phrase: str, limit: int = 8, timeout: float = 8.0) -> List[EventMarket]:

@@ -106,3 +106,33 @@ def test_context_manager_closes_session():
         with HttpClient(user_agent="ua") as client:
             assert isinstance(client, HttpClient)
     mocked_close.assert_called_once()
+
+
+# -- the provider's pace, as opposed to this client's ------------------------
+
+
+def test_a_limiter_is_acquired_before_each_attempt():
+    """A retry is another request the provider has to answer."""
+    limiter = MagicMock()
+    client = HttpClient(user_agent="ua", retries=2, backoff=0.0, limiter=limiter)
+    with patch.object(client._session, "request", side_effect=[_response(503), _response(200)]):
+        with patch("time.sleep"):
+            client.request("GET", "http://example.test")
+    assert limiter.acquire.call_count == 2
+
+
+def test_a_limiter_is_acquired_before_the_request_goes_out():
+    order = []
+    limiter = MagicMock()
+    limiter.acquire.side_effect = lambda *a, **k: order.append("acquire")
+    client = HttpClient(user_agent="ua", limiter=limiter)
+    with patch.object(client._session, "request", side_effect=lambda *a, **k: order.append("request") or _response(200)):
+        client.request("GET", "http://example.test")
+    assert order == ["acquire", "request"]
+
+
+def test_no_limiter_is_the_default_and_costs_nothing():
+    client = HttpClient(user_agent="ua")
+    assert client.limiter is None
+    with patch.object(client._session, "request", return_value=_response(200)):
+        assert client.request("GET", "http://example.test").ok

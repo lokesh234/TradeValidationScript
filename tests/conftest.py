@@ -10,11 +10,21 @@ computation -- no network, no mocked ``yfinance`` internals required.
 from __future__ import annotations
 
 import datetime as dt
+import os
 from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
 import pytest
+
+# Provider pacing is real sleeping, and the suite would pay for it in wall
+# clock: tradeval.data.limits installs itself into yfinance the moment
+# MarketData is imported, which is the line below. The limiter has its own
+# tests, which build their buckets directly, so switching it off here costs no
+# coverage. setdefault rather than assignment, so a run that wants the pacing
+# can still ask for it on the command line.
+os.environ.setdefault("TRADEVAL_YAHOO_RPS", "0")
+os.environ.setdefault("TRADEVAL_KALSHI_RPS", "0")
 
 from tradeval.config import Config
 from tradeval.context import TradeContext

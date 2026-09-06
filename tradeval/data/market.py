@@ -25,6 +25,14 @@ except ImportError as exc:  # pragma: no cover - surfaced to the user at startup
         "yfinance is not installed. Run:  pip install -r requirements.txt"
     ) from exc
 
+from tradeval.data.limits import throttle_yfinance
+
+# Every yfinance entry point shares one HTTP layer, so pacing it is done once
+# on the way in rather than at each call site. Idempotent, and cheap enough to
+# repeat from every module that imports yfinance -- whichever gets imported
+# first is the one that installs it.
+throttle_yfinance()
+
 
 # yfinance logs its own multi-line complaints for delisted or misspelled
 # tickers. We report those cases ourselves, so keep its noise off the report.

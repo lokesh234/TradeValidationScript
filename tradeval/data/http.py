@@ -2,6 +2,13 @@
 
 Self-contained on purpose. Nothing here touches the market-data stack, so the
 Reddit integration keeps its own session, headers and backoff policy.
+
+Two different paces are kept, because they answer different questions.
+``min_interval`` is this client's own: it spaces out one session's calls, and
+is forgotten when the client is. A ``limiter`` from
+:mod:`tradeval.data.limits` is the provider's, shared by every client in the
+process that talks to the same one -- which is the only pace that survives a
+client built fresh for each call.
 """
 
 from __future__ import annotations
@@ -11,6 +18,8 @@ import time
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 import requests
+
+from tradeval.data.limits import RateLimit
 
 # Statuses worth trying again: rate limiting and transient server faults.
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
@@ -38,12 +47,15 @@ class HttpClient:
         retries: int = 3,
         backoff: float = 0.6,
         min_interval: float = 0.0,
+        limiter: Optional["RateLimit"] = None,
     ):
         self.timeout = timeout
         self.retries = retries
         self.backoff = backoff
         # Floor on the gap between calls, to stay under a published rate limit.
         self.min_interval = min_interval
+        # The provider's pace, shared with every other client talking to it.
+        self.limiter = limiter
         self._last_call = 0.0
         self._session = requests.Session()
         self._session.headers.update({"User-Agent": user_agent, "Accept": "application/json"})
@@ -92,6 +104,11 @@ class HttpClient:
         status: Optional[int] = None
 
         for attempt in range(self.retries + 1):
+            # Per attempt rather than per call: a retry is another request the
+            # provider has to answer, and the run that is retrying is usually
+            # the one that has already been asked to slow down.
+            if self.limiter is not None:
+                self.limiter.acquire()
             self._throttle()
             response = None
             try:

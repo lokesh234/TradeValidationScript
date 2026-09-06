@@ -20,6 +20,14 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("yfinance is not installed. Run:  pip install -r requirements.txt") from exc
 
+from tradeval.data.limits import throttle_yfinance
+
+# Every yfinance entry point shares one HTTP layer, so pacing it is done once
+# on the way in rather than at each call site. Idempotent, and cheap enough to
+# repeat from every module that imports yfinance -- whichever gets imported
+# first is the one that installs it.
+throttle_yfinance()
+
 MAX_WORKERS = 6
 # Peers only need enough history to price a reaction a few weeks back.
 PEER_HISTORY = "1y"

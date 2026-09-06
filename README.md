@@ -2215,6 +2215,62 @@ The `api/` tests point the service at the same fixtures rather than at Yahoo, so
 they cost nothing to run; the ones covering `serve.py` skip themselves if
 FastAPI is not installed, since it is only needed for the HTTP front end.
 
+## Rate limits
+
+Neither provider bills for a request. Yahoo has no account to charge — yfinance
+reads endpoints the website uses, which is why the data is free and also why it
+is undocumented — and Kalshi's quotes are public; its fees are on trades, and
+this tool never places one. What both have is a patience limit, and the bill
+arrives as a 429 and then a quiet spell where the run returns nothing.
+
+The checklist is bursty in exactly the way that draws one. A batch of symbols,
+a peer read-across and a discovery screen all fan out across a thread pool, and
+`.info` alone is several requests. So the pace is kept in one place per
+provider, in `tradeval/data/limits.py`:
+
+| | requests/sec | burst |
+|---|---|---|
+| Yahoo | 10 | 20 |
+| Kalshi | 20 | 40 |
+
+Set high enough that an ordinary run never waits. That is the intent rather
+than an accident of the numbers — the limiter is here to stop a discovery
+screen or a long batch running away, not to pace a report on one symbol.
+Neither provider publishes a figure for anonymous reads, so these are a
+judgement rather than a derivation: **if runs start coming back empty, this
+table is the first thing to lower.** Override either per provider, and set a
+rate of `0` to turn the limiter off:
+
+```bash
+TRADEVAL_YAHOO_RPS=1 TRADEVAL_YAHOO_BURST=2 ./trade.sh
+TRADEVAL_KALSHI_RPS=0 .venv/bin/python validate.py ...
+```
+
+A token bucket rather than a fixed gap between calls, because a single-symbol
+run should still feel immediate: the burst is already paid for when it starts,
+and the pacing only bites once a run has spent it. Callers that arrive together
+leave spaced apart rather than in a second thundering herd, which is what makes
+the limiter worth having under a thread pool.
+
+**The limiter is process-wide, and that is the point.** A pace kept on a client
+object is not kept at all when the client is built per call — `kalshi._client()`
+builds one per request, and each new instance thinks it has never called
+anybody. The buckets are shared by everything in the process asking for the
+same provider.
+
+Yahoo is paced at the session yfinance itself uses, installed once when
+`tradeval.data.market` is imported. That counts one request per fetched page
+rather than one per method called, and it reaches `download()`, a screen and an
+industry lookup without each call site having to remember. It is a coupling to
+another library's plumbing, so a yfinance upgrade that moves the seam logs a
+warning and leaves the calls unpaced rather than taking the report down with
+it.
+
+Rate limits are deliberately **not** in `Config`. Every request to the HTTP
+front end is graded against [its own copy of the config](#the-api), so a limit
+that lived there would be a limit the caller could raise by putting it in the
+request body.
+
 ## Caveats
 
 - **Options checks need live quotes.** Bid/ask spreads are meaningless when the
