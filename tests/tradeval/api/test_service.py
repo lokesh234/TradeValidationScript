@@ -11,6 +11,7 @@ from tradeval.api import ValidationError, ValidationRequest, validate
 from tradeval.api.serialize import report_to_dict, summary_to_dict
 from tradeval.api.service import build_context, clamp_strikes
 from tradeval.config import Config
+from tradeval.render.report import Palette, render
 
 
 @pytest.fixture
@@ -139,6 +140,7 @@ def test_report_serialises_to_json(offline):
     assert restored["verdict"]["label"] in ("GO", "CAUTION", "NO-GO")
     assert isinstance(restored["as_of"], str)
     assert all(check["status"] in ("PASS", "WARN", "FAIL", "SKIP") for check in restored["results"])
+    assert restored["terminal"] == render(report, Palette(enabled=False), width=100)
 
 
 def test_panels_are_labelled_as_display_strings(offline):

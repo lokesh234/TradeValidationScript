@@ -1,4 +1,4 @@
-"""Turning a report into JSON.
+"""Turning a report into JSON and the answer the command line prints.
 
 The verdict and the checks serialise as what they are: a score, a label, a
 status per check. Those are the numbers a caller wants to act on, and they come
@@ -20,6 +20,7 @@ from dataclasses import fields
 from typing import Any, Dict, List
 
 from tradeval.checks import CheckResult, Verdict
+from tradeval.render.report import Palette, render
 from tradeval.strategies.base import Panel, Report
 
 
@@ -61,8 +62,14 @@ def panel_to_dict(panel: Panel) -> Dict[str, Any]:
 
 
 def report_to_dict(report: Report) -> Dict[str, Any]:
-    """A full report as a JSON-safe dict."""
-    return {
+    """A full report as JSON, including the plain terminal answer.
+
+    The fields beside ``terminal`` remain values that a caller can compute on.
+    ``terminal`` is for a reader who should see the same answer ``trade.sh``
+    prints, without reconstructing a layout from panels.  It is rendered with
+    colour disabled so it remains stable text inside JSON.
+    """
+    payload = {
         "symbol": report.symbol,
         "name": report.name,
         "strategy": {"key": report.strategy_key, "name": report.strategy_name},
@@ -80,6 +87,10 @@ def report_to_dict(report: Report) -> Dict[str, Any]:
         "notes": list(report.notes),
         "panels": [panel_to_dict(panel) for panel in report.panels],
     }
+    # The terminal front end picks a width from its TTY. An HTTP response has
+    # no terminal, so use that front end's documented non-interactive width.
+    payload["terminal"] = render(report, Palette(enabled=False), width=100)
+    return payload
 
 
 def summary_to_dict(reports: List[Report]) -> List[Dict[str, Any]]:

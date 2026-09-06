@@ -19,7 +19,8 @@ the tooling that reads it rather than the retired 2.0 spec. Anything asking
 specifically for 2.0 needs a converter downstream.
 
 Two things are added on the way out, both of which the generated schema is
-poorer for missing. The examples are the ones the README documents, checked
+poorer for missing. The request and response examples show the bodies the
+README documents, including the terminal answer. Request examples are checked
 here against :class:`~tradeval.api.requests.ValidationRequest`'s own fields so
 that renaming a field breaks this script rather than leaving a body in the
 docs that the service would now reject. And the failure responses are declared:
@@ -60,6 +61,26 @@ BATCH_EXAMPLE = [
     {"symbol": "KO", "strategy": "long", "instrument": "stock"},
     {"symbol": "NVDA", "strategy": "earnings", "instrument": "call_spread", "contract": "250/260"},
 ]
+
+# The renderer's answer is a first-class part of the response now, not an
+# implementation detail callers are expected to recreate from terminal panels.
+# Keep this brief: the live endpoint supplies the full report when "Try it out"
+# is used, while the static example shows the output's shape at a glance.
+VALIDATE_RESPONSE_EXAMPLE = {
+    "symbol": "KO",
+    "name": "The Coca-Cola Company",
+    "strategy": {"key": "long", "name": "Long Term"},
+    "price": 88.07,
+    "verdict": {"label": "CAUTION", "score": 74.1, "coverage_pct": 93.5},
+    "results": [{"name": "Company size", "status": "PASS", "value": "$378.93B"}],
+    "terminal": "========================================\\n KO  The Coca-Cola Company  $88.07\\n...",
+}
+BATCH_RESPONSE_EXAMPLE = {
+    "summary": [{"symbol": "KO", "label": "CAUTION", "score": 74.1}],
+    "reports": [VALIDATE_RESPONSE_EXAMPLE],
+    "terminal_summary": "\\n SUMMARY\\n----------------------------------------\\n  KO       CAUTION   74/100\\n",
+    "failures": [],
+}
 
 # What each failure means, and the body that actually comes back with it.
 # ``HTTPException(detail=str)`` serialises as ``{"detail": "..."}``, which is
@@ -133,6 +154,10 @@ def build() -> Dict[str, Any]:
                 example = BATCH_EXAMPLE if path == "/validate/batch" else VALIDATE_EXAMPLE
                 for media in operation["requestBody"].get("content", {}).values():
                     media["example"] = example
+                success = operation.setdefault("responses", {}).setdefault("200", {})
+                success.setdefault("content", {}).setdefault("application/json", {})["example"] = (
+                    BATCH_RESPONSE_EXAMPLE if path == "/validate/batch" else VALIDATE_RESPONSE_EXAMPLE
+                )
                 # FastAPI declares its own 422 for a body that fails parsing;
                 # ours also covers a body that parses and still describes an
                 # ungradeable trade, so the description is widened rather than
@@ -146,6 +171,10 @@ def build() -> Dict[str, Any]:
         [
             {"name": "validation", "description": "Grade a trade, or a list of them."},
             {"name": "reference", "description": "What can be asked for, and whether it is up."},
+            {
+                "name": "mobile",
+                "description": "Structured screens for the trade.sh discovery, preview and validation flow.",
+            },
         ]
     )
     return spec

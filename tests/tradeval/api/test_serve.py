@@ -5,7 +5,9 @@ from __future__ import annotations
 import pytest
 
 from tests.conftest import make_market_data
+from tradeval.api import ValidationRequest, validate
 from tradeval.data.market import DataError
+from tradeval.render.report import Palette, render_summary
 
 fastapi = pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient  # noqa: E402
@@ -21,6 +23,7 @@ def client(monkeypatch):
         return make_market_data(symbol=symbol)
 
     monkeypatch.setattr("tradeval.api.service.MarketData", _fake)
+    monkeypatch.setattr("tradeval.api.mobile.MarketData", _fake)
     return TestClient(serve.app)
 
 
@@ -33,6 +36,43 @@ def test_strategies_lists_the_trade_types(client):
     assert keys == ["earnings", "short", "long"]
 
 
+def test_mobile_bootstrap_exposes_the_script_choices(client):
+    body = client.get("/mobile/bootstrap").json()
+    assert [strategy["key"] for strategy in body["strategies"]] == ["earnings", "short", "long"]
+    assert [instrument["key"] for instrument in body["instruments"]] == [
+        "stock", "options", "call_spread", "put_spread"
+    ]
+    assert body["default_short_horizon"] in body["short_horizons"]
+
+
+def test_mobile_browsers_are_structured_data_not_terminal_lines(client):
+    sectors = client.get("/mobile/sectors").json()["sectors"]
+    assert sectors[0] == {"choice": 1, "name": "Technology", "kind": "sector"}
+
+    calendar = client.get("/mobile/calendar").json()
+    assert {"date", "kind", "at", "why", "days_away"} <= set(calendar["events"][0])
+
+    flow = client.get("/mobile/spending-flows/1").json()
+    assert flow["name"] == "AI Capex"
+    assert {"symbol", "role", "share_per_thousand"} <= set(flow["beneficiaries"][0])
+
+
+def test_mobile_profile_and_preview_match_the_pre_validation_script_flow(client):
+    profile = client.get("/mobile/profiles/TEST")
+    assert profile.status_code == 200
+    assert profile.json()["panel"]["title"] == "STOCK INFO"
+
+    preview = client.post(
+        "/mobile/trades/preview",
+        json={"symbol": "TEST", "strategy": "long", "instrument": "stock"},
+    )
+    assert preview.status_code == 200
+    body = preview.json()
+    assert body["strategy"]["key"] == "long"
+    assert body["profile"]["title"] == "STOCK INFO"
+    assert body["option_panels"] == []
+
+
 def test_validate_grades_a_trade(client):
     response = client.post(
         "/validate", json={"symbol": "TEST", "strategy": "long", "instrument": "stock"}
@@ -42,6 +82,8 @@ def test_validate_grades_a_trade(client):
     assert body["symbol"] == "TEST"
     assert body["verdict"]["label"] in ("GO", "CAUTION", "NO-GO")
     assert body["results"]
+    assert body["terminal"].startswith("=")
+    assert "TEST" in body["terminal"]
 
 
 def test_a_bare_body_is_enough(client):
@@ -105,6 +147,15 @@ def test_batch_reports_failures_beside_successes(client):
     # One bad symbol must not cost the caller the other two.
     assert [row["symbol"] for row in body["summary"]] == ["AAA", "BBB"]
     assert [f["symbol"] for f in body["failures"]] == ["NOPE"]
+    expected = render_summary(
+        [
+            validate(ValidationRequest(symbol="AAA", strategy="long", instrument="stock")),
+            validate(ValidationRequest(symbol="BBB", strategy="long", instrument="stock")),
+        ],
+        Palette(enabled=False),
+        width=100,
+    )
+    assert body["terminal_summary"] == expected
 
 
 def test_a_request_does_not_leak_into_the_next(client):
@@ -129,3 +180,29 @@ def test_the_schema_is_published(client):
     # schema cannot drift from what /validate will accept.
     properties = schema["components"]["schemas"][ref]["properties"]
     assert {"symbol", "strategy", "instrument", "stop", "account"} <= set(properties)
+
+
+def test_reference_endpoints_publish_named_response_fields(client):
+    schema = client.get("/openapi.json").json()
+    responses = schema["components"]["schemas"]
+
+    health = schema["paths"]["/health"]["get"]["responses"]["200"]
+    health_ref = health["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+    assert set(responses[health_ref]["properties"]) == {"status"}
+
+    strategies = schema["paths"]["/strategies"]["get"]["responses"]["200"]
+    item_ref = strategies["content"]["application/json"]["schema"]["items"]["$ref"].rsplit("/", 1)[-1]
+    assert set(responses[item_ref]["properties"]) == {"key", "name", "description"}
+
+
+def test_mobile_endpoints_are_published_with_response_models(client):
+    schema = client.get("/openapi.json").json()
+    assert "/mobile/bootstrap" in schema["paths"]
+    assert "/mobile/trades/preview" in schema["paths"]
+    bootstrap_ref = (
+        schema["paths"]["/mobile/bootstrap"]["get"]["responses"]["200"]
+        ["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
+    )
+    assert {"strategies", "instruments", "option_sides", "short_horizons", "default_short_horizon"} == set(
+        schema["components"]["schemas"][bootstrap_ref]["properties"]
+    )

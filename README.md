@@ -1957,9 +1957,41 @@ curl -s localhost:8000/validate -H 'content-type: application/json' \
 |---|---|---|
 | `POST` | `/validate` | grade one trade |
 | `POST` | `/validate/batch` | grade a list, with a summary row per name |
+| `GET` | `/mobile/bootstrap` | choices needed to start a mobile trade flow |
+| `GET` | `/mobile/market/snapshot`, `/mobile/calendar` | the tape and scheduled macro risk |
+| `GET` | `/mobile/sectors`, `/mobile/earnings/candidates`, `/mobile/spending-flows` | the script's idea browsers, as structured data |
+| `GET` | `/mobile/profiles/{symbol}` | the company profile shown before trade sizing |
+| `POST` | `/mobile/trades/preview` | profile and option ladder before the final validation |
+| `GET` | `/mobile/event-markets/search`; `POST /mobile/event-contracts/validate` | find and grade a Kalshi event contract |
 | `GET` | `/strategies` | the three trade types, and what each is for |
 | `GET` | `/health` | |
 | `GET` | `/docs` | the generated schema, browsable |
+
+### Building a mobile trade flow
+
+`trade.sh` is not one action. It first shows the tape and macro calendar, lets
+you find an idea, shows the company and the option ladder, and only then asks
+for the final terms. The `/mobile` endpoints expose that exact flow as data:
+
+1. Load `/mobile/bootstrap`, `/mobile/market/snapshot` and `/mobile/calendar`.
+2. Find a symbol through `/mobile/sectors`, `/mobile/earnings/candidates`,
+   `/mobile/spending-flows`, or `/mobile/event-markets/search`.
+3. Put `/mobile/profiles/{symbol}` on the profile screen. For an equity trade,
+   post the draft `ValidationRequest` to `/mobile/trades/preview`; it returns
+   the profile and option panels that the script shows before its sizing
+   questions.
+4. Submit the selected terms to `/validate` (or a list to `/validate/batch`).
+   Binary Kalshi contracts use `/mobile/event-contracts/validate` instead.
+
+The responses are structured fields and grids, not terminal lines. `terminal`
+on a completed validation remains available when a client wants the familiar
+text answer, but a mobile UI should render `results`, `verdict`, profiles and
+option panels itself.
+
+Saved stocks and tracked Kalshi contracts are not exposed over HTTP yet. In
+the script they belong to one local Postgres user; a mobile deployment needs
+authentication and user-scoped storage before those write endpoints can be
+safe.
 
 ### The request
 
@@ -2027,7 +2059,8 @@ confidently.
     }
   ],
   "position": { "shares": null, "size": null },
-  "panels": [ ... ]
+  "panels": [ ... ],
+  "terminal": "================================================================..."
 }
 ```
 
@@ -2044,6 +2077,18 @@ you intend to compute on should come off `results`, `verdict` or the top-level
 fields, which are values. Moving the formatting out of the strategies and into
 `render/` is what would turn panels into data; until that happens, this is an
 honest description of them rather than a promise.
+
+**`terminal` is the answer `trade.sh` would print.** It is rendered by the
+same function, at the normal non-interactive width (100 columns) and with
+colour disabled, so it is safe to put in JSON, a log or a web page. It is an
+addition rather than a replacement: use `results`, `verdict` and the top-level
+values to compute; use `terminal` when a reader should see the exact checklist
+they would have got in the terminal.
+
+For `/validate/batch`, each item in `reports` carries its own `terminal` and
+`terminal_summary` is the final `SUMMARY` table that `trade.sh` prints after
+two or more successful reports. It is an empty string for zero or one report,
+just as it is on the command line.
 
 ### When it says no
 
@@ -2080,10 +2125,11 @@ document straight from `serve:app` — no port, no network, nothing fetched:
 .venv/bin/python scripts/swagger.py --check openapi.json # has it drifted?
 ```
 
-It adds the two things the generated schema is poorer for missing: the example
-bodies documented above, and the failures. `serve.py` raises its 404s and 422s
-by hand as `{"detail": "..."}`, which is not the shape FastAPI's own parse
-failure returns, so 422 is declared as either of the two.
+It adds the things the generated schema is poorer for missing: the request and
+response examples documented above (including `terminal`), and the failures.
+`serve.py` raises its 404s and 422s by hand as `{"detail": "..."}`, which is
+not the shape FastAPI's own parse failure returns, so 422 is declared as either
+of the two.
 
 The examples are checked against `ValidationRequest`'s own fields on the way
 out. Renaming a field breaks the script rather than leaving a body in the docs

@@ -21,11 +21,27 @@ import os
 from typing import Any, Dict, List
 
 from fastapi import Body, FastAPI, HTTPException
-from pydantic import ValidationError as PydanticError
+from pydantic import BaseModel, Field, ValidationError as PydanticError
 
 from tradeval.api import ValidationError, ValidationRequest, report_to_dict, summary_to_dict, validate
+from tradeval.api.mobile import create_mobile_router
 from tradeval.config import Config
 from tradeval.data.market import DataError
+from tradeval.render.report import Palette, render_summary
+
+class HealthResponse(BaseModel):
+    """The service is reachable and ready to accept a request."""
+
+    status: str = Field(description="Always `ok` while the service is healthy.")
+
+
+class StrategyResponse(BaseModel):
+    """One trade type the checklist can grade."""
+
+    key: str = Field(description="The value accepted by `strategy` in a validation request.")
+    name: str = Field(description="The reader-facing name used by trade.sh.")
+    description: str = Field(description="What this trade type is intended for.")
+
 
 app = FastAPI(
     title="tradeval",
@@ -46,26 +62,31 @@ def load_config() -> Config:
 
 CONFIG = load_config()
 
+# The mobile flow reads the same configured thresholds as validation does. The
+# service layer copies it for every trade, so a preview cannot alter the next
+# request's terms.
+app.include_router(create_mobile_router(CONFIG))
 
-@app.get("/health")
-def health() -> Dict[str, str]:
-    return {"status": "ok"}
+
+@app.get("/health", response_model=HealthResponse)
+def health() -> HealthResponse:
+    return HealthResponse(status="ok")
 
 
-@app.get("/strategies")
-def strategies() -> List[Dict[str, str]]:
+@app.get("/strategies", response_model=List[StrategyResponse])
+def strategies() -> List[StrategyResponse]:
     """The trade types on offer, and what each one is for."""
     from tradeval.strategies import STRATEGIES
 
     return [
-        {"key": key, "name": cls.name, "description": cls.description}
+        StrategyResponse(key=key, name=cls.name, description=cls.description)
         for key, cls in STRATEGIES.items()
     ]
 
 
 @app.post("/validate")
 def validate_one(request: ValidationRequest) -> Dict[str, Any]:
-    """Grade one trade."""
+    """Grade one trade, with structured data and its trade.sh-style answer."""
     return report_to_dict(_run(request))
 
 
@@ -88,6 +109,9 @@ def validate_many(
     return {
         "summary": summary_to_dict(reports),
         "reports": [report_to_dict(report) for report in reports],
+        # The CLI prints this after the individual reports. It is empty for
+        # zero or one successful report, exactly as ``render_summary`` is.
+        "terminal_summary": render_summary(reports, Palette(enabled=False), width=100),
         "failures": failures,
     }
 
