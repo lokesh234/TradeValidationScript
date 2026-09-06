@@ -4,6 +4,14 @@ __pycache__/
 .DS_Store
 .pytest_cache/
 
+# Kept out of this public repo.
+# The front end lives in its own private repository, checked out alongside
+# this one; the rule stays as a backstop against a stray copy landing here.
+web/
+# Generated from the running app; regenerate rather than commit:
+#   .venv/bin/python scripts/swagger.py --ui swagger.html
+swagger.html
+
 # --- secrets: never commit any of this -------------------------------------
 # Credentials belong in ~/.config/tradeval/reddit.json, outside this tree.
 # These patterns are a backstop for when one lands here by accident.
