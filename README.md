@@ -2296,6 +2296,52 @@ second with `InvokedViaFunctionUrl` so that "public" means public over the URL
 rather than every AWS account on earth being able to invoke the function
 directly.
 
+#### On a name of your own
+
+`deploy/domain.sh` puts the service behind a domain you control:
+
+```bash
+deploy/domain.sh                 # after the domain is registered
+```
+
+A Function URL cannot answer on your own name by itself -- the hostname is
+assigned by AWS and there is no setting to change it. Something has to sit in
+front and hold the certificate, and CloudFront is the option that costs nothing
+at this size: the always-free tier is 1TB of transfer and ten million requests
+a month, against an API that answers in 18KB. API Gateway, the alternative,
+bills $1 per million requests and would put back the 29-second response ceiling
+a Function URL was chosen to avoid. The certificate is free and renews itself.
+Nothing here changes the monthly bill.
+
+The script requests the certificate, creates the distribution, points the name
+at it and checks the whole path end to end. It writes DNS records itself if the
+domain is in Route 53, and prints them for you to paste if it is anywhere else
+-- which is also the arrangement that avoids $0.50/month for a hosted zone you
+would use twice. Either way it is safe to re-run: it stops at each record that
+has to be added by hand, and picks up from there next time.
+
+Two settings in the distribution are load-bearing, and both are easier to
+diagnose before they bite than after:
+
+`AllViewerExceptHostHeader` forwards `x-tradeval-key` to the origin.
+CloudFront drops most headers by default, and without this policy every request
+through the domain returns 401 while the raw Function URL keeps working
+perfectly -- which reads as a broken key rather than a missing header. It
+leaves `Host` alone, so the Function URL still sees the hostname it routes on.
+
+`CachingDisabled`, because the answers are live market data and half the
+endpoints are POSTs. A cache here would hand back yesterday's tape.
+
+One error worth naming: CloudFront's view of ACM lags issuance by a minute or
+two, and refuses a brand-new certificate with `InvalidViewerCertificate` --
+"doesn't exist, isn't in us-east-1, isn't valid" -- while all three are fine.
+The script retries rather than sending you off to check them.
+
+The Function URL stays reachable directly; CloudFront sits in front of it
+rather than hiding it. Both ends are behind the same key. To close the direct
+route, switch the URL to `--auth-type AWS_IAM` and give the distribution an
+origin access control to sign with, which costs nothing.
+
 #### What it costs to answer
 
 A cold start is about 1.5 seconds of import -- pandas, numpy and lxml -- and a
