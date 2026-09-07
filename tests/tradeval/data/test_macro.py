@@ -196,3 +196,54 @@ def test_running_out_ignores_the_derived_dates():
 def test_within_sees_a_rebalance_a_short_trade_would_span():
     kinds = [e.kind for e in macro.within(40, dt.date(2026, 8, 14))]
     assert macro.REBAL in kinds
+
+
+def _listing(ticker, strike_date=None):
+    return {"event_ticker": ticker, "strike_date": strike_date, "title": ticker}
+
+
+def test_market_event_matches_a_meeting_on_its_own_date():
+    fomc = macro.MacroEvent(dt.date(2026, 9, 16), macro.FOMC)
+    listings = [_listing("KXFED-26OCT", "2026-10-28T18:00:00Z"),
+                _listing("KXFED-26SEP", "2026-09-16T18:00:00Z")]
+    assert macro.market_event(fomc, listings)["event_ticker"] == "KXFED-26SEP"
+
+
+def test_market_event_reads_cpi_as_the_month_it_reports_on():
+    # September's release is August's inflation, so the ticker says August.
+    cpi = macro.MacroEvent(dt.date(2026, 9, 11), macro.CPI)
+    listings = [_listing("KXCPI-26SEP"), _listing("KXCPI-26AUG"), _listing("KXCPI-26OCT")]
+    assert macro.market_event(cpi, listings)["event_ticker"] == "KXCPI-26AUG"
+
+
+def test_market_event_rolls_the_year_back_over_january():
+    cpi = macro.MacroEvent(dt.date(2027, 1, 13), macro.CPI)
+    listings = [_listing("KXCPI-27JAN"), _listing("KXCPI-26DEC")]
+    assert macro.market_event(cpi, listings)["event_ticker"] == "KXCPI-26DEC"
+
+
+def test_market_event_matches_ppi_on_the_release_date_in_its_ticker():
+    ppi = macro.MacroEvent(dt.date(2026, 9, 10), macro.PPI)
+    listings = [_listing("KXUSPPI-26SEP10"), _listing("KXUSPPI-26OCT14")]
+    assert macro.market_event(ppi, listings)["event_ticker"] == "KXUSPPI-26SEP10"
+
+
+def test_market_event_is_none_when_the_exchange_has_not_listed_it_yet():
+    ppi = macro.MacroEvent(dt.date(2026, 10, 14), macro.PPI)
+    assert macro.market_event(ppi, [_listing("KXUSPPI-26SEP10")]) is None
+
+
+def test_market_event_is_none_for_a_date_nobody_bets_on():
+    for kind in (macro.REBAL, macro.OPEX):
+        event = macro.MacroEvent(dt.date(2026, 9, 18), kind)
+        assert macro.market_event(event, [_listing("KXCPI-26AUG")]) is None
+        assert kind not in macro.MARKET_SERIES
+
+
+def test_market_event_ignores_a_ticker_it_cannot_read():
+    cpi = macro.MacroEvent(dt.date(2026, 9, 11), macro.CPI)
+    assert macro.market_event(cpi, [_listing("KXCPI"), _listing("KXCPI-26ZZZ")]) is None
+
+
+def test_every_forecastable_kind_has_a_unit():
+    assert set(macro.MARKET_SERIES) <= set(macro.MARKET_UNITS)

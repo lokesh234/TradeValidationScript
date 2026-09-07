@@ -33,6 +33,7 @@ API = "https://api.elections.kalshi.com"
 SEARCH_URL = API + "/v1/search/series"
 MARKET_URL = API + "/trade-api/v2/markets/%s"
 MARKETS_URL = API + "/trade-api/v2/markets"
+EVENTS_URL = API + "/trade-api/v2/events"
 
 USER_AGENT = "tradeval/1.0 (event contract checklist; read-only)"
 
@@ -379,3 +380,137 @@ def siblings(event_ticker: str, limit: int = 12, timeout: float = 8.0) -> List[E
     except HttpError:
         return []
     return [_market_from_v2(raw) for raw in (payload or {}).get("markets") or []]
+
+
+# --- What the market expects a number to be ---------------------------------
+#
+# A release like CPI is listed as a ladder: one contract per threshold, each
+# paying out if the print lands above it. Read across the ladder and the prices
+# are a cumulative distribution -- P(above 0.2%) = 88c, P(above 0.3%) = 58c --
+# and the gap between two rungs is the chance the number lands between them.
+#
+# That is a forecast with money behind it, which is a different thing from a
+# survey of analysts and, for deciding whether to hold a position through the
+# print, a more useful one: it is live, and it is a distribution rather than a
+# single number.
+
+
+@dataclass(frozen=True)
+class Rung:
+    """One threshold on the ladder, and the market's odds of clearing it."""
+
+    strike: float
+    probability: float          # 0-1, that the print comes in above `strike`
+    volume: Optional[float]
+    label: str
+
+
+@dataclass
+class Expectation:
+    """A whole ladder, read as what the market thinks the number will be."""
+
+    event_ticker: str
+    title: str
+    rungs: List[Rung] = field(default_factory=list)
+    median: Optional[float] = None
+    volume: float = 0.0
+    # True when prices implied P(above a higher strike) > P(above a lower one,
+    # which cannot happen and means the quotes are noise rather than a view.
+    smoothed: bool = False
+
+    @property
+    def buckets(self) -> List[Dict[str, Any]]:
+        """The chance of landing between each pair of rungs."""
+        out: List[Dict[str, Any]] = []
+        for lower, upper in zip(self.rungs, self.rungs[1:]):
+            out.append({
+                "from": lower.strike,
+                "to": upper.strike,
+                "probability": max(0.0, lower.probability - upper.probability),
+            })
+        return out
+
+
+def _ladder_price(raw: Dict[str, Any]) -> Optional[float]:
+    """The market's odds for one rung, as a fraction.
+
+    The mid of the book when there are two sides to it, and the last trade
+    when there is not -- a rung nobody is quoting still knows what it went for.
+    """
+    bid = _first_cents(raw, "yes_bid", "yes_bid_dollars")
+    ask = _first_cents(raw, "yes_ask", "yes_ask_dollars")
+    if bid is not None and ask is not None and 0 < ask < 100:
+        return (bid + ask) / 200.0
+    last = _first_cents(raw, "last_price", "last_price_dollars")
+    return None if last is None else last / 100.0
+
+
+def expectation(event_ticker: str, timeout: float = 8.0) -> Expectation:
+    """Read one event's ladder as a distribution over the coming number."""
+    try:
+        with _client(timeout) as http:
+            payload = http.get_json(MARKETS_URL, params={
+                "event_ticker": event_ticker, "limit": 200, "status": "open",
+            })
+    except HttpError as exc:
+        raise KalshiError("Kalshi ladder failed: %s" % exc) from exc
+
+    markets = (payload or {}).get("markets") or []
+    title = ""
+    raw_rungs: List[Rung] = []
+    for raw in markets:
+        title = title or str(raw.get("title") or "")
+        strike = _number(raw.get("floor_strike"))
+        price = _ladder_price(raw)
+        if strike is None or price is None:
+            continue
+        raw_rungs.append(Rung(
+            strike=strike,
+            probability=price,
+            volume=_first_number(raw, "volume", "volume_fp"),
+            label=str(raw.get("yes_sub_title") or raw.get("subtitle") or ""),
+        ))
+
+    raw_rungs.sort(key=lambda rung: rung.strike)
+    # P(above X) can only fall as X rises. Where the quotes say otherwise the
+    # book is thin rather than the market confused, so the curve is pulled back
+    # to the highest odds that are still consistent with every rung below it.
+    rungs: List[Rung] = []
+    smoothed = False
+    ceiling = 1.0
+    for rung in raw_rungs:
+        capped = min(rung.probability, ceiling)
+        if capped < rung.probability - 1e-9:
+            smoothed = True
+        ceiling = capped
+        rungs.append(Rung(rung.strike, capped, rung.volume, rung.label))
+
+    return Expectation(
+        event_ticker=event_ticker,
+        title=title,
+        rungs=rungs,
+        median=_median(rungs),
+        volume=sum(rung.volume or 0.0 for rung in rungs),
+        smoothed=smoothed,
+    )
+
+
+def _median(rungs: Sequence[Rung]) -> Optional[float]:
+    """Where the ladder crosses even odds, straight-lined between two rungs."""
+    for lower, upper in zip(rungs, rungs[1:]):
+        if lower.probability >= 0.5 >= upper.probability and lower.probability != upper.probability:
+            span = (lower.probability - 0.5) / (lower.probability - upper.probability)
+            return lower.strike + span * (upper.strike - lower.strike)
+    return None
+
+
+def open_events(series_ticker: str, timeout: float = 8.0) -> List[Dict[str, Any]]:
+    """Everything still open on one series, newest first as the exchange has it."""
+    try:
+        with _client(timeout) as http:
+            payload = http.get_json(EVENTS_URL, params={
+                "series_ticker": series_ticker, "status": "open", "limit": 50,
+            })
+    except HttpError as exc:
+        raise KalshiError("Kalshi events failed: %s" % exc) from exc
+    return list((payload or {}).get("events") or [])

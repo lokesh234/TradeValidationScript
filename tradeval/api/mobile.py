@@ -80,6 +80,38 @@ class CalendarEventResponse(BaseModel):
     at: str
     why: str
     days_away: int
+    # Whether anyone takes bets on the number. Answered from a table rather than
+    # by asking the exchange, so the calendar stays one local call.
+    forecastable: bool = False
+
+
+class RungResponse(BaseModel):
+    strike: float
+    probability: float
+    label: str
+    volume: Optional[float] = None
+
+
+class BucketResponse(BaseModel):
+    from_: float = Field(alias="from")
+    to: float
+    probability: float
+
+    model_config = {"populate_by_name": True}
+
+
+class ExpectationResponse(BaseModel):
+    kind: str
+    date: dt.date
+    listed: bool
+    event_ticker: Optional[str] = None
+    title: Optional[str] = None
+    median: Optional[float] = None
+    unit: Optional[str] = None
+    volume: float = 0.0
+    smoothed: bool = False
+    rungs: List[RungResponse] = []
+    buckets: List[BucketResponse] = []
 
 
 class CalendarResponse(BaseModel):
@@ -380,6 +412,48 @@ def create_mobile_router(config: Config) -> APIRouter:
             ]
         )
 
+    @router.get("/calendar/expectation", response_model=ExpectationResponse)
+    def calendar_expectation(
+        kind: str = Query(min_length=2, max_length=12),
+        date: dt.date = Query(),
+    ) -> ExpectationResponse:
+        """What the betting says a scheduled number will come in at.
+
+        Not every date has a market: the exchange lists a release a few weeks
+        out, so a print in two months is simply not up yet. That is answered
+        with listed=false rather than an error, because nothing is wrong.
+        """
+        kind = kind.upper()
+        if kind not in macro.MARKET_SERIES:
+            raise HTTPException(status_code=422, detail="No market covers %s." % kind)
+        series, _ = macro.MARKET_SERIES[kind]
+        empty = ExpectationResponse(kind=kind, date=date, listed=False, unit=macro.MARKET_UNITS.get(kind))
+        try:
+            listings = kalshi.open_events(series)
+            match = macro.market_event(macro.MacroEvent(date, kind), listings)
+            if not match:
+                return empty
+            found = kalshi.expectation(str(match.get("event_ticker")))
+        except kalshi.KalshiError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not found.rungs:
+            return empty
+        return ExpectationResponse(
+            kind=kind,
+            date=date,
+            listed=True,
+            event_ticker=found.event_ticker,
+            title=str(match.get("title") or found.title),
+            median=found.median,
+            unit=macro.MARKET_UNITS.get(kind),
+            volume=found.volume,
+            smoothed=found.smoothed,
+            rungs=[RungResponse(strike=r.strike, probability=r.probability, label=r.label, volume=r.volume)
+                   for r in found.rungs],
+            buckets=[BucketResponse(**{"from": b["from"], "to": b["to"], "probability": b["probability"]})
+                     for b in found.buckets],
+        )
+
     @router.get("/calendar", response_model=CalendarResponse)
     def calendar(limit: int = Query(default=12, ge=1, le=50)) -> CalendarResponse:
         today = dt.date.today()
@@ -393,6 +467,7 @@ def create_mobile_router(config: Config) -> APIRouter:
                     at=event.at,
                     why=event.why,
                     days_away=event.days_away(today),
+                    forecastable=event.kind in macro.MARKET_SERIES,
                 )
                 for event in macro.upcoming(today, limit)
             ],

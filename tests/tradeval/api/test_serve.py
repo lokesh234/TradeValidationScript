@@ -243,3 +243,53 @@ def test_spending_growth_returns_percentages_dates_and_partial_results(client, m
         assert client.get("/mobile/spending-flows/not-a-flow/growth").status_code == 422
     finally:
         mobile._company_growth.cache_clear()
+
+
+def test_calendar_marks_which_dates_have_a_market(client):
+    events = client.get("/mobile/calendar?limit=12").json()["events"]
+    by_kind = {e["kind"]: e["forecastable"] for e in events}
+    # A print somebody can bet on, against two dates that are not numbers at all.
+    assert by_kind.get("CPI") is not False
+    for quiet in ("REBAL", "OPEX"):
+        if quiet in by_kind:
+            assert by_kind[quiet] is False
+
+
+def test_calendar_expectation_reads_the_ladder(client, monkeypatch):
+    from tradeval.api import mobile
+    monkeypatch.setattr(mobile.kalshi, "open_events",
+                        lambda series, **kw: [{"event_ticker": "KXCPI-26AUG", "title": "CPI in August"}])
+    monkeypatch.setattr(mobile.kalshi, "expectation", lambda ticker, **kw: mobile.kalshi.Expectation(
+        event_ticker=ticker, title="CPI in August", median=0.32, volume=1000.0, smoothed=True,
+        rungs=[mobile.kalshi.Rung(0.2, 0.88, 10.0, "Above 0.2"), mobile.kalshi.Rung(0.3, 0.58, 20.0, "Above 0.3")],
+    ))
+    body = client.get("/mobile/calendar/expectation?kind=cpi&date=2026-09-11").json()
+    assert body["listed"] is True
+    assert body["event_ticker"] == "KXCPI-26AUG"
+    assert body["median"] == 0.32
+    assert body["unit"] == "%"
+    assert body["smoothed"] is True
+    assert [r["strike"] for r in body["rungs"]] == [0.2, 0.3]
+    # The gap between two rungs is the chance of landing in it.
+    assert body["buckets"][0]["from"] == 0.2
+    assert body["buckets"][0]["probability"] == pytest.approx(0.30)
+
+
+def test_calendar_expectation_says_so_when_nothing_is_listed(client, monkeypatch):
+    from tradeval.api import mobile
+    monkeypatch.setattr(mobile.kalshi, "open_events", lambda series, **kw: [])
+    body = client.get("/mobile/calendar/expectation?kind=PPI&date=2026-10-14").json()
+    # Not an error: the exchange lists a release a few weeks out, no sooner.
+    assert body["listed"] is False and body["rungs"] == []
+
+
+def test_calendar_expectation_refuses_a_kind_nobody_bets_on(client):
+    assert client.get("/mobile/calendar/expectation?kind=REBAL&date=2026-09-18").status_code == 422
+
+
+def test_calendar_expectation_surfaces_an_exchange_outage(client, monkeypatch):
+    from tradeval.api import mobile
+    def down(series, **kw):
+        raise mobile.kalshi.KalshiError("Kalshi unreachable")
+    monkeypatch.setattr(mobile.kalshi, "open_events", down)
+    assert client.get("/mobile/calendar/expectation?kind=CPI&date=2026-09-11").status_code == 503

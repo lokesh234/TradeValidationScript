@@ -324,3 +324,79 @@ def test_every_client_shares_the_exchange_s_pace():
     assert first.limiter is second.limiter is for_provider("kalshi")
     first.close()
     second.close()
+
+
+def _rung(strike, bid, ask, volume=100.0, last=None):
+    return {
+        "floor_strike": strike,
+        "yes_bid_dollars": bid,
+        "yes_ask_dollars": ask,
+        "last_price_dollars": last,
+        "volume_fp": volume,
+        "yes_sub_title": "Above %s" % strike,
+        "title": "Will it be above %s?" % strike,
+    }
+
+
+# The shape a real CPI ladder comes back in: odds falling as the bar rises.
+CPI_LADDER = {"markets": [
+    _rung(0.2, "0.88", "0.89"),
+    _rung(0.3, "0.57", "0.59"),
+    _rung(0.4, "0.13", "0.14"),
+    _rung(0.5, "0.07", "0.08"),
+]}
+
+
+def test_expectation_reads_the_ladder_as_falling_odds(monkeypatch):
+    _patch_json(monkeypatch, CPI_LADDER)
+    found = kalshi.expectation("KXCPI-26AUG")
+    assert [r.strike for r in found.rungs] == [0.2, 0.3, 0.4, 0.5]
+    assert found.rungs[0].probability == pytest.approx(0.885)
+    assert not found.smoothed
+
+
+def test_expectation_finds_the_median_between_two_rungs(monkeypatch):
+    _patch_json(monkeypatch, CPI_LADDER)
+    found = kalshi.expectation("KXCPI-26AUG")
+    # 58% above 0.3 and 13.5% above 0.4, so even odds sit a tenth of the way up.
+    assert found.median == pytest.approx(0.3 + (0.58 - 0.5) / (0.58 - 0.135) * 0.1)
+    assert 0.3 < found.median < 0.4
+
+
+def test_expectation_buckets_the_gaps_between_rungs(monkeypatch):
+    _patch_json(monkeypatch, CPI_LADDER)
+    buckets = kalshi.expectation("KXCPI-26AUG").buckets
+    assert [b["from"] for b in buckets] == [0.2, 0.3, 0.4]
+    assert buckets[1]["probability"] == pytest.approx(0.58 - 0.135)
+
+
+def test_expectation_pulls_a_thin_ladder_back_into_shape(monkeypatch):
+    # A higher bar priced above a lower one cannot happen; in a thin book it
+    # does, and it must not be shown as a negative chance of landing between.
+    _patch_json(monkeypatch, {"markets": [
+        _rung(50000, "0.53", "0.54"),
+        _rung(60000, "0.54", "0.55"),
+        _rung(70000, "0.39", "0.41"),
+    ]})
+    found = kalshi.expectation("KXPAYROLLS-26SEP")
+    assert found.smoothed
+    assert [r.probability for r in found.rungs] == sorted((r.probability for r in found.rungs), reverse=True)
+    assert all(b["probability"] >= 0 for b in found.buckets)
+
+
+def test_expectation_falls_back_to_the_last_trade_when_nobody_is_quoting(monkeypatch):
+    _patch_json(monkeypatch, {"markets": [
+        {"floor_strike": 3.5, "yes_bid_dollars": None, "yes_ask_dollars": None, "last_price_dollars": "0.62"},
+    ]})
+    assert kalshi.expectation("KXFED-26SEP").rungs[0].probability == pytest.approx(0.62)
+
+
+def test_expectation_survives_a_ladder_with_no_prices(monkeypatch):
+    _patch_json(monkeypatch, {"markets": [{"floor_strike": 1.0}]})
+    found = kalshi.expectation("KXNOTHING")
+    assert found.rungs == [] and found.median is None
+
+
+def test_expectation_has_no_median_when_the_ladder_never_crosses_even(monkeypatch):
+    _patch_json(monkeypatch, {"markets": [_rung(0.1, "0.97", "0.98"), _rung(0.2, "0.95", "0.96")]})
+    assert kalshi.expectation("KXCPI-26AUG").median is None

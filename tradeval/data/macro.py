@@ -29,8 +29,9 @@ the written-down table has run dry, since they go on for ever.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # When this table was last written from the published schedules. Anything
 # past the last entry is simply unknown, not "nothing scheduled".
@@ -226,3 +227,84 @@ def format_lines(
             )
         )
     return lines
+
+
+# --- What the market expects, for the releases somebody bets on --------------
+#
+# Kalshi lists a ladder of contracts on the number a release will print, which
+# is a forecast with money behind it. Matching one of our dates to one of their
+# events is the whole difficulty, because the ticker means something different
+# per series:
+#
+#   KXFED-26SEP        carries the meeting's own timestamp, so match on that
+#   KXCPI-26AUG        is the month being measured -- August's CPI prints in
+#                      September, so the suffix is the month before the release
+#   KXPAYROLLS-26SEP   the same: September's jobs are counted in October
+#   KXUSPPI-26SEP10    is the release date itself, day and all
+#
+# No rule covers all four, so each says which it uses rather than one guess
+# being applied to everything and quietly matching the wrong month.
+BY_MEETING = "meeting"      # the event's strike_date is the release date
+BY_PRIOR_MONTH = "prior"    # the suffix is the month the release reports on
+BY_RELEASE_DATE = "release" # the suffix is the release date
+
+MARKET_SERIES: Dict[str, Tuple[str, str]] = {
+    FOMC: ("KXFED", BY_MEETING),
+    CPI: ("KXCPI", BY_PRIOR_MONTH),
+    NFP: ("KXPAYROLLS", BY_PRIOR_MONTH),
+    PPI: ("KXUSPPI", BY_RELEASE_DATE),
+}
+
+MARKET_UNITS: Dict[str, str] = {
+    FOMC: "%",
+    CPI: "%",
+    PPI: "%",
+    NFP: " jobs",
+}
+
+_MONTHS = {
+    "JAN": 1, "FEB": 2, "MAR": 3, "APR": 4, "MAY": 5, "JUN": 6,
+    "JUL": 7, "AUG": 8, "SEP": 9, "OCT": 10, "NOV": 11, "DEC": 12,
+}
+_SUFFIX = re.compile(r"-(\d{2})([A-Z]{3})(\d{2})?$")
+
+
+def _suffix(ticker: str) -> Optional[Tuple[int, int, Optional[int]]]:
+    """The year, month and any day encoded in an event ticker."""
+    match = _SUFFIX.search(str(ticker or "").upper())
+    if not match:
+        return None
+    year, month, day = match.groups()
+    if month not in _MONTHS:
+        return None
+    return 2000 + int(year), _MONTHS[month], int(day) if day else None
+
+
+def _prior_month(date: dt.date) -> Tuple[int, int]:
+    return (date.year - 1, 12) if date.month == 1 else (date.year, date.month - 1)
+
+
+def market_event(event: MacroEvent, events: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The exchange's event for one of ours, or None if they do not list it."""
+    listing = MARKET_SERIES.get(event.kind)
+    if not listing:
+        return None
+    _, rule = listing
+    for candidate in events:
+        ticker = candidate.get("event_ticker")
+        if rule == BY_MEETING:
+            strike = str(candidate.get("strike_date") or "")[:10]
+            if strike and strike == event.date.isoformat():
+                return candidate
+            continue
+        parts = _suffix(ticker)
+        if not parts:
+            continue
+        year, month, day = parts
+        if rule == BY_RELEASE_DATE:
+            if day and (year, month, day) == (event.date.year, event.date.month, event.date.day):
+                return candidate
+        elif rule == BY_PRIOR_MONTH and day is None:
+            if (year, month) == _prior_month(event.date):
+                return candidate
+    return None
