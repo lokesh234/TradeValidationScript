@@ -403,6 +403,7 @@ class Rung:
     probability: float          # 0-1, that the print comes in above `strike`
     volume: Optional[float]
     label: str
+    spread: Optional[float] = None   # how far apart the two sides are quoted
 
 
 @dataclass
@@ -414,6 +415,10 @@ class Expectation:
     rungs: List[Rung] = field(default_factory=list)
     median: Optional[float] = None
     volume: float = 0.0
+    # How wide the book is, averaged over the rungs that have two sides. A
+    # median read off quotes a fifth of a dollar apart is a guess between them,
+    # not a price, and should not be shown as firmly as a tight one.
+    spread: Optional[float] = None
     # True when prices implied P(above a higher strike) > P(above a lower one,
     # which cannot happen and means the quotes are noise rather than a view.
     smoothed: bool = False
@@ -431,6 +436,15 @@ class Expectation:
         return out
 
 
+def _ladder_spread(raw: Dict[str, Any]) -> Optional[float]:
+    """How far apart the two sides are, as a fraction, when both are quoted."""
+    bid = _first_cents(raw, "yes_bid", "yes_bid_dollars")
+    ask = _first_cents(raw, "yes_ask", "yes_ask_dollars")
+    if bid is None or ask is None or ask <= 0 or (bid <= 0 and ask >= 100):
+        return None
+    return max(0.0, (ask - bid) / 100.0)
+
+
 def _ladder_price(raw: Dict[str, Any]) -> Optional[float]:
     """The market's odds for one rung, as a fraction.
 
@@ -439,10 +453,17 @@ def _ladder_price(raw: Dict[str, Any]) -> Optional[float]:
     """
     bid = _first_cents(raw, "yes_bid", "yes_bid_dollars")
     ask = _first_cents(raw, "yes_ask", "yes_ask_dollars")
-    if bid is not None and ask is not None and 0 < ask < 100:
+    if bid is not None and ask is not None and ask > 0 and not (bid <= 0 and ask >= 100):
+        # An ask of a whole dollar is a real quote -- nobody will sell a
+        # near-certain outcome for less -- so it counts. What does not is a
+        # book quoted 0 to 100, which is the absence of a market rather than a
+        # coin flip, and averaging it would invent a 50% nobody is offering.
         return (bid + ask) / 200.0
     last = _first_cents(raw, "last_price", "last_price_dollars")
-    return None if last is None else last / 100.0
+    if last is None or last <= 0:
+        # Never traded and nothing quoted: no view to report, rather than 0%.
+        return None
+    return last / 100.0
 
 
 def expectation(event_ticker: str, timeout: float = 8.0) -> Expectation:
@@ -469,6 +490,7 @@ def expectation(event_ticker: str, timeout: float = 8.0) -> Expectation:
             probability=price,
             volume=_first_number(raw, "volume", "volume_fp"),
             label=str(raw.get("yes_sub_title") or raw.get("subtitle") or ""),
+            spread=_ladder_spread(raw),
         ))
 
     raw_rungs.sort(key=lambda rung: rung.strike)
@@ -483,7 +505,7 @@ def expectation(event_ticker: str, timeout: float = 8.0) -> Expectation:
         if capped < rung.probability - 1e-9:
             smoothed = True
         ceiling = capped
-        rungs.append(Rung(rung.strike, capped, rung.volume, rung.label))
+        rungs.append(Rung(rung.strike, capped, rung.volume, rung.label, rung.spread))
 
     return Expectation(
         event_ticker=event_ticker,
@@ -491,8 +513,14 @@ def expectation(event_ticker: str, timeout: float = 8.0) -> Expectation:
         rungs=rungs,
         median=_median(rungs),
         volume=sum(rung.volume or 0.0 for rung in rungs),
+        spread=_mean_spread(rungs),
         smoothed=smoothed,
     )
+
+
+def _mean_spread(rungs: Sequence[Rung]) -> Optional[float]:
+    quoted = [rung.spread for rung in rungs if rung.spread is not None]
+    return sum(quoted) / len(quoted) if quoted else None
 
 
 def _median(rungs: Sequence[Rung]) -> Optional[float]:

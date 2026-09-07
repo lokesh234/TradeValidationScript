@@ -400,3 +400,43 @@ def test_expectation_survives_a_ladder_with_no_prices(monkeypatch):
 def test_expectation_has_no_median_when_the_ladder_never_crosses_even(monkeypatch):
     _patch_json(monkeypatch, {"markets": [_rung(0.1, "0.97", "0.98"), _rung(0.2, "0.95", "0.96")]})
     assert kalshi.expectation("KXCPI-26AUG").median is None
+
+
+def test_expectation_counts_a_whole_dollar_ask_as_a_real_quote(monkeypatch):
+    # The shape the PPI ladder actually came back in: a wide but genuine
+    # two-sided market, where the near-certain rungs are offered at $1.00.
+    # Treating that as "no quote" fell through to a last price of zero and
+    # reported a market that expected nothing.
+    _patch_json(monkeypatch, {"markets": [
+        {"floor_strike": -0.3, "yes_bid_dollars": "0.88", "yes_ask_dollars": "1.0000",
+         "last_price_dollars": "0.0000", "volume_fp": 0.0},
+        {"floor_strike": 0.3, "yes_bid_dollars": "0.40", "yes_ask_dollars": "0.60",
+         "last_price_dollars": "0.0000", "volume_fp": 0.0},
+        {"floor_strike": 0.9, "yes_bid_dollars": "0.00", "yes_ask_dollars": "0.12",
+         "last_price_dollars": "0.0000", "volume_fp": 0.0},
+    ]})
+    found = kalshi.expectation("KXUSPPI-26SEP10")
+    assert [round(r.probability, 4) for r in found.rungs] == [0.94, 0.50, 0.06]
+    assert found.median == pytest.approx(0.3)
+    # Nothing needed correcting; the book was consistent all along.
+    assert not found.smoothed
+
+
+def test_expectation_ignores_a_rung_with_no_market_at_all(monkeypatch):
+    # Quoted nought to a dollar is the absence of a market. Averaging it would
+    # invent even odds that nobody is offering.
+    _patch_json(monkeypatch, {"markets": [
+        {"floor_strike": 0.1, "yes_bid_dollars": "0.70", "yes_ask_dollars": "0.80"},
+        {"floor_strike": 0.2, "yes_bid_dollars": "0.00", "yes_ask_dollars": "1.00",
+         "last_price_dollars": "0.0000"},
+    ]})
+    found = kalshi.expectation("KXTHIN")
+    assert [r.strike for r in found.rungs] == [0.1]
+
+
+def test_expectation_drops_a_rung_that_has_never_traded_and_has_no_quotes(monkeypatch):
+    _patch_json(monkeypatch, {"markets": [
+        {"floor_strike": 0.1, "yes_bid_dollars": "0.70", "yes_ask_dollars": "0.80"},
+        {"floor_strike": 0.2, "last_price_dollars": "0.0000"},
+    ]})
+    assert [r.strike for r in kalshi.expectation("KXTHIN").rungs] == [0.1]

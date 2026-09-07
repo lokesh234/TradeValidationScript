@@ -109,6 +109,7 @@ class ExpectationResponse(BaseModel):
     median: Optional[float] = None
     unit: Optional[str] = None
     volume: float = 0.0
+    spread: Optional[float] = None
     smoothed: bool = False
     rungs: List[RungResponse] = []
     buckets: List[BucketResponse] = []
@@ -447,6 +448,7 @@ def create_mobile_router(config: Config) -> APIRouter:
             median=found.median,
             unit=macro.MARKET_UNITS.get(kind),
             volume=found.volume,
+            spread=found.spread,
             smoothed=found.smoothed,
             rungs=[RungResponse(strike=r.strike, probability=r.probability, label=r.label, volume=r.volume)
                    for r in found.rungs],
