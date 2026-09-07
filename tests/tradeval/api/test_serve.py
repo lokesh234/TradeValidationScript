@@ -206,3 +206,40 @@ def test_mobile_endpoints_are_published_with_response_models(client):
     assert {"strategies", "instruments", "option_sides", "short_horizons", "default_short_horizon"} == set(
         schema["components"]["schemas"][bootstrap_ref]["properties"]
     )
+
+
+def test_spending_growth_returns_percentages_dates_and_partial_results(client, monkeypatch):
+    from tradeval.api import mobile
+    mobile._company_growth.cache_clear()
+    calls = []
+
+    class Fundamentals:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)
+
+        def info_value(self, key):
+            if self.symbol == "TSM":
+                raise RuntimeError("Provider unavailable")
+            if key == "mostRecentQuarter":
+                return 1782777600  # 2026-06-30 UTC
+            return {"NVDA": .25, "AVGO": -.12, "MU": 0}.get(self.symbol)
+
+    monkeypatch.setattr(mobile, "MarketData", Fundamentals)
+    monkeypatch.setattr(mobile.time, "time", lambda: 1800000000)
+    try:
+        response = client.get("/mobile/spending-flows/1/growth")
+        assert response.status_code == 200
+        rows = {row["symbol"]: row for row in response.json()["companies"]}
+        assert rows["NVDA"]["revenue_growth_pct"] == 25
+        assert rows["NVDA"]["period_end"] == "2026-06-30"
+        assert rows["AVGO"]["revenue_growth_pct"] == -12
+        assert rows["MU"]["revenue_growth_pct"] == 0
+        assert rows["TSM"]["revenue_growth_pct"] is None
+        assert response.json()["source"] == "Yahoo Finance"
+        count = len(calls)
+        client.get("/mobile/spending-flows/1/growth")
+        assert len(calls) == count
+        assert client.get("/mobile/spending-flows/not-a-flow/growth").status_code == 422
+    finally:
+        mobile._company_growth.cache_clear()

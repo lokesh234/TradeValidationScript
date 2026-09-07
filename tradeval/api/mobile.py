@@ -15,6 +15,10 @@ write.
 from __future__ import annotations
 
 import datetime as dt
+import math
+import time
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional
 
@@ -125,6 +129,40 @@ class BeneficiaryResponse(BaseModel):
     symbol: str
     role: str
     share_per_thousand: Optional[float]
+
+
+class CompanyGrowthResponse(BaseModel):
+    symbol: str
+    revenue_growth_pct: Optional[float] = None
+    period_end: Optional[dt.date] = None
+    fetched_at: dt.datetime
+
+
+class SpendingGrowthResponse(BaseModel):
+    source: str = "Yahoo Finance"
+    metric: str = "Company-wide revenue growth, year over year"
+    companies: List[CompanyGrowthResponse]
+
+
+@lru_cache(maxsize=256)
+def _company_growth(symbol: str, cache_window: int) -> CompanyGrowthResponse:
+    """Reuse fundamentals for fifteen minutes; isolate unavailable companies."""
+    result = CompanyGrowthResponse(symbol=symbol, fetched_at=dt.datetime.now(dt.timezone.utc))
+    try:
+        data = MarketData(symbol)
+        growth = data.info_value("revenueGrowth")
+        if growth is not None and math.isfinite(growth * 100):
+            result.revenue_growth_pct = growth * 100
+        timestamp = data.info_value("mostRecentQuarter")
+        if timestamp is not None:
+            try:
+                result.period_end = dt.datetime.fromtimestamp(timestamp, dt.timezone.utc).date()
+            except (ValueError, OverflowError, OSError):
+                pass
+    except Exception:
+        # One unavailable provider response must not hide the other recipients.
+        pass
+    return result
 
 
 class SpendingFlowResponse(BaseModel):
@@ -438,6 +476,17 @@ def create_mobile_router(config: Config) -> APIRouter:
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return _flow(spending.FLOWS.index(flow) + 1, flow)
+
+    @router.get("/spending-flows/{choice}/growth", response_model=SpendingGrowthResponse)
+    def spending_growth(choice: str) -> SpendingGrowthResponse:
+        try:
+            flow = spending.resolve(choice)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        window = int(time.time() // 900)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            companies = list(executor.map(lambda symbol: _company_growth(symbol, window), flow.symbols))
+        return SpendingGrowthResponse(companies=companies)
 
     @router.get("/event-markets/search", response_model=EventSearchResponse)
     def event_search(
