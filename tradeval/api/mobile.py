@@ -136,6 +136,9 @@ class CompanyResponse(BaseModel):
     name: str
     market_cap: Optional[float]
     price: Optional[float]
+    # Trailing twelve months. Absent when the provider has nothing for it,
+    # which is not the same as a company with no sales.
+    revenue: Optional[float] = None
 
 
 class SectorCompaniesResponse(BaseModel):
@@ -302,12 +305,28 @@ class EventContractRequest(BaseModel):
     limit_price: Optional[float] = Field(default=None, ge=0, le=100)
 
 
-def _company(item: discover.SectorCompany) -> CompanyResponse:
+@lru_cache(maxsize=512)
+def _company_revenue(symbol: str, cache_window: int) -> Optional[float]:
+    """Trailing twelve-month revenue, held for fifteen minutes.
+
+    The screener does not carry revenue, so it is one lookup per company. They
+    are cached on the window rather than the clock so the cache turns over on
+    its own, and a company the provider will not answer for comes back as None
+    rather than taking the whole list down.
+    """
+    try:
+        return MarketData(symbol).info_value("totalRevenue")
+    except Exception:
+        return None
+
+
+def _company(item: discover.SectorCompany, revenue: Optional[float] = None) -> CompanyResponse:
     return CompanyResponse(
         symbol=item.symbol,
         name=item.name,
         market_cap=item.market_cap,
         price=item.price,
+        revenue=revenue,
     )
 
 
@@ -510,9 +529,13 @@ def create_mobile_router(config: Config) -> APIRouter:
             sector = discover.resolve_sector(choice)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        found = discover.sector_companies(sector, limit, min_market_cap)
+        window = int(time.time() // 900)
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            revenues = list(executor.map(lambda item: _company_revenue(item.symbol, window), found))
         return SectorCompaniesResponse(
             sector=sector,
-            companies=[_company(item) for item in discover.sector_companies(sector, limit, min_market_cap)],
+            companies=[_company(item, revenue) for item, revenue in zip(found, revenues)],
         )
 
     @router.get("/earnings/candidates", response_model=EarningsCandidatesResponse)

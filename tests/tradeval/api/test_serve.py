@@ -293,3 +293,41 @@ def test_calendar_expectation_surfaces_an_exchange_outage(client, monkeypatch):
         raise mobile.kalshi.KalshiError("Kalshi unreachable")
     monkeypatch.setattr(mobile.kalshi, "open_events", down)
     assert client.get("/mobile/calendar/expectation?kind=CPI&date=2026-09-11").status_code == 503
+
+
+def test_sector_companies_carry_revenue(client, monkeypatch):
+    from tradeval.api import mobile
+    mobile._company_revenue.cache_clear()
+    calls = []
+
+    class Fundamentals:
+        def __init__(self, symbol):
+            self.symbol = symbol
+            calls.append(symbol)
+
+        def info_value(self, key):
+            if self.symbol == "GONE":
+                raise RuntimeError("Provider unavailable")
+            return {"AAA": 384_700_000_000, "BBB": None}.get(self.symbol)
+
+    monkeypatch.setattr(mobile, "MarketData", Fundamentals)
+    monkeypatch.setattr(mobile.time, "time", lambda: 1800000000)
+    monkeypatch.setattr(mobile.discover, "sector_companies", lambda *a, **kw: [
+        mobile.discover.SectorCompany(symbol="AAA", name="Alpha", market_cap=1e12),
+        mobile.discover.SectorCompany(symbol="BBB", name="Beta", market_cap=5e11),
+        mobile.discover.SectorCompany(symbol="GONE", name="Gamma", market_cap=3e11),
+    ])
+    try:
+        rows = {c["symbol"]: c for c in client.get("/mobile/sectors/1/companies").json()["companies"]}
+        assert rows["AAA"]["revenue"] == 384_700_000_000
+        # Nothing reported is not the same as nothing sold, and one company the
+        # provider will not answer for must not empty the other two.
+        assert rows["BBB"]["revenue"] is None
+        assert rows["GONE"]["revenue"] is None
+        assert rows["GONE"]["market_cap"] == 3e11
+        # A second look is served from the cache rather than asked again.
+        count = len(calls)
+        client.get("/mobile/sectors/1/companies")
+        assert len(calls) == count
+    finally:
+        mobile._company_revenue.cache_clear()
