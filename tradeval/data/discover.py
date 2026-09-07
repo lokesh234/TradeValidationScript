@@ -8,6 +8,7 @@ request rather than one lookup per ticker.
 from __future__ import annotations
 
 import datetime as dt
+import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -31,6 +32,16 @@ throttle_yfinance()
 # Real US listings only. Pink-sheet lines (PNK) are mostly foreign companies
 # with no options chain, so they are useless for an earnings gamble.
 TRADEABLE_EXCHANGES = {"NMS", "NYQ", "NGM", "NCM", "ASE", "PCX", "BTS"}
+
+# Words that say what kind of company something is rather than which company it
+# is. Stripping them off the end of a name leaves two share classes of the same
+# business with the same key: "Berkshire Hathaway Inc." and "Berkshire Hathaway
+# Inc. New" both reduce to "berkshire hathaway".
+_FORM_WORDS = {
+    "new", "the", "inc", "incorporated", "corp", "corporation", "co", "company",
+    "plc", "ltd", "limited", "sa", "nv", "ag", "adr", "cl", "class", "a", "b",
+}
+_NAME_NOISE = re.compile(r"[^a-z0-9 ]+")
 
 EXCHANGE_TZ = "America/New_York"
 SCREEN_SIZE = 250
@@ -137,25 +148,67 @@ def sector_companies(
     if sector in THEMES:
         return _theme_companies(THEMES[sector], limit)
 
-    found: List[SectorCompany] = []
-    seen = set()
+    # One company can list more than one line -- share classes like BRK-A and
+    # BRK-B, or an ADR beside the foreign ordinary -- and the screener returns
+    # each as its own row. Read as a list of companies they are duplicates, so
+    # rows are grouped by company and only the most traded line of each is kept:
+    # BRK-B turns over millions of shares a day, BRK-A a couple of hundred.
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    order: List[str] = []
     for row in _screen(sector, min_market_cap):
         symbol = row.get("symbol")
-        if not symbol or symbol in seen:
+        if not symbol:
             continue
         if row.get("exchange") not in TRADEABLE_EXCHANGES:
             continue
-        seen.add(symbol)
+        # The screener filters on its own intraday figure, which a preferred or
+        # depositary line can pass without reporting a market cap of its own --
+        # that is how JPM-PC arrived beside JPM. The caller asked for companies
+        # above a size, so a row that cannot show one does not qualify.
+        cap = _positive(row.get("marketCap"))
+        if cap is None or cap < min_market_cap:
+            continue
+        key = _company_key(row.get("shortName") or row.get("longName") or symbol)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(row)
+
+    found: List[SectorCompany] = []
+    for key in order[:limit]:
+        rows = groups[key]
+        pick = max(rows, key=_traded_volume)
+        # The tidiest of the names in the group, so the B shares are not
+        # labelled "Berkshire Hathaway Inc. New" once they are the line shown.
+        name = min(
+            (str(row.get("shortName") or row.get("longName") or "") for row in rows),
+            key=lambda text: (len(text) == 0, len(text)),
+        )
         found.append(
             SectorCompany(
-                symbol=str(symbol),
-                name=str(row.get("shortName") or row.get("longName") or symbol),
-                market_cap=row.get("marketCap"),
+                symbol=str(pick.get("symbol")),
+                name=name or str(pick.get("symbol")),
+                market_cap=pick.get("marketCap"),
             )
         )
-        if len(found) >= limit:
-            break
     return found
+
+
+def _company_key(name: Any) -> str:
+    """A name reduced to the company behind it, so share classes collapse."""
+    words = _NAME_NOISE.sub(" ", str(name).lower()).split()
+    while words and words[-1] in _FORM_WORDS:
+        words.pop()
+    return " ".join(words) or str(name).lower().strip()
+
+
+def _traded_volume(row: Dict[str, Any]) -> float:
+    """How much of a line actually changes hands on a normal day."""
+    return (
+        _positive(row.get("averageDailyVolume3Month"))
+        or _positive(row.get("regularMarketVolume"))
+        or 0.0
+    )
 
 
 def _positive(value: Any) -> Optional[float]:
@@ -323,13 +376,24 @@ def _screen(sector: Optional[str], min_market_cap: float) -> List[Dict[str, Any]
 def _collect(
     start: dt.date, end: dt.date, limit: int, sector: Optional[str], min_market_cap: float
 ) -> List[Candidate]:
+    # Keyed by company rather than by symbol: two share classes report the same
+    # earnings on the same day, and listing both says nothing the first did not.
     found: Dict[str, Candidate] = {}
+    picked: Dict[str, tuple] = {}
     for query_sector in ([sector] if sector else []) + [None]:
         label = query_sector or "Other"
         for row in _screen(query_sector, min_market_cap):
             candidate = _to_candidate(row, start, end, label)
-            if candidate and candidate.symbol not in found:
-                found[candidate.symbol] = candidate
+            if not candidate:
+                continue
+            key = _company_key(candidate.name)
+            volume = _traded_volume(row)
+            seen = picked.get(key)
+            # First pass wins the company, so a priority sector keeps its label;
+            # within one pass the more traded line wins.
+            if seen is None or (seen[1] == label and volume > seen[0]):
+                picked[key] = (volume, label)
+                found[key] = candidate
         # Stop early once the priority sector alone has filled the list.
         if query_sector and len(found) >= limit:
             break

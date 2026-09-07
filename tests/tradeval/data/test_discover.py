@@ -179,3 +179,97 @@ def test_sector_or_none_on_an_unknown_name():
 def test_resolve_sector_itself_is_unchanged():
     """The floor belongs to the ambiguous prompt, not to --sector."""
     assert discover.resolve_sector("T") == "Technology"
+
+
+def _row(symbol, name, cap, volume, exchange="NYQ"):
+    return {
+        "symbol": symbol,
+        "shortName": name,
+        "marketCap": cap,
+        "averageDailyVolume3Month": volume,
+        "exchange": exchange,
+    }
+
+
+# The rows below are the shapes Yahoo actually returned for Financial Services:
+# two Berkshire share classes, and a JP Morgan preferred depositary line that
+# passed the screener's own size filter without a market cap of its own.
+FINANCIALS = [
+    _row("BRK-A", "Berkshire Hathaway Inc.", 1083698774016, 192),
+    _row("BRK-B", "Berkshire Hathaway Inc. New", 1083263352832, 4543355),
+    _row("JPM", "JP Morgan Chase & Co.", 953331941376, 8158058),
+    _row("V", "Visa Inc.", 700273459200, 5900000),
+    _row("JPM-PC", "J P Morgan Chase & Co Depositar", None, 172871),
+]
+
+
+def _companies(rows, **kwargs):
+    with patch.object(discover, "_screen", return_value=rows):
+        return discover.sector_companies("Financial Services", **kwargs)
+
+
+def test_sector_companies_shows_one_line_per_company():
+    result = _companies(FINANCIALS, limit=10)
+    assert [c.symbol for c in result] == ["BRK-B", "JPM", "V"]
+
+
+def test_sector_companies_keeps_the_share_class_people_can_trade():
+    berkshire = _companies(FINANCIALS, limit=10)[0]
+    # BRK-A turns over a couple of hundred shares a day against BRK-B's millions.
+    assert berkshire.symbol == "BRK-B"
+    # And it is not labelled with Yahoo's "New" suffix for the B shares.
+    assert berkshire.name == "Berkshire Hathaway Inc."
+
+
+def test_sector_companies_drops_a_line_with_no_market_cap():
+    assert "JPM-PC" not in [c.symbol for c in _companies(FINANCIALS, limit=10)]
+
+
+def test_sector_companies_drops_a_line_under_the_floor():
+    rows = [_row("BIG", "Big Bank Corp", 5e9, 1000), _row("SMALL", "Small Bank Corp", 1e9, 1000)]
+    assert [c.symbol for c in _companies(rows, min_market_cap=2e9)] == ["BIG"]
+
+
+def test_sector_companies_counts_companies_not_lines_towards_the_limit():
+    # Two of the four rows are one company, so a limit of 2 still yields two
+    # distinct companies rather than being used up by Berkshire's two classes.
+    assert [c.symbol for c in _companies(FINANCIALS, limit=2)] == ["BRK-B", "JPM"]
+
+
+def test_sector_companies_keeps_market_cap_order_after_grouping():
+    result = _companies(FINANCIALS, limit=10)
+    caps = [c.market_cap for c in result]
+    assert caps == sorted(caps, reverse=True)
+
+
+def test_sector_companies_still_skips_untradeable_exchanges():
+    rows = [_row("HBCYF", "HSBC Holdings Plc", 365707689984, 900, exchange="PNK")]
+    assert _companies(rows) == []
+
+
+def test_company_key_collapses_classes_but_not_different_companies():
+    assert discover._company_key("Berkshire Hathaway Inc.") == discover._company_key(
+        "Berkshire Hathaway Inc. New"
+    )
+    assert discover._company_key("HSBC Holdings, plc.") == discover._company_key(
+        "HSBC Holdings Plc"
+    )
+    assert discover._company_key("JP Morgan Chase & Co.") != discover._company_key(
+        "Morgan Stanley"
+    )
+    assert discover._company_key("Bank of America Corporation") != discover._company_key(
+        "Bank of Montreal"
+    )
+
+
+def test_earnings_candidates_list_a_company_once():
+    stamp = int(dt.datetime(2026, 9, 10, 13, 0, tzinfo=dt.timezone.utc).timestamp())
+    rows = [
+        dict(_row("BRK-A", "Berkshire Hathaway Inc.", 1e12, 192), earningsTimestamp=stamp),
+        dict(_row("BRK-B", "Berkshire Hathaway Inc. New", 1e12, 4543355), earningsTimestamp=stamp),
+    ]
+    with patch.object(discover, "_screen", return_value=rows):
+        found = discover._collect(
+            dt.date(2026, 9, 8), dt.date(2026, 9, 14), 10, "Financial Services", 2e9
+        )
+    assert [c.symbol for c in found] == ["BRK-B"]
