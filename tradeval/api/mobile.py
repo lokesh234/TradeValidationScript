@@ -284,6 +284,28 @@ class ProfileResponse(BaseModel):
     panel: Optional[PanelResponse]
 
 
+class SpreadChoiceResponse(BaseModel):
+    contract: str
+    buy_strike: float
+    sell_strike: float
+    debit: float
+    max_loss: float
+    max_profit: float
+    breakeven: float
+    reward_risk: float
+
+
+class SpreadPickerResponse(BaseModel):
+    symbol: str
+    price: float
+    as_of: dt.date
+    expiry: Optional[dt.date]
+    buy_strike: Optional[float]
+    available_strikes: List[float]
+    spreads: List[SpreadChoiceResponse]
+    has_more: bool
+
+
 class TradePreviewResponse(BaseModel):
     """The information trade.sh shows before it asks for the final trade terms."""
 
@@ -620,6 +642,82 @@ def create_mobile_router(config: Config) -> APIRouter:
             as_of=data.last_date,
             panel=_panel(panel) if panel else None,
         )
+
+    @router.post("/trades/spreads", response_model=SpreadPickerResponse)
+    def spread_choices(
+        request: ValidationRequest,
+        buy_strike: Optional[float] = Query(default=None, gt=0),
+        limit: int = Query(default=5, ge=1, le=100),
+    ) -> SpreadPickerResponse:
+        from tradeval.analysis.spreads import VerticalSpread
+        if request.instrument not in ("call_spread", "put_spread"):
+            raise HTTPException(status_code=422, detail="Choose a debit spread instrument.")
+        try:
+            strategy = prepare(request, config)
+            legs = strategy.spread_legs()
+            strikes = sorted({leg.strike for leg in legs})
+            long_leg = next((leg for leg in legs if leg.strike == buy_strike), None) if buy_strike is not None else (legs[0] if legs else None)
+            if buy_strike is not None and long_leg is None:
+                raise HTTPException(status_code=422, detail="The buy strike is not available on this expiry.")
+            built = []
+            if long_leg:
+                shorts = sorted((leg for leg in legs if (leg.strike > long_leg.strike if request.instrument == "call_spread" else leg.strike < long_leg.strike)), key=lambda leg: abs(leg.strike - long_leg.strike))
+                for short in shorts:
+                    spread = VerticalSpread(long_leg, short)
+                    if spread.debit is None or spread.debit >= spread.width:
+                        continue
+                    built.append(SpreadChoiceResponse(
+                        contract="%g/%g" % (long_leg.strike, short.strike),
+                        buy_strike=long_leg.strike, sell_strike=short.strike,
+                        debit=spread.debit, max_loss=spread.max_loss,
+                        max_profit=spread.max_profit, breakeven=spread.breakeven,
+                        reward_risk=spread.reward_risk,
+                    ))
+            return SpreadPickerResponse(symbol=strategy.data.symbol, price=strategy.data.price,
+                as_of=strategy.data.last_date, expiry=strategy.chain_expiry,
+                buy_strike=long_leg.strike if long_leg else None, available_strikes=strikes,
+                spreads=built[:limit], has_more=len(built) > limit)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DataError as exc:
+            raise _not_found(exc) from exc
+
+    @router.post("/trades/spread-payoff")
+    def spread_payoff(request: ValidationRequest) -> Dict[str, Any]:
+        from tradeval.analysis.pricing import black_scholes
+        if request.instrument not in ("call_spread", "put_spread") or not request.contract:
+            raise HTTPException(status_code=422, detail="Select a debit spread first.")
+        try:
+            strategy = prepare(request, config)
+            apply_sizing(strategy, request)
+            spread = strategy._typed_spread()
+            spot = strategy.data.price
+            days = max(0, (strategy.chain_expiry - dt.date.today()).days)
+            volatility = strategy.reprice_volatility
+            rate = strategy.option_rules.risk_free_rate_pct / 100.0
+            radius = max(spot * .15, spread.width * 2)
+            low = max(.01, min(spot, spread.long_leg.strike, spread.short_leg.strike) - radius)
+            high = max(spot, spread.long_leg.strike, spread.short_leg.strike) + radius
+            prices = sorted(set([round(low + (high-low)*i/100, 4) for i in range(101)] + [spot, spread.long_leg.strike, spread.short_leg.strike, spread.breakeven]))
+            remaining = [days * (1-i/60) for i in range(61)] if days and volatility else [0]
+            curves = []
+            for left in remaining:
+                values = []
+                for price in prices:
+                    long_value = black_scholes(spread.kind, price, spread.long_leg.strike, left, volatility or .2, rate)
+                    short_value = black_scholes(spread.kind, price, spread.short_leg.strike, left, volatility or .2, rate)
+                    values.append(round(max(0, min(spread.width, long_value-short_value))*100, 4))
+                curves.append({"days_left": round(left, 3), "values": values})
+            return {"symbol": strategy.data.symbol, "contract": request.contract,
+                "expiry": strategy.chain_expiry, "spot": spot, "cost": spread.cost,
+                "width": spread.width, "breakeven": spread.breakeven,
+                "volatility_pct": volatility*100 if volatility else None,
+                "rate_pct": rate*100, "prices": prices, "curves": curves,
+                "model_note": "Black-Scholes estimates with fixed volatility and rates, no dividends, fees, or early exercise. Expiry values use intrinsic value. " + strategy.volatility_caveat}
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DataError as exc:
+            raise _not_found(exc) from exc
 
     @router.post("/trades/preview", response_model=TradePreviewResponse)
     def trade_preview(request: ValidationRequest) -> TradePreviewResponse:

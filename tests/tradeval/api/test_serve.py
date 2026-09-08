@@ -331,3 +331,58 @@ def test_sector_companies_carry_revenue(client, monkeypatch):
         assert len(calls) == count
     finally:
         mobile._company_revenue.cache_clear()
+
+
+@pytest.mark.parametrize("instrument,kind,strikes", [("call_spread", "call", [100, 110, 120]), ("put_spread", "put", [100, 90, 80])])
+def test_spread_picker_prices_pairs_and_browses_higher_strikes(client, monkeypatch, instrument, kind, strikes):
+    import datetime as dt
+    from types import SimpleNamespace
+    from tradeval.data.market import OptionQuote
+    legs = [OptionQuote(kind=kind, strike=strike, bid=mid-.05, ask=mid+.05,
+                        mid=mid, iv=40, open_interest=100, volume=10, in_the_money=False)
+            for strike, mid in zip(strikes, [5, 2, 1])]
+    monkeypatch.setattr("tradeval.api.mobile.prepare", lambda *args: SimpleNamespace(
+        data=SimpleNamespace(symbol="TEST", price=100, last_date=dt.date.today()),
+        chain_expiry=dt.date.today()+dt.timedelta(days=40), spread_legs=lambda: legs))
+    body = {"symbol": "TEST", "strategy": "short", "instrument": instrument}
+    response = client.post("/mobile/trades/spreads?limit=1", json=body)
+    assert response.status_code == 200
+    result = response.json()
+    assert result["has_more"] is True
+    assert result["spreads"][0]["max_loss"] == 300
+    assert result["spreads"][0]["max_profit"] == 700
+    assert result["spreads"][0]["breakeven"] == (103 if kind == "call" else 97)
+    assert len(client.post("/mobile/trades/spreads?limit=10", json=body).json()["spreads"]) == 2
+    changed = client.post("/mobile/trades/spreads?buy_strike=%s" % strikes[1], json=body).json()
+    assert changed["spreads"][0]["buy_strike"] == strikes[1]
+    assert changed["spreads"][0]["sell_strike"] == strikes[2]
+    assert client.post("/mobile/trades/spreads?buy_strike=999", json=body).status_code == 422
+    assert client.post("/mobile/trades/spreads?limit=101", json=body).status_code == 422
+
+
+@pytest.mark.parametrize("kind,pair", [("call", "100/110"), ("put", "110/100")])
+def test_interactive_payoff_expiry_bounds_and_time_values(client, monkeypatch, kind, pair):
+    import datetime as dt
+    from types import SimpleNamespace
+    from tradeval.analysis.spreads import VerticalSpread
+    from tradeval.data.market import OptionQuote
+    def quote(strike, mid):
+        return OptionQuote(kind=kind, strike=strike, bid=mid-.05, ask=mid+.05, mid=mid, iv=30, open_interest=100, volume=10, in_the_money=False)
+    long, short = map(float, pair.split("/"))
+    spread = VerticalSpread(quote(long, 5), quote(short, 2))
+    monkeypatch.setattr("tradeval.api.mobile.prepare", lambda *args: SimpleNamespace(
+        data=SimpleNamespace(price=105, symbol="TEST"), chain_expiry=dt.date.today()+dt.timedelta(days=30),
+        reprice_volatility=.3, volatility_caveat="", option_rules=SimpleNamespace(risk_free_rate_pct=4), _typed_spread=lambda: spread))
+    monkeypatch.setattr("tradeval.api.mobile.apply_sizing", lambda *args: None)
+    response = client.post("/mobile/trades/spread-payoff", json={"symbol": "TEST", "strategy": "short", "instrument": kind+"_spread", "contract": pair})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["cost"] == 300
+    assert result["curves"][-1]["days_left"] == 0
+    values = result["curves"][-1]["values"]
+    assert min(values) == 0
+    assert max(values) == 1000
+    assert values[0] == (0 if kind == "call" else 1000)
+    assert values[-1] == (1000 if kind == "call" else 0)
+    assert result["curves"][0]["values"] != values
+    assert len(result["curves"]) == 61

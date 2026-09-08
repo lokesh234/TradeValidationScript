@@ -105,6 +105,7 @@ class ValidationRequest:
 
     # Options detail. ``strikes`` of None takes the depth from the config and
     # is capped at what the expiry actually lists.
+    expiry: Optional[dt.date] = None    # pin the selected option expiry
     strikes: Optional[int] = None
     contract: Optional[str] = None      # one strike ("270") or a pairing ("250/260")
     min_reward_risk: Optional[float] = None

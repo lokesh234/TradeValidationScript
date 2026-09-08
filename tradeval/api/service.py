@@ -93,6 +93,13 @@ def apply_sizing(strategy: Strategy, request: ValidationRequest) -> None:
     ctx = strategy.ctx
     if ctx.trades_options and request.strikes is not None:
         ctx.strikes = clamp_strikes(request.strikes, strategy.max_strikes())
+    if ctx.trades_spread and ctx.contract:
+        from tradeval.analysis.spreads import parse_pair
+        pair = parse_pair(ctx.contract)
+        chosen = strategy._typed_spread() if pair else None
+        valid_order = pair and (pair[0] < pair[1] if ctx.spread_kind == "call" else pair[0] > pair[1])
+        if not valid_order or chosen is None or chosen.debit is None or chosen.debit >= chosen.width:
+            raise ValidationError("The selected debit spread cannot be priced. Choose another pair.")
     # Shares are given as a count or as dollars; the context wants both, and
     # the count is the one that was meant literally.
     if request.shares:
@@ -141,7 +148,19 @@ def prepare(
 
     if data is None:
         data = MarketData(request.symbol, benchmark=request.benchmark, period=request.period)
-    return STRATEGIES[key](build_context(request, config, data))
+    strategy = STRATEGIES[key](build_context(request, config, data))
+    if request.expiry is not None and strategy.ctx.trades_options:
+        import datetime as dt
+        expiry = request.expiry
+        if isinstance(expiry, str):
+            try:
+                expiry = dt.date.fromisoformat(expiry)
+            except ValueError as exc:
+                raise ValidationError("Invalid option expiry") from exc
+        if expiry < dt.date.today() or expiry not in data.option_expiries:
+            raise ValidationError("The selected expiry is no longer available. Choose a spread again.")
+        strategy.__dict__["chain_expiry"] = expiry
+    return strategy
 
 
 def validate(request: ValidationRequest, config: Optional[Config] = None) -> Report:

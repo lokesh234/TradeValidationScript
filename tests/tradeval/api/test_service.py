@@ -159,3 +159,24 @@ def test_summary_covers_every_report(offline):
     rows = summary_to_dict(reports)
     assert [row["symbol"] for row in rows] == ["AAA", "BBB"]
     assert json.loads(json.dumps(rows))
+
+
+def test_selected_expiry_is_used_and_unavailable_expiry_is_rejected():
+    import datetime as dt
+    from tradeval.api.service import prepare
+    expiry = dt.date.today() + dt.timedelta(days=60)
+    data = make_market_data(option_expiries=[expiry])
+    strategy = prepare(ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", expiry=expiry), data=data)
+    assert strategy.chain_expiry == expiry
+    with pytest.raises(ValidationError, match="expiry is no longer available"):
+        prepare(ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", expiry=expiry+dt.timedelta(days=1)), data=data)
+
+
+def test_unpriced_selected_spread_is_rejected_instead_of_grading_another_pair():
+    from types import SimpleNamespace
+    from tradeval.api.service import apply_sizing
+    request = ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", contract="100/110")
+    strategy = SimpleNamespace(ctx=SimpleNamespace(trades_options=True, trades_spread=True,
+        contract="100/110", spread_kind="call"), _typed_spread=lambda: None)
+    with pytest.raises(ValidationError, match="selected debit spread cannot be priced"):
+        apply_sizing(strategy, request)

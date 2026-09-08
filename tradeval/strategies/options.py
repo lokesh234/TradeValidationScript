@@ -964,7 +964,7 @@ class OptionsPlaybook:
         just a different trade from the one someone demanding 2:1 wants.
         """
         name = "Spread reward:risk"
-        graded = [(s, s.reward_risk) for s in self.spreads if s.reward_risk]
+        graded = [(s, s.reward_risk) for s in self._chosen(self.spreads, lambda item: item.label) if s.reward_risk]
         if not graded:
             return skipped(name, "no pairing has a two-sided price", weight=2.0)
 
