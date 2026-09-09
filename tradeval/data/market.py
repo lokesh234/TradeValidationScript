@@ -669,7 +669,7 @@ class MarketData:
             return None
         return min(strikes, key=lambda k: abs(k - self.price))
 
-    def option_ladder(self, expiry: dt.date, count: int = 5) -> "Optional[tuple[List[OptionQuote], List[OptionQuote]]]":
+    def option_ladder(self, expiry: dt.date, count: int = 5, include_itm: bool = False) -> "Optional[tuple[List[OptionQuote], List[OptionQuote]]]":
         """The ``count`` nearest-the-money strikes on each side.
 
         Calls run from the money upward and puts from the money downward, which
@@ -683,6 +683,10 @@ class MarketData:
 
         call_strikes = sorted(k for k in set(calls_df["strike"]) if k >= anchor)[:count]
         put_strikes = sorted((k for k in set(puts_df["strike"]) if k <= anchor), reverse=True)[:count]
+
+        if include_itm:
+            call_strikes = sorted(set(calls_df["strike"]))
+            put_strikes = sorted(set(puts_df["strike"]))
 
         calls = [q for k in call_strikes for q in (_quote_at(calls_df, k, "call"),) if q]
         puts = [q for k in put_strikes for q in (_quote_at(puts_df, k, "put"),) if q]

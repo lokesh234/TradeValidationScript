@@ -900,7 +900,7 @@ class OptionsPlaybook:
     def _chosen_contract_cost(self, pick: str) -> Optional[float]:
         """What the picked strike costs, on the side being traded."""
         quote = self.front_quote
-        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes) if quote else None
+        ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes, include_itm=True) if quote else None
         if ladder is None:
             return None
         for _, quotes in self._visible_sides(*ladder):

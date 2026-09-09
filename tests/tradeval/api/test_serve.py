@@ -386,3 +386,37 @@ def test_interactive_payoff_expiry_bounds_and_time_values(client, monkeypatch, k
     assert values[-1] == (1000 if kind == "call" else 0)
     assert result["curves"][0]["values"] != values
     assert len(result["curves"]) == 61
+
+
+@pytest.mark.parametrize("side", ["call", "put"])
+def test_single_option_choices_and_payoff(client, monkeypatch, side):
+    import datetime as dt
+    from types import SimpleNamespace
+    from tradeval.data.market import OptionQuote
+    expiry = dt.date.today() + dt.timedelta(days=30)
+    legs = {kind: OptionQuote(kind=kind, strike=100, bid=2, ask=4, mid=3, iv=30,
+        open_interest=1000, volume=50, in_the_money=False) for kind in ("call", "put")}
+    strategy = SimpleNamespace(chain_expiry=expiry, ctx=SimpleNamespace(strikes=5),
+        max_strikes=lambda: 100, reprice_volatility=.3, volatility_caveat="",
+        option_rules=SimpleNamespace(risk_free_rate_pct=4),
+        data=SimpleNamespace(symbol="TEST", price=100, last_date=dt.date.today(),
+            option_expiries=[expiry], option_ladder=lambda *args, **kwargs: ([legs["call"]], [legs["put"]])))
+    monkeypatch.setattr("tradeval.api.mobile.prepare", lambda *args: strategy)
+    payload = {"symbol": "TEST", "strategy": "short", "instrument": "options", "side": side,
+        "contract": "100", "expiry": expiry.isoformat()}
+    choices = client.post("/mobile/trades/options", json=payload)
+    assert choices.status_code == 200
+    assert choices.json()["options"][0]["mid"] == 3
+    response = client.post("/mobile/trades/option-payoff", json=payload)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["cost"] == 300
+    assert len(body["curves"]) == 61
+    expiry_values = body["curves"][-1]["values"]
+    assert expiry_values[0] == (10000 if side == "put" else 0)
+    assert expiry_values[body["prices"].index(100)] == 0
+    assert body["curves"][0]["values"][body["prices"].index(100)] > 0
+    payload["contract"] = "999"
+    assert client.post("/mobile/trades/option-payoff", json=payload).status_code == 422
+    payload["side"] = "both"
+    assert client.post("/mobile/trades/options", json=payload).status_code == 422

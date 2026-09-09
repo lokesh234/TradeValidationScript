@@ -682,6 +682,30 @@ def create_mobile_router(config: Config) -> APIRouter:
         except DataError as exc:
             raise _not_found(exc) from exc
 
+    @router.post("/trades/options")
+    def option_choices(request: ValidationRequest) -> Dict[str, Any]:
+        from tradeval.api.option_explorer import choices
+        if request.instrument != "options":
+            raise HTTPException(status_code=422, detail="Choose the options instrument.")
+        try:
+            return choices(prepare(request, config), request)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DataError as exc:
+            raise _not_found(exc) from exc
+
+    @router.post("/trades/option-payoff")
+    def option_payoff(request: ValidationRequest) -> Dict[str, Any]:
+        from tradeval.api.option_explorer import payoff
+        if request.instrument != "options" or not request.contract or not request.expiry:
+            raise HTTPException(status_code=422, detail="Select an option and expiry first.")
+        try:
+            return payoff(prepare(request, config), request)
+        except ValidationError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except DataError as exc:
+            raise _not_found(exc) from exc
+
     @router.post("/trades/spread-payoff")
     def spread_payoff(request: ValidationRequest) -> Dict[str, Any]:
         from tradeval.analysis.pricing import black_scholes

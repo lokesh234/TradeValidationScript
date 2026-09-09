@@ -93,6 +93,11 @@ def apply_sizing(strategy: Strategy, request: ValidationRequest) -> None:
     ctx = strategy.ctx
     if ctx.trades_options and request.strikes is not None:
         ctx.strikes = clamp_strikes(request.strikes, strategy.max_strikes())
+    if request.instrument == "options" and ctx.contract:
+        from tradeval.api.option_explorer import selected_option
+        selected_option(strategy, request)
+        # A selected strike may be outside the default ATM display window.
+        ctx.strikes = strategy.max_strikes() or ctx.strikes
     if ctx.trades_spread and ctx.contract:
         from tradeval.analysis.spreads import parse_pair
         pair = parse_pair(ctx.contract)
@@ -158,7 +163,7 @@ def prepare(
             except ValueError as exc:
                 raise ValidationError("Invalid option expiry") from exc
         if expiry < dt.date.today() or expiry not in data.option_expiries:
-            raise ValidationError("The selected expiry is no longer available. Choose a spread again.")
+            raise ValidationError("The selected expiry is no longer available. Choose a contract again.")
         strategy.__dict__["chain_expiry"] = expiry
     return strategy
 
