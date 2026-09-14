@@ -791,4 +791,6 @@ def create_mobile_router(config: Config) -> APIRouter:
         ).run()
         return report_to_dict(report)
 
+    from tradeval.api.social import social_router
+    router.include_router(social_router(config))
     return router
