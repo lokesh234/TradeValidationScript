@@ -30,7 +30,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import discover, indices, kalshi, macro, spending
+from tradeval.data import discover, indices, kalshi, macro, spending, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -68,6 +68,16 @@ class MarketQuoteResponse(BaseModel):
     is_yield: bool
     rises_are_bad: bool
     note: str
+
+
+class MarketValuationResponse(BaseModel):
+    symbol: str
+    forward_pe: Optional[float] = None
+    as_of: Optional[dt.date] = None
+    source: str
+    source_url: str
+    basis: Literal["FY1"]
+    status: Literal["available", "unavailable"]
 
 
 class MarketSnapshotResponse(BaseModel):
@@ -435,6 +445,10 @@ def create_mobile_router(config: Config) -> APIRouter:
             short_horizons=list(config.short_term.horizons),
             default_short_horizon=config.short_term.default_horizon,
         )
+
+    @router.get("/market/valuation", response_model=MarketValuationResponse)
+    def market_valuation() -> MarketValuationResponse:
+        return MarketValuationResponse(**valuation.spy_valuation())
 
     @router.get("/market/snapshot", response_model=MarketSnapshotResponse)
     def market_snapshot() -> MarketSnapshotResponse:
