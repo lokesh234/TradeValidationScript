@@ -145,3 +145,22 @@ def test_trailing_cash_needs_four_consecutive_quarters():
     trailing = performance.trailing_cash(quarters)
     assert (trailing.free_cash_flow, trailing.stock_based_compensation, trailing.operating_cash_flow) == (10.0, 4.0, None)
     assert performance.trailing_cash(quarters[:2] + quarters[3:]) is None
+
+
+class NoForwardEps:
+    consensus = consensus(1335.0)
+    price = 190.0
+
+    def __init__(self, values):
+        self.values = values
+
+    def info_value(self, *keys):
+        return next((self.values[key] for key in keys if key in self.values), None)
+
+
+def test_forward_eps_falls_back_to_consensus_then_to_price_over_multiple():
+    annual = performance.periods(statement(["2026-04-30", "2025-04-30"], revenue=[1335.0, 437.0]))
+    assert performance.forward(NoForwardEps({"currentPrice": 190.0, "forwardPE": 20.0}), annual).forward_eps == 9.7
+    empty = NoForwardEps({"currentPrice": 190.0, "forwardPE": 20.0})
+    empty.consensus = {"revenue": None, "eps": None}
+    assert performance.forward(empty, annual).forward_eps == 9.5

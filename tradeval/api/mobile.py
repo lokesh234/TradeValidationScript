@@ -30,7 +30,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import discover, indices, kalshi, macro, performance, spending, valuation
+from tradeval.data import discover, earnings_preview, indices, kalshi, macro, performance, spending, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -383,6 +383,65 @@ class CashResponse(BaseModel):
     beta: Optional[float] = None
 
 
+class QuarterConsensusResponse(BaseModel):
+    eps_avg: Optional[float] = None
+    eps_low: Optional[float] = None
+    eps_high: Optional[float] = None
+    eps_year_ago: Optional[float] = None
+    revenue_avg: Optional[float] = None
+    revenue_low: Optional[float] = None
+    revenue_high: Optional[float] = None
+    revenue_year_ago: Optional[float] = None
+    analysts: Optional[int] = None
+
+
+class EstimateTrendResponse(BaseModel):
+    period: Literal["0q", "0y"] = Field(description="This quarter, or this fiscal year.")
+    current: Optional[float] = None
+    days_7: Optional[float] = None
+    days_30: Optional[float] = None
+    days_60: Optional[float] = None
+    days_90: Optional[float] = None
+    up_30: Optional[int] = Field(default=None, description="Analysts who raised the estimate in the last 30 days.")
+    down_30: Optional[int] = None
+
+
+class PastReportResponse(BaseModel):
+    date: dt.date
+    session: Literal["BMO", "AMC", "?"]
+    eps_estimate: Optional[float] = None
+    eps_actual: Optional[float] = None
+    surprise_pct: Optional[float] = None
+    move_pct: Optional[float] = Field(default=None, description="The stock's move on the session that took the news.")
+
+
+class ImpliedMoveResponse(BaseModel):
+    move_pct: float = Field(description="Expected absolute move on the report, as a percent of the price.")
+    method: Literal["term structure", "straddle"]
+    expiry: dt.date
+    before_expiry: Optional[dt.date] = None
+    iv_after: Optional[float] = None
+    iv_before: Optional[float] = None
+
+
+class EarningsPreviewResponse(BaseModel):
+    symbol: str
+    name: str
+    price: Optional[float] = None
+    date: Optional[dt.date] = None
+    session: Literal["BMO", "AMC", "?"] = "?"
+    days_away: Optional[int] = None
+    quarter: QuarterConsensusResponse
+    trends: List[EstimateTrendResponse]
+    history: List[PastReportResponse] = Field(description="Reported quarters, oldest first.")
+    implied: Optional[ImpliedMoveResponse] = None
+    implied_note: Optional[str] = Field(default=None, description="Why there is no implied move, when there is none.")
+    options_listed: bool = True
+    typical_move_pct: Optional[float] = Field(default=None, description="Average absolute move over the reports in history.")
+    largest_move_pct: Optional[float] = None
+    notes: List[str] = []
+
+
 class PerformanceResponse(BaseModel):
     symbol: str
     name: str
@@ -449,6 +508,57 @@ class EventContractRequest(BaseModel):
 def _beaten_down(limit: int, min_market_cap: float, min_off_high_pct: float, sort: str, cache_window: int):
     """One screener call per fifteen minutes, whatever the traffic."""
     return discover.beaten_down(limit, min_market_cap, min_off_high_pct, sort)
+
+
+_EARNINGS_CACHE: Dict[Any, Any] = {}
+
+
+def _earnings_preview(symbol: str, cache_window: int):
+    """Option chains are the slow part; fifteen minutes of reuse keeps them cheap.
+
+    Not an lru_cache, because one answer is not worth keeping: a company with a
+    scheduled report whose options came back empty is far more often a dropped
+    request than a stock without options, and caching it would show "no options"
+    for the whole window. That answer is served but not stored.
+    """
+    key = (symbol, cache_window)
+    if key in _EARNINGS_CACHE:
+        return _EARNINGS_CACHE[key]
+    for stale in [item for item in _EARNINGS_CACHE if item[1] != cache_window]:
+        del _EARNINGS_CACHE[stale]
+    result = _build_earnings_preview(symbol)
+    doubtful = isinstance(result, EarningsPreviewResponse) and result.date and result.implied is None and not result.options_listed
+    if not doubtful:
+        _EARNINGS_CACHE[key] = result
+    return result
+
+
+def _build_earnings_preview(symbol: str):
+    try:
+        data = MarketData(symbol)
+        found = earnings_preview.earnings_preview(data)
+        name, price = data.name, data.info_value("currentPrice", "regularMarketPrice")
+    except DataError as exc:
+        return exc
+    if found.date is None and not found.history:
+        return DataError(f"No earnings reports found for {symbol}")
+    return EarningsPreviewResponse(
+        symbol=symbol,
+        name=name,
+        price=price,
+        date=found.date,
+        session=found.session,
+        days_away=found.days_away,
+        quarter=QuarterConsensusResponse(**vars(found.quarter)),
+        trends=[EstimateTrendResponse(**vars(item)) for item in found.trends],
+        history=[PastReportResponse(**vars(item)) for item in found.history],
+        implied=ImpliedMoveResponse(**vars(found.implied)) if found.implied else None,
+        implied_note=found.implied_note,
+        options_listed=found.options_listed,
+        typical_move_pct=found.typical_move_pct,
+        largest_move_pct=found.largest_move_pct,
+        notes=found.notes,
+    )
 
 
 @lru_cache(maxsize=128)
@@ -830,6 +940,13 @@ def create_mobile_router(config: Config) -> APIRouter:
             as_of=data.last_date,
             panel=_panel(panel) if panel else None,
         )
+
+    @router.get("/profiles/{symbol}/earnings", response_model=EarningsPreviewResponse)
+    def earnings(symbol: str) -> EarningsPreviewResponse:
+        found = _earnings_preview(symbol.strip().upper(), int(time.time() // 900))
+        if isinstance(found, DataError):
+            raise _not_found(found)
+        return found
 
     @router.get("/profiles/{symbol}/performance", response_model=PerformanceResponse)
     def business_performance(symbol: str) -> PerformanceResponse:

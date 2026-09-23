@@ -305,17 +305,28 @@ def forward(data: MarketData, annual: List[Period]) -> Forward:
         except Exception:
             price = None
     count = data.info_value("numberOfAnalystOpinions")
+    found = estimates(data.consensus, annual)
+    forward_pe = data.info_value("forwardPE")
+    # Yahoo's profile drops forwardEps now and then while keeping forwardPE.
+    # The same number is next year's consensus EPS, or failing that the price
+    # over the multiple that was struck on it.
+    forward_eps = data.info_value("forwardEps")
+    if forward_eps is None:
+        next_year = next((item for item in found if item.period == "+1y"), None)
+        forward_eps = next_year.eps_avg if next_year and next_year.eps_avg else None
+    if forward_eps is None and price and forward_pe and forward_pe > 0:
+        forward_eps = price / forward_pe
     return Forward(
         price=price,
-        forward_pe=data.info_value("forwardPE"),
+        forward_pe=forward_pe,
         trailing_pe=data.info_value("trailingPE"),
-        forward_eps=data.info_value("forwardEps"),
+        forward_eps=forward_eps,
         trailing_eps=data.info_value("trailingEps"),
         target_mean=data.info_value("targetMeanPrice"),
         target_low=data.info_value("targetLowPrice"),
         target_high=data.info_value("targetHighPrice"),
         target_analysts=int(count) if count else None,
-        estimates=estimates(data.consensus, annual),
+        estimates=found,
     )
 
 
