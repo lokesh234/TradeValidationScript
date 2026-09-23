@@ -409,6 +409,31 @@ class MarketData:
         return self._statement("income_stmt", "financials")
 
     @cached_property
+    def consensus(self) -> Dict[str, Optional[pd.DataFrame]]:
+        """Analyst consensus by period: revenue and EPS for this fiscal year and next.
+
+        Rows are Yahoo's period codes -- ``0q``/``+1q`` for quarters, ``0y``/``+1y``
+        for fiscal years -- with avg/low/high, analyst count, the year-ago figure
+        and growth against it.
+        """
+        found: Dict[str, Optional[pd.DataFrame]] = {}
+        for key, attr in (("revenue", "revenue_estimate"), ("eps", "earnings_estimate")):
+            try:
+                df = getattr(self._ticker, attr)
+            except Exception:
+                df = None
+            found[key] = df if isinstance(df, pd.DataFrame) and not df.empty else None
+        return found
+
+    @cached_property
+    def quarterly_cash_flow(self) -> Optional[pd.DataFrame]:
+        return self._statement("quarterly_cashflow", "quarterly_cash_flow")
+
+    @cached_property
+    def quarterly_income_statement(self) -> Optional[pd.DataFrame]:
+        return self._statement("quarterly_income_stmt", "quarterly_financials")
+
+    @cached_property
     def balance_sheet(self) -> Optional[pd.DataFrame]:
         return self._statement("balance_sheet", "balancesheet")
 

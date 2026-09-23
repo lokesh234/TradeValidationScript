@@ -30,7 +30,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import discover, indices, kalshi, macro, spending, valuation
+from tradeval.data import discover, indices, kalshi, macro, performance, spending, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -316,6 +316,92 @@ class ProfileResponse(BaseModel):
     panel: Optional[PanelResponse]
 
 
+class PeriodResponse(BaseModel):
+    period_end: dt.date
+    revenue: float
+    gross_profit: Optional[float] = None
+    operating_income: Optional[float] = None
+    net_income: Optional[float] = None
+
+
+class TrailingResponse(BaseModel):
+    period_end: dt.date
+    revenue: float
+    net_income: Optional[float] = None
+    basis: Literal["four reported quarters", "reported total"]
+
+
+class QuarterComparisonResponse(BaseModel):
+    period_end: dt.date
+    revenue: float
+    year_ago_end: dt.date
+    year_ago_revenue: float
+
+
+class EstimateResponse(BaseModel):
+    period: Literal["0y", "+1y"] = Field(description="This fiscal year, or the next.")
+    period_end: Optional[dt.date] = Field(default=None, description="The fiscal year end, when the consensus lines up with the reported statements.")
+    revenue_avg: Optional[float] = None
+    revenue_low: Optional[float] = None
+    revenue_high: Optional[float] = None
+    revenue_year_ago: Optional[float] = None
+    eps_avg: Optional[float] = None
+    eps_low: Optional[float] = None
+    eps_high: Optional[float] = None
+    eps_year_ago: Optional[float] = None
+    analysts: Optional[int] = None
+
+
+class ForwardResponse(BaseModel):
+    price: Optional[float] = None
+    forward_pe: Optional[float] = None
+    trailing_pe: Optional[float] = None
+    forward_eps: Optional[float] = Field(default=None, description="Consensus EPS the forward P/E is struck on.")
+    trailing_eps: Optional[float] = None
+    target_mean: Optional[float] = None
+    target_low: Optional[float] = None
+    target_high: Optional[float] = None
+    target_analysts: Optional[int] = None
+    estimates: List[EstimateResponse] = []
+
+
+class CashPeriodResponse(BaseModel):
+    period_end: dt.date
+    free_cash_flow: float
+    operating_cash_flow: Optional[float] = None
+    capital_expenditure: Optional[float] = Field(default=None, description="Negative, as reported.")
+    stock_based_compensation: Optional[float] = None
+
+
+class CashResponse(BaseModel):
+    annual: List[CashPeriodResponse] = Field(description="Fiscal years, oldest first.")
+    quarters: List[CashPeriodResponse] = Field(description="Fiscal quarters, oldest first.")
+    trailing: Optional[CashPeriodResponse] = Field(default=None, description="The latest four consecutive quarters summed.")
+    shares_outstanding: Optional[float] = None
+    total_cash: Optional[float] = None
+    total_debt: Optional[float] = None
+    beta: Optional[float] = None
+
+
+class PerformanceResponse(BaseModel):
+    symbol: str
+    name: str
+    source: str = "Yahoo Finance"
+    annual: List[PeriodResponse] = Field(description="Fiscal years, oldest first.")
+    quarters: List[PeriodResponse] = Field(description="Fiscal quarters, oldest first.")
+    trailing: Optional[TrailingResponse] = None
+    latest_quarter: Optional[QuarterComparisonResponse] = Field(default=None, description="The latest quarter beside the same quarter a year earlier.")
+    gross_margin_pct: Optional[float] = None
+    operating_margin_pct: Optional[float] = None
+    net_margin_pct: Optional[float] = None
+    return_on_equity_pct: Optional[float] = None
+    free_cash_flow: Optional[float] = None
+    market_cap: Optional[float] = None
+    next_earnings: Optional[dt.date] = None
+    forward: Optional[ForwardResponse] = None
+    cash: Optional[CashResponse] = None
+
+
 class SpreadChoiceResponse(BaseModel):
     contract: str
     buy_strike: float
@@ -363,6 +449,50 @@ class EventContractRequest(BaseModel):
 def _beaten_down(limit: int, min_market_cap: float, min_off_high_pct: float, sort: str, cache_window: int):
     """One screener call per fifteen minutes, whatever the traffic."""
     return discover.beaten_down(limit, min_market_cap, min_off_high_pct, sort)
+
+
+@lru_cache(maxsize=128)
+def _performance(symbol: str, cache_window: int):
+    """Statements change four times a year; fifteen minutes of reuse is free.
+
+    A missing symbol is cached as its error, so a mistyped ticker being
+    retried does not become a stream of provider requests.
+    """
+    try:
+        data = MarketData(symbol)
+    except DataError as exc:
+        return exc
+    found = performance.business_performance(data)
+    if not found.annual and not found.quarters:
+        return DataError(f"No reported revenue for {symbol}")
+    return PerformanceResponse(
+        symbol=data.symbol,
+        name=data.name,
+        annual=[PeriodResponse(**vars(item)) for item in found.annual],
+        quarters=[PeriodResponse(**vars(item)) for item in found.quarters],
+        trailing=TrailingResponse(**vars(found.trailing)) if found.trailing else None,
+        latest_quarter=QuarterComparisonResponse(**vars(found.latest_quarter)) if found.latest_quarter else None,
+        gross_margin_pct=found.gross_margin_pct,
+        operating_margin_pct=found.operating_margin_pct,
+        net_margin_pct=found.net_margin_pct,
+        return_on_equity_pct=found.return_on_equity_pct,
+        free_cash_flow=found.free_cash_flow,
+        market_cap=found.market_cap,
+        next_earnings=found.next_earnings,
+        forward=ForwardResponse(
+            **{key: value for key, value in vars(found.forward).items() if key != "estimates"},
+            estimates=[EstimateResponse(**vars(item)) for item in found.forward.estimates],
+        ) if found.forward else None,
+        cash=CashResponse(
+            annual=[CashPeriodResponse(**vars(item)) for item in found.cash.annual],
+            quarters=[CashPeriodResponse(**vars(item)) for item in found.cash.quarters],
+            trailing=CashPeriodResponse(**vars(found.cash.trailing)) if found.cash.trailing else None,
+            shares_outstanding=found.cash.shares_outstanding,
+            total_cash=found.cash.total_cash,
+            total_debt=found.cash.total_debt,
+            beta=found.cash.beta,
+        ) if found.cash else None,
+    )
 
 
 @lru_cache(maxsize=512)
@@ -700,6 +830,13 @@ def create_mobile_router(config: Config) -> APIRouter:
             as_of=data.last_date,
             panel=_panel(panel) if panel else None,
         )
+
+    @router.get("/profiles/{symbol}/performance", response_model=PerformanceResponse)
+    def business_performance(symbol: str) -> PerformanceResponse:
+        found = _performance(symbol.strip().upper(), int(time.time() // 900))
+        if isinstance(found, DataError):
+            raise _not_found(found)
+        return found
 
     @router.post("/trades/spreads", response_model=SpreadPickerResponse)
     def spread_choices(
