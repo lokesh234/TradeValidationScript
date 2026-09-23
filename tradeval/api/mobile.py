@@ -71,6 +71,8 @@ class MarketQuoteResponse(BaseModel):
 
 
 class MarketValuationResponse(BaseModel):
+    distribution_yield_pct: Optional[float] = Field(default=None, ge=0, description="Trailing 365-day fund distributions / NAV, in percent units: 1.0 means 1%.")
+    distribution_as_of: Optional[dt.date] = None
     symbol: str
     forward_pe: Optional[float] = None
     as_of: Optional[dt.date] = None
@@ -78,6 +80,26 @@ class MarketValuationResponse(BaseModel):
     source_url: str
     basis: Literal["FY1"]
     status: Literal["available", "unavailable"]
+
+
+class BeatenCompanyResponse(BaseModel):
+    symbol: str
+    name: str
+    market_cap: float
+    peak_market_cap: float = Field(description="Today's share count priced at the 52-week high. An estimate of the peak, not the capitalisation carried on the day.")
+    lost_market_cap: float
+    off_high_pct: float
+    price: float
+    high: float
+    short_history: bool = Field(description="The line has traded under a year, so its high is a since-listing high.")
+
+
+class BeatenDownResponse(BaseModel):
+    companies: List[BeatenCompanyResponse]
+    sort: Literal["lost", "percent"]
+    min_market_cap: float
+    min_off_high_pct: float
+    as_of: str
 
 
 class MarketSnapshotResponse(BaseModel):
@@ -337,6 +359,12 @@ class EventContractRequest(BaseModel):
     limit_price: Optional[float] = Field(default=None, ge=0, le=100)
 
 
+@lru_cache(maxsize=8)
+def _beaten_down(limit: int, min_market_cap: float, min_off_high_pct: float, sort: str, cache_window: int):
+    """One screener call per fifteen minutes, whatever the traffic."""
+    return discover.beaten_down(limit, min_market_cap, min_off_high_pct, sort)
+
+
 @lru_cache(maxsize=512)
 def _company_revenue(symbol: str, cache_window: int) -> Optional[float]:
     """Trailing twelve-month revenue, held for fifteen minutes.
@@ -444,6 +472,22 @@ def create_mobile_router(config: Config) -> APIRouter:
             option_sides=["call", "put", "both"],
             short_horizons=list(config.short_term.horizons),
             default_short_horizon=config.short_term.default_horizon,
+        )
+
+    @router.get("/discover/beaten-down", response_model=BeatenDownResponse)
+    def beaten_down(
+        limit: int = Query(default=20, ge=1, le=50),
+        min_market_cap: float = Query(default=1e11, ge=0),
+        min_off_high_pct: float = Query(default=10.0, ge=0, le=100),
+        sort: Literal["lost", "percent"] = Query(default="lost"),
+    ) -> BeatenDownResponse:
+        found = _beaten_down(limit, min_market_cap, min_off_high_pct, sort, int(time.time() // 900))
+        return BeatenDownResponse(
+            companies=[BeatenCompanyResponse(**vars(item)) for item in found],
+            sort=sort,
+            min_market_cap=min_market_cap,
+            min_off_high_pct=min_off_high_pct,
+            as_of=dt.datetime.now(dt.timezone.utc).isoformat(),
         )
 
     @router.get("/market/valuation", response_model=MarketValuationResponse)

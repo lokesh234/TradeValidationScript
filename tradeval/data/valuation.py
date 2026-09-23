@@ -13,6 +13,26 @@ _cached = None
 _expires = 0.0
 
 
+def parse_distribution(root):
+    """Return the fund's trailing distribution yield, never SEC or index yield."""
+    try:
+        sections = root.xpath('//section[h2[contains(text(), "Yields")]]')
+        if len(sections) != 1:
+            return {}
+        section = sections[0]
+        date_text = section.xpath('string(./h2/span[@class="date"])').strip()
+        as_of = dt.datetime.strptime(date_text.removeprefix("as of "), "%b %d %Y").date()
+        values = section.xpath('.//tr[th[normalize-space(text()[1])="Fund Distribution Yield"]]/td/text()')
+        if len(values) != 1 or not values[0].strip().endswith("%"):
+            return {}
+        value = float(values[0].strip()[:-1])
+        if not math.isfinite(value) or value < 0:
+            return {}
+        return {"distribution_yield_pct": value, "distribution_as_of": as_of.isoformat()}
+    except (ValueError, TypeError):
+        return {}
+
+
 def parse_valuation(document):
     root = html.fromstring(document)
     sections = root.xpath('//section[h2[contains(., "Fund Characteristics")]]')
@@ -29,7 +49,7 @@ def parse_valuation(document):
         raise ValueError("Invalid forward P/E")
     return {"symbol": "SPY", "forward_pe": value, "as_of": as_of.isoformat(),
             "source": "State Street", "source_url": SOURCE_URL, "basis": "FY1",
-            "status": "available"}
+            "status": "available", **parse_distribution(root)}
 
 
 def spy_valuation():

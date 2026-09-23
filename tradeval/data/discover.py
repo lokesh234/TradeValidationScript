@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -97,6 +98,23 @@ class SectorCompany:
     name: str
     market_cap: Optional[float]
     price: Optional[float] = None
+
+
+@dataclass
+class BeatenCompany:
+    """A large company trading below its own high, and what the fall cost."""
+
+    symbol: str
+    name: str
+    market_cap: float
+    peak_market_cap: float
+    lost_market_cap: float
+    off_high_pct: float
+    price: float
+    high: float
+    # True where the line has traded for less than a year, so its "52-week
+    # high" is really a since-listing high and usually a post-listing one.
+    short_history: bool
 
 
 def resolve_sector(choice: str) -> str:
@@ -442,3 +460,85 @@ def format_candidates(candidates: Sequence[Candidate]) -> List[str]:
         "  %2d) %s" % (number, format_candidate(item))
         for number, item in enumerate(candidates, start=1)
     ]
+
+
+def _year_of_trading(row: Dict[str, Any], now: Optional[float] = None) -> bool:
+    """Whether the line has a full year behind its fifty-two week high."""
+    first = row.get("firstTradeDateMilliseconds")
+    if not isinstance(first, (int, float)) or first <= 0:
+        # Unknown rather than short: an absent date is no reason to warn.
+        return True
+    age_days = ((now if now is not None else time.time()) - first / 1000) / 86400
+    return age_days >= 365
+
+
+def beaten_down(
+    limit: int = 20, min_market_cap: float = 1e11, min_off_high_pct: float = 10.0,
+    sort: str = "lost",
+) -> List[BeatenCompany]:
+    """Large companies furthest below their high, by the market value lost.
+
+    Ranked on the value the fall erased rather than on the percentage, because
+    they answer different questions. A small company halving is a larger
+    percentage and a smaller event; a trillion-dollar company giving up a tenth
+    is barely a headline percentage and is more money than most companies are
+    worth. This list is about the money.
+
+    The peak is today's share count priced at the high, which is an estimate
+    and not the market capitalisation the company actually carried that day --
+    a year of buybacks or issuance moves the share count underneath it. It is
+    the honest form of the question "what is this fall worth", and the API
+    labels it as an estimate rather than a record.
+
+    Ordering by percentage is a different list rather than the same one
+    rearranged, which is why it is chosen here and not by the caller after the
+    fact: the companies furthest down in percent are mostly not the ones that
+    lost the most money, and sorting a page of the latter would leave them out
+    entirely while looking like an answer.
+    """
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for row in _screen(None, min_market_cap):
+        symbol = row.get("symbol")
+        # Same treatment a sector listing gets: tradeable US lines only, and
+        # one line per company, or Alphabet arrives twice and Tencent arrives
+        # as both an ADR and a foreign ordinary with different highs.
+        if not symbol or row.get("exchange") not in TRADEABLE_EXCHANGES:
+            continue
+        if _positive(row.get("marketCap")) is None:
+            continue
+        key = _company_key(row.get("shortName") or row.get("longName") or symbol)
+        groups.setdefault(key, []).append(row)
+
+    found: List[BeatenCompany] = []
+    for rows in groups.values():
+        pick = max(rows, key=_traded_volume)
+        cap = _positive(pick.get("marketCap"))
+        price = _positive(pick.get("regularMarketPrice"))
+        high = _positive(pick.get("fiftyTwoWeekHigh"))
+        if cap is None or price is None or high is None or high <= price:
+            continue
+        off_high_pct = (high - price) / high * 100
+        if off_high_pct < min_off_high_pct:
+            continue
+        peak = cap * (high / price)
+        name = min(
+            (str(row.get("shortName") or row.get("longName") or "") for row in rows),
+            key=lambda text: (len(text) == 0, len(text)),
+        )
+        found.append(
+            BeatenCompany(
+                symbol=str(pick.get("symbol")),
+                name=name or str(pick.get("symbol")),
+                market_cap=cap,
+                peak_market_cap=peak,
+                lost_market_cap=peak - cap,
+                off_high_pct=off_high_pct,
+                price=price,
+                high=high,
+                short_history=not _year_of_trading(pick),
+            )
+        )
+
+    ranked = (lambda item: item.off_high_pct) if sort == "percent" else (lambda item: item.lost_market_cap)
+    found.sort(key=ranked, reverse=True)
+    return found[:limit]

@@ -47,3 +47,31 @@ def test_empty_source_response_degrades(monkeypatch):
     monkeypatch.setattr(valuation, "_expires", 0)
     monkeypatch.setattr(valuation.requests, "get", Mock(return_value=Mock(text="")))
     assert valuation.spy_valuation()["status"] == "unavailable"
+
+
+def yield_document(value="1.00%", date="Sep 18 2026"):
+    return document() + f'<section><h2>Yields<span class="date">as of {date}</span></h2><table><tr><th>30 Day SEC Yield</th><td>9.00%</td></tr><tr><th>Fund Distribution Yield<span>Definition</span></th><td>{value}</td></tr><tr><th>Index Dividend Yield</th><td>8.00%</td></tr></table></section>'
+
+
+def test_distribution_is_fund_yield_with_its_own_date(monkeypatch):
+    from fastapi.testclient import TestClient
+    import serve
+    result = valuation.parse_valuation(yield_document())
+    assert result["distribution_yield_pct"] == 1.0
+    assert result["distribution_as_of"] == "2026-09-18"
+    monkeypatch.setattr(valuation, "spy_valuation", lambda: result)
+    response = TestClient(serve.app).get('/mobile/market/valuation')
+    assert response.json()["distribution_yield_pct"] == 1.0
+    assert response.json()["distribution_as_of"] == "2026-09-18"
+
+
+@pytest.mark.parametrize("value", ["N/A", "nan%", "inf%", "-1%", "1.00"])
+def test_bad_dividends_do_not_invalidate_pe(value):
+    result = valuation.parse_valuation(yield_document(value))
+    assert result["forward_pe"] == 21.11
+    assert result.get("distribution_yield_pct") is None
+
+
+def test_zero_dividends_are_valid_and_missing_date_is_not():
+    assert valuation.parse_valuation(yield_document("0.00%"))["distribution_yield_pct"] == 0
+    assert valuation.parse_valuation(yield_document(date="unknown")).get("distribution_yield_pct") is None
