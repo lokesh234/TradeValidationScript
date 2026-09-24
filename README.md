@@ -2358,6 +2358,38 @@ twice as quickly.
 Log retention is set to seven days. It is the one thing here that grows without
 being asked to, and the default is forever.
 
+### Releasing and rolling back
+
+Releases follow [semantic versioning](https://semver.org): the patch number for
+a fix, the minor number for a new endpoint or field, the major number for a
+change that breaks an existing client. One release is one commit that sets the
+version in `serve.py`, tagged to match:
+
+```bash
+# set version="1.2.0" in serve.py, then
+git commit -am "Call it 1.2.0"
+git tag -a v1.2.0 -m "v1.2.0"
+git push origin main --follow-tags
+deploy/deploy.sh
+```
+
+Each deploy tags its image with the git version and the commit as well as
+`latest`, points the function at that exact image, and publishes a numbered
+Lambda version described as `v1.2.0 (abc1234)`. Deploying from an untagged or
+uncommitted tree still works, and says so. ECR keeps the last ten images.
+
+To see what has run and go back to one of them:
+
+```bash
+deploy/rollback.sh           # releases, newest first, with the live one marked
+deploy/rollback.sh v1.1.0    # by tag
+deploy/rollback.sh 7         # by Lambda version number
+```
+
+A rollback changes only the image; memory, timeout and the shared key stay as
+the latest deploy set them. It publishes a version of its own, so the list
+stays a true history.
+
 ## Development
 
 ```bash

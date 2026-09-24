@@ -2,8 +2,16 @@
 # Put the HTTP front end on Lambda, behind a public Function URL.
 #
 #   deploy/deploy.sh              build, push, and create or update everything
+#   deploy/rollback.sh            list past releases, or put one back live
 #
 # Idempotent: run it again after a change and it updates the function in place.
+#
+# Every deploy is a release you can return to. The image is tagged with the
+# git version (v1.1.0, or v1.1.0-2-gabc1234 between tags) and the commit as
+# well as `latest`, the function is pointed at that exact image rather than at
+# `latest`, and a numbered Lambda version is published describing it. Deploy
+# from a tagged, committed tree and the release is named after its tag; the
+# script says so when it is not.
 #
 # Why Lambda rather than a server. The checklist is not a service that needs to
 # be up -- it is a function that runs when somebody asks a question, takes a
@@ -24,8 +32,15 @@ REGION="${AWS_REGION:-us-east-1}"
 FUNCTION="${TRADEVAL_FUNCTION:-tradeval}"
 ROLE="${FUNCTION}-lambda-role"
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
-IMAGE="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${FUNCTION}:latest"
+REPO="${ACCOUNT}.dkr.ecr.${REGION}.amazonaws.com/${FUNCTION}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# What this release is called. `git describe` gives the tag on a tagged commit
+# and tag-distance-commit between tags; uncommitted changes add -dirty, because
+# an image built from them cannot be rebuilt from anything in git.
+VERSION="$(git -C "$ROOT" describe --tags --always --dirty 2>/dev/null || echo unversioned)"
+COMMIT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+IMAGE="${REPO}:${VERSION}"
 
 # 2048MB is not about memory -- /health peaks at under 200MB and a validation
 # does not come close to the ceiling. Lambda scales CPU with the memory you
@@ -41,15 +56,23 @@ TIMEOUT=120
 
 say() { printf '\n== %s\n' "$1"; }
 
+say "Release $VERSION ($COMMIT)"
+case "$VERSION" in
+    *-dirty) echo "  warning: uncommitted changes -- this release cannot be rebuilt from git" ;;
+    v*-g*) echo "  note: not a tagged release; tag it (git tag -a vX.Y.Z) to give it a name" ;;
+    v*) echo "  tagged release" ;;
+    *) echo "  warning: no tags in this repository" ;;
+esac
+
 say "ECR repository"
-aws ecr describe-repositories --repository-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1 || {
+aws ecr describe-repositories --repository-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1 || \
     aws ecr create-repository --repository-name "$FUNCTION" --region "$REGION" \
         --image-scanning-configuration scanOnPush=false >/dev/null
-    # ECR bills for every image it holds, and a deploy leaves the old one
-    # behind untagged. Three is enough to roll back to.
-    aws ecr put-lifecycle-policy --repository-name "$FUNCTION" --region "$REGION" \
-        --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"Keep the last 3 images.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":3},"action":{"type":"expire"}}]}' >/dev/null
-}
+# ECR bills for every image it holds -- about 2.5 cents a month each at 250MB.
+# The last ten are the releases rollback.sh can return to: a quarter a month.
+# Set on every deploy, so an existing repository picks up a change to it.
+aws ecr put-lifecycle-policy --repository-name "$FUNCTION" --region "$REGION" \
+    --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"Keep the last 10 images: the releases rollback.sh can return to.","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}' >/dev/null
 
 say "Build and push $IMAGE"
 aws ecr get-login-password --region "$REGION" \
@@ -59,7 +82,7 @@ aws ecr get-login-password --region "$REGION" \
 # platform. arm64 to match the function's architecture, and for Graviton's
 # cheaper per-GB-second rate.
 docker build --platform linux/arm64 --provenance=false --sbom=false \
-    -f "$ROOT/deploy/Dockerfile" -t "$IMAGE" --push "$ROOT"
+    -f "$ROOT/deploy/Dockerfile" -t "$IMAGE" -t "${REPO}:git-${COMMIT}" -t "${REPO}:latest" --push "$ROOT"
 
 say "Execution role"
 if ! aws iam get-role --role-name "$ROLE" >/dev/null 2>&1; then
@@ -110,6 +133,14 @@ else
         --description "The trade checklist over HTTP." >/dev/null
 fi
 aws lambda wait function-updated-v2 --function-name "$FUNCTION" --region "$REGION"
+
+# A published version is a frozen copy of this code and configuration, with a
+# number and a description, that stays after the next deploy replaces $LATEST.
+# The Function URL keeps serving $LATEST; the versions are the record of what
+# ran when, and what rollback.sh reads to put an earlier one back.
+PUBLISHED="$(aws lambda publish-version --function-name "$FUNCTION" --region "$REGION" \
+    --description "$VERSION ($COMMIT)" --query Version --output text)"
+echo "  published Lambda version $PUBLISHED: $VERSION ($COMMIT)"
 
 # Logs are the one thing here that grows without being asked to, and the
 # default retention is forever.
