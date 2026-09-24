@@ -46,7 +46,7 @@ class StrategyResponse(BaseModel):
 app = FastAPI(
     title="tradeval",
     summary="Grade a trade idea against the checklist for the kind of trade it is.",
-    version="1.0.0",
+    version="1.1.0",
 )
 
 
