@@ -683,6 +683,22 @@ class MarketData:
         self._chain_cache[expiry] = result
         return result
 
+    def contract_quote(self, kind: str, strike: float, expiry: dt.date) -> Optional[OptionQuote]:
+        """The quote for one contract, or None when the chain has no such
+        expiry or strike -- an expired contract, or a strike typed wrong.
+
+        Strikes are matched to the cent rather than exactly: a chain carries
+        them as floats, and 1085 typed by a person must find 1085.0.
+        """
+        loaded = self.chain(expiry)
+        if loaded is None or kind not in ("call", "put"):
+            return None
+        side = loaded[0] if kind == "call" else loaded[1]
+        near = side.loc[(side["strike"] - strike).abs() < 0.005]
+        if near.empty:
+            return None
+        return _quote_at(side, float(near.iloc[0]["strike"]), kind)
+
     def atm_strike(self, expiry: dt.date) -> Optional[float]:
         """Strike closest to spot that exists on both sides of the chain."""
         loaded = self.chain(expiry)

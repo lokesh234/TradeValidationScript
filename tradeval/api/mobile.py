@@ -30,7 +30,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import discover, earnings_preview, indices, kalshi, macro, performance, spending, valuation
+from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -314,6 +314,112 @@ class ProfileResponse(BaseModel):
     price: float
     as_of: dt.date
     panel: Optional[PanelResponse]
+
+
+class ContractRequest(BaseModel):
+    option_type: Literal["call", "put"]
+    strike: float = Field(gt=0)
+    expiry: dt.date
+
+
+class OptionQuotesRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=15)
+    contracts: List[ContractRequest] = Field(min_length=1, max_length=8)
+
+
+class ContractQuoteResponse(BaseModel):
+    option_type: str
+    strike: float
+    expiry: dt.date
+    found: bool
+    bid: Optional[float] = None
+    ask: Optional[float] = None
+    mid: Optional[float] = None
+
+
+class OptionQuotesResponse(BaseModel):
+    symbol: str
+    quotes: List[ContractQuoteResponse]
+
+
+class OptionPositionRequest(BaseModel):
+    symbol: str = Field(min_length=1, max_length=15)
+    contracts: List[ContractRequest] = Field(min_length=1, max_length=8)
+
+
+class PortfolioQuotesRequest(BaseModel):
+    symbols: List[str] = Field(default_factory=list, max_length=150)
+    options: List[OptionPositionRequest] = Field(default_factory=list, max_length=60)
+
+
+class LatestPriceResponse(BaseModel):
+    price: float
+    as_of: dt.date
+
+
+class PortfolioQuotesResponse(BaseModel):
+    prices: Dict[str, Optional[LatestPriceResponse]]
+    options: List[OptionQuotesResponse]
+    fresh_for_seconds: int
+
+
+class ValuationsRequest(BaseModel):
+    symbols: List[str] = Field(min_length=1, max_length=150)
+
+
+class CompanyValuationResponse(BaseModel):
+    name: str
+    quote_type: Optional[str] = None
+    trailing_pe: Optional[float] = None
+    forward_pe: Optional[float] = None
+    trailing_eps: Optional[float] = None
+    forward_eps: Optional[float] = None
+    target_high: Optional[float] = None
+    target_mean: Optional[float] = None
+    target_low: Optional[float] = None
+    analyst_count: Optional[int] = None
+
+
+class ValuationsResponse(BaseModel):
+    companies: Dict[str, Optional[CompanyValuationResponse]]
+    fresh_for_seconds: int
+
+
+class CatalystsRequest(BaseModel):
+    symbols: List[str] = Field(min_length=1, max_length=150)
+    days: int = Field(default=90, ge=1, le=180)
+
+
+class EarningsCatalystResponse(BaseModel):
+    date: dt.date
+    session: Optional[Literal["BMO", "AMC", "DMH"]] = None
+    confirmed: bool
+    eps_estimate: Optional[float] = None
+    revenue_estimate: Optional[float] = None
+    implied_move_pct: Optional[float] = None
+
+
+class DividendCatalystResponse(BaseModel):
+    ex_date: dt.date
+    pay_date: Optional[dt.date] = None
+    amount: Optional[float] = None
+
+
+class CompanyCatalystsResponse(BaseModel):
+    name: str
+    quote_type: Optional[str] = None
+    sector: Optional[str] = None
+    industry: Optional[str] = None
+    earnings: Optional[EarningsCatalystResponse] = None
+    dividend: Optional[DividendCatalystResponse] = None
+
+
+class CatalystsResponse(BaseModel):
+    as_of: dt.date
+    window_end: dt.date
+    macro: List[CalendarEventResponse]
+    companies: Dict[str, Optional[CompanyCatalystsResponse]]
+    fresh_for_seconds: int
 
 
 class PeriodResponse(BaseModel):
@@ -688,6 +794,17 @@ def _panel(panel) -> PanelResponse:
     return PanelResponse(**panel_to_dict(panel))
 
 
+def _calendar_event(event: macro.MacroEvent, today: dt.date) -> CalendarEventResponse:
+    return CalendarEventResponse(
+        date=event.date,
+        kind=event.kind,
+        at=event.at,
+        why=event.why,
+        days_away=event.days_away(today),
+        forecastable=event.kind in macro.MARKET_SERIES,
+    )
+
+
 def _not_found(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404, detail=str(exc))
 
@@ -801,17 +918,7 @@ def create_mobile_router(config: Config) -> APIRouter:
         return CalendarResponse(
             as_published=macro.AS_PUBLISHED,
             needs_refresh=macro.running_out(today),
-            events=[
-                CalendarEventResponse(
-                    date=event.date,
-                    kind=event.kind,
-                    at=event.at,
-                    why=event.why,
-                    days_away=event.days_away(today),
-                    forecastable=event.kind in macro.MARKET_SERIES,
-                )
-                for event in macro.upcoming(today, limit)
-            ],
+            events=[_calendar_event(event, today) for event in macro.upcoming(today, limit)],
         )
 
     @router.get("/sectors", response_model=SectorListResponse)
@@ -939,6 +1046,102 @@ def create_mobile_router(config: Config) -> APIRouter:
             price=data.price,
             as_of=data.last_date,
             panel=_panel(panel) if panel else None,
+        )
+
+    @router.post("/options/quotes", response_model=OptionQuotesResponse)
+    def option_quotes(request: OptionQuotesRequest) -> OptionQuotesResponse:
+        """Bid, ask and mid for specific contracts on one underlying.
+
+        For valuing positions someone already holds, where the explorer
+        endpoints above are for choosing new ones. Each expiry's chain is
+        loaded once however many legs sit on it, and the expiries load in
+        parallel. A contract the chain does not have -- expired, or a strike
+        that does not exist -- comes back with found false rather than
+        failing the rest.
+        """
+        data = MarketData(request.symbol.strip().upper())
+        expiries = sorted({contract.expiry for contract in request.contracts})
+        with ThreadPoolExecutor(max_workers=min(4, len(expiries))) as pool:
+            list(pool.map(data.chain, expiries))
+        quotes = []
+        for contract in request.contracts:
+            quote = data.contract_quote(contract.option_type, contract.strike, contract.expiry)
+            quotes.append(ContractQuoteResponse(
+                option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry,
+                found=quote is not None and quote.mid is not None,
+                bid=quote.bid if quote else None, ask=quote.ask if quote else None,
+                mid=quote.mid if quote else None,
+            ))
+        return OptionQuotesResponse(symbol=data.symbol, quotes=quotes)
+
+    @router.post("/quotes", response_model=PortfolioQuotesResponse)
+    def portfolio_quotes(request: PortfolioQuotesRequest) -> PortfolioQuotesResponse:
+        """Everything a page of holdings needs priced, in one request.
+
+        One request rather than one per symbol because the Lambda this runs on
+        may only run a few copies at once, and a page that fans out twenty
+        lookups has most of them refused before any code runs. Prices come
+        from one batched download and every chain the options need loads in
+        parallel; both are kept for half an hour (tradeval.data.quotes), so a
+        page opened again soon costs nothing upstream.
+        """
+        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        found = quotes.latest_prices(symbols + [position.symbol for position in request.options])
+        quotes.load_chains((position.symbol, contract.expiry)
+                           for position in request.options for contract in position.contracts)
+        options = []
+        for position in request.options:
+            symbol = position.symbol.strip().upper()
+            rows = []
+            for contract in position.contracts:
+                quote = quotes.contract_quote(symbol, contract.option_type, contract.strike, contract.expiry)
+                rows.append(ContractQuoteResponse(
+                    option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry,
+                    found=quote is not None and quote.mid is not None,
+                    bid=quote.bid if quote else None, ask=quote.ask if quote else None,
+                    mid=quote.mid if quote else None,
+                ))
+            options.append(OptionQuotesResponse(symbol=symbol, quotes=rows))
+        return PortfolioQuotesResponse(
+            prices={symbol: (LatestPriceResponse(price=found[symbol][0], as_of=found[symbol][1]) if found.get(symbol) else None)
+                    for symbol in dict.fromkeys(symbols)},
+            options=options,
+            fresh_for_seconds=quotes.FRESH_FOR,
+        )
+
+    @router.post("/valuations", response_model=ValuationsResponse)
+    def company_valuations(request: ValuationsRequest) -> ValuationsResponse:
+        """Trailing and forward P/E, with the earnings behind them, for every
+        symbol a portfolio holds -- in one request, kept for twelve hours
+        (tradeval.data.fundamentals)."""
+        found = fundamentals.valuations(request.symbols)
+        return ValuationsResponse(
+            companies={symbol: (CompanyValuationResponse(**value) if value else None) for symbol, value in found.items()},
+            fresh_for_seconds=fundamentals.FRESH_FOR,
+        )
+
+    @router.post("/catalysts", response_model=CatalystsResponse)
+    def portfolio_catalysts(request: CatalystsRequest) -> CatalystsResponse:
+        """What is scheduled that could move a portfolio, between today and
+        ``days`` ahead inclusive: the market-wide releases, and each holding's
+        next report and ex-dividend date -- in one request, the holdings kept
+        for twelve hours (tradeval.data.catalysts).
+
+        The market-wide half is the same calendar GET /mobile/calendar serves,
+        cut to the window rather than to a count; it is local data, so it is
+        worked out fresh every time.
+        """
+        today = dt.date.today()
+        until = today + dt.timedelta(days=request.days)
+        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        found = catalysts.catalysts(symbols, until, today)
+        return CatalystsResponse(
+            as_of=today,
+            window_end=until,
+            macro=[_calendar_event(event, today) for event in macro.all_events(today) if event.date <= until],
+            companies={symbol: (CompanyCatalystsResponse(**found[symbol]) if found.get(symbol) else None)
+                       for symbol in dict.fromkeys(symbols)},
+            fresh_for_seconds=catalysts.FRESH_FOR,
         )
 
     @router.get("/profiles/{symbol}/earnings", response_model=EarningsPreviewResponse)
