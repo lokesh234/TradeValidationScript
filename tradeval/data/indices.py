@@ -43,6 +43,9 @@ throttle_yfinance()
 # Symbol, and what a person calls it.
 INDICES = (
     ("^GSPC", "S&P 500"),
+    # The same 500 with each company at the same weight, so set beside the
+    # S&P it shows whether the move is broad or a few megacaps carrying it.
+    ("RSP", "S&P 500 equal weight"),
     ("^DJI", "Dow"),
     ("QQQ", "Nasdaq 100"),
     ("IWM", "Russell 2000"),

@@ -55,6 +55,11 @@ log = logging.getLogger(__name__)
 DEFAULTS: Dict[str, Tuple[float, float]] = {
     "yahoo": (10.0, 20.0),
     "kalshi": (20.0, 40.0),
+    # SEC EDGAR is the one provider here with a published number: ten
+    # requests a second from anyone, enforced by blocking the address. Eight
+    # with no burst spaces calls evenly, so no one-second window can ever hold
+    # ten however the threads that share it happen to arrive.
+    "sec": (8.0, 1.0),
 }
 
 

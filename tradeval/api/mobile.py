@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import datetime as dt
 import math
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -23,14 +24,14 @@ from copy import deepcopy
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from tradeval.api.requests import ValidationRequest
 from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, valuation
+from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, stories, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -420,6 +421,72 @@ class CatalystsResponse(BaseModel):
     macro: List[CalendarEventResponse]
     companies: Dict[str, Optional[CompanyCatalystsResponse]]
     fresh_for_seconds: int
+
+
+# What a ticker can look like, in any market data's spelling: BRK.B, BRK-B,
+# BTC-USD, ^GSPC, EURUSD=X, BRK/B.
+_TICKER = re.compile(r"[A-Za-z0-9.\-^=/]{1,15}")
+
+
+class StoriesRequest(BaseModel):
+    # Forty at most: a cold symbol costs several SEC requests at ten a second,
+    # and the client asks in batches of ten anyway.
+    symbols: List[str] = Field(min_length=1, max_length=40)
+    days: int = Field(default=180, ge=1, le=365)
+
+    @field_validator("symbols")
+    @classmethod
+    def _tickers(cls, symbols: List[str]) -> List[str]:
+        for symbol in symbols:
+            if not _TICKER.fullmatch(symbol.strip()):
+                raise ValueError("not a ticker: %r" % symbol[:20])
+        return symbols
+
+
+class StorySourceResponse(BaseModel):
+    title: str
+    url: str
+    publisher: str
+    published: Optional[dt.date] = None
+
+
+class StoryLikelihoodResponse(BaseModel):
+    yes: float
+    source: str
+    url: str
+    volume: Optional[float] = None
+
+
+class StoryResponse(BaseModel):
+    id: str
+    kind: Literal["filing", "filing_date", "market"]
+    category: Literal["legal", "regulatory", "deal", "product", "financing", "contract", "leadership", "other"]
+    title: str
+    summary: Optional[str] = None
+    date: Optional[dt.date] = None
+    window_start: Optional[dt.date] = None
+    window_end: Optional[dt.date] = None
+    date_kind: Literal["exact", "month", "quarter", "half", "none"]
+    happened_on: Optional[dt.date] = None
+    status: Literal["announced", "pending", "market"]
+    likelihood: Optional[StoryLikelihoodResponse] = None
+    quote: Optional[str] = None
+    sources: List[StorySourceResponse] = Field(min_length=1)
+
+
+class CompanyStoriesResponse(BaseModel):
+    name: str
+    cik: Optional[str] = None
+    stories: List[StoryResponse]
+
+
+class StoriesResponse(BaseModel):
+    as_of: dt.date
+    companies: Dict[str, Optional[CompanyStoriesResponse]]
+    fresh_for_seconds: int
+    # Symbols still being looked up when the answer was due: null in
+    # `companies` for now, and worth asking about again shortly.
+    pending: List[str] = Field(default_factory=list)
 
 
 class PeriodResponse(BaseModel):
@@ -1142,6 +1209,32 @@ def create_mobile_router(config: Config) -> APIRouter:
             companies={symbol: (CompanyCatalystsResponse(**found[symbol]) if found.get(symbol) else None)
                        for symbol in dict.fromkeys(symbols)},
             fresh_for_seconds=catalysts.FRESH_FOR,
+        )
+
+    @router.post("/stories", response_model=StoriesResponse)
+    def company_stories(request: StoriesRequest) -> StoriesResponse:
+        """What could move each holding beyond its earnings, between today
+        and ``days`` ahead: its 8-Ks of the last month, dated catalysts quoted
+        from its filings, and open prediction markets about it -- in one
+        request, kept for twelve hours (tradeval.data.stories).
+
+        Free sources only: SEC EDGAR, Polymarket and Kalshi. A source that is
+        down leaves its stories out rather than failing the answer. The
+        answer is due within stories.DEADLINE seconds; a symbol not looked up
+        by then is listed in ``pending`` (and null in ``companies``) while its
+        lookup carries on, so asking again shortly finds it. Days are New
+        York's.
+        """
+        today = stories.new_york_today()
+        until = today + dt.timedelta(days=request.days)
+        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        found = stories.stories(symbols, until, today)
+        return StoriesResponse(
+            as_of=today,
+            companies={symbol: (CompanyStoriesResponse(**found[symbol]) if found.get(symbol) else None)
+                       for symbol in dict.fromkeys(symbols)},
+            fresh_for_seconds=stories.FRESH_FOR,
+            pending=[symbol for symbol in dict.fromkeys(symbols) if symbol not in found],
         )
 
     @router.get("/profiles/{symbol}/earnings", response_model=EarningsPreviewResponse)

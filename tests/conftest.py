@@ -25,6 +25,7 @@ import pytest
 # can still ask for it on the command line.
 os.environ.setdefault("TRADEVAL_YAHOO_RPS", "0")
 os.environ.setdefault("TRADEVAL_KALSHI_RPS", "0")
+os.environ.setdefault("TRADEVAL_SEC_RPS", "0")
 
 from tradeval.config import Config
 from tradeval.context import TradeContext

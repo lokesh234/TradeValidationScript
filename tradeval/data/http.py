@@ -9,13 +9,24 @@ is forgotten when the client is. A ``limiter`` from
 :mod:`tradeval.data.limits` is the provider's, shared by every client in the
 process that talks to the same one -- which is the only pace that survives a
 client built fresh for each call.
+
+A caller answering someone who is waiting can also ask for *patience*: a
+cap on every client's timeout and retries, and a moment by which to give up,
+for whatever that thread does inside a ``with patience(...)`` block. It is
+per thread and not a parameter because the calls it has to reach are several
+layers down -- the stories fan out into the SEC, Polymarket and Kalshi
+modules, each of which builds its own client -- and it is a cap, never a
+floor, so no module's own caution is loosened by it.
 """
 
 from __future__ import annotations
 
 import random
+import threading
 import time
-from typing import Any, Dict, Mapping, Optional, Tuple
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 import requests
 
@@ -31,6 +42,43 @@ class HttpError(Exception):
     def __init__(self, message: str, status: Optional[int] = None):
         super().__init__(message)
         self.status = status
+
+
+@dataclass(frozen=True)
+class Patience:
+    """How long one call may wait, how often it may try again, and the
+    ``time.monotonic()`` moment after which no call is started at all."""
+
+    timeout: float
+    retries: int
+    deadline: Optional[float] = None
+
+    def left(self) -> Optional[float]:
+        return None if self.deadline is None else self.deadline - time.monotonic()
+
+
+_local = threading.local()
+
+
+@contextmanager
+def patience(timeout: float, retries: int, deadline: Optional[float] = None) -> Iterator[Patience]:
+    """Cap every HTTP call this thread makes inside the block. Nested blocks
+    only ever tighten: the stricter of each limit wins."""
+    outer = current_patience()
+    if outer is not None:
+        timeout, retries = min(timeout, outer.timeout), min(retries, outer.retries)
+        if outer.deadline is not None:
+            deadline = outer.deadline if deadline is None else min(deadline, outer.deadline)
+    held = Patience(timeout, retries, deadline)
+    _local.patience = held
+    try:
+        yield held
+    finally:
+        _local.patience = outer
+
+
+def current_patience() -> Optional[Patience]:
+    return getattr(_local, "patience", None)
 
 
 class HttpClient:
@@ -49,6 +97,11 @@ class HttpClient:
         min_interval: float = 0.0,
         limiter: Optional["RateLimit"] = None,
     ):
+        # Built inside a patience block, a client is as impatient as it says.
+        held = current_patience()
+        if held is not None:
+            timeout, retries = min(timeout, held.timeout), min(retries, held.retries)
+        self.deadline = held.deadline if held is not None else None
         self.timeout = timeout
         self.retries = retries
         self.backoff = backoff
@@ -99,6 +152,7 @@ class HttpClient:
         data: Optional[Mapping[str, Any]] = None,
         headers: Optional[Mapping[str, str]] = None,
         auth: Optional[Tuple[str, str]] = None,
+        stream: bool = False,
     ) -> requests.Response:
         last_error = "no attempt made"
         status: Optional[int] = None
@@ -110,6 +164,14 @@ class HttpClient:
             if self.limiter is not None:
                 self.limiter.acquire()
             self._throttle()
+            # Out of time is out of attempts: a call that could only answer
+            # after the caller has given up is not worth the provider's while.
+            timeout = self.timeout
+            if self.deadline is not None:
+                left = self.deadline - time.monotonic()
+                if left <= 0:
+                    raise HttpError("out of time before %s (%s)" % (url, last_error), status)
+                timeout = min(timeout, max(left, 0.5))
             response = None
             try:
                 response = self._session.request(
@@ -119,7 +181,10 @@ class HttpClient:
                     data=data,
                     headers=dict(headers) if headers else None,
                     auth=auth,
-                    timeout=self.timeout,
+                    timeout=timeout,
+                    # A caller that streams reads only as much of the body as
+                    # it wants -- a filing can run to tens of megabytes.
+                    stream=stream,
                 )
             except requests.RequestException as exc:
                 last_error = str(exc)
@@ -169,7 +234,7 @@ def redact(value: Optional[str], keep: int = 4) -> str:
     return value[:keep] + "..." if len(value) > keep else "set"
 
 
-__all__ = ["HttpClient", "HttpError", "redact", "RETRY_STATUSES"]
+__all__ = ["HttpClient", "HttpError", "Patience", "current_patience", "patience", "redact", "RETRY_STATUSES"]
 
 
 def default_headers(token: str) -> Dict[str, str]:

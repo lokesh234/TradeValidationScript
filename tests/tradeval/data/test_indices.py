@@ -77,7 +77,7 @@ def test_snapshot_asks_for_every_group_in_one_request(monkeypatch):
     monkeypatch.setattr(indices.yf, "download", record, raising=False)
     indices.snapshot()
     assert len(calls) == 1
-    assert calls[0] == ["^GSPC", "^DJI", "QQQ", "IWM", "^VIX", "^TNX", "^TYX"]
+    assert calls[0] == ["^GSPC", "RSP", "^DJI", "QQQ", "IWM", "^VIX", "^TNX", "^TYX"]
 
 
 def test_snapshot_degrades_to_empty_when_the_fetch_fails(monkeypatch):
@@ -210,7 +210,7 @@ def test_moves_degrades_to_nothing_when_the_fetch_fails(monkeypatch):
 
 
 def test_the_shipped_list_covers_what_was_asked_for():
-    assert set(dict(indices.INDICES)) == {"^GSPC", "^DJI", "QQQ", "IWM"}
+    assert set(dict(indices.INDICES)) == {"^GSPC", "RSP", "^DJI", "QQQ", "IWM"}
     assert set(dict(indices.VOLATILITY)) == {"^VIX"}
     assert set(dict(indices.YIELDS)) == {"^TNX", "^TYX"}
 
