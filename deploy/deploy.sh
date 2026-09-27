@@ -117,6 +117,28 @@ else
     echo "  keeping the existing one"
 fi
 
+say "Squeeze odds"
+# Where tradeval-squeeze publishes the week's odds ("bucket/key"), served at
+# /mobile/squeeze. Same precedence as the key: what you exported, then what the
+# function already has -- a redeploy must not drop it -- then nothing, and the
+# endpoint answers 503.
+SQUEEZE="${TRADEVAL_SQUEEZE_S3:-}"
+if [ -z "$SQUEEZE" ]; then
+    SQUEEZE="$(aws lambda get-function-configuration --function-name "$FUNCTION" --region "$REGION" \
+        --query 'Environment.Variables.TRADEVAL_SQUEEZE_S3' --output text 2>/dev/null || true)"
+    [ "$SQUEEZE" = "None" ] && SQUEEZE=""
+fi
+ENVIRONMENT="Variables={PYTHONUNBUFFERED=1,TRADEVAL_API_KEY=$KEY}"
+if [ -n "$SQUEEZE" ]; then
+    ENVIRONMENT="Variables={PYTHONUNBUFFERED=1,TRADEVAL_API_KEY=$KEY,TRADEVAL_SQUEEZE_S3=$SQUEEZE}"
+    # Reading that one object is all the function may do in S3.
+    aws iam put-role-policy --role-name "$ROLE" --policy-name read-squeeze-odds --policy-document \
+        "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::$SQUEEZE\"}]}"
+    echo "  reading s3://$SQUEEZE"
+else
+    echo "  none set; /mobile/squeeze will answer 503"
+fi
+
 say "Function"
 if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/null 2>&1; then
     aws lambda update-function-code --function-name "$FUNCTION" --region "$REGION" \
@@ -124,12 +146,12 @@ if aws lambda get-function --function-name "$FUNCTION" --region "$REGION" >/dev/
     aws lambda wait function-updated-v2 --function-name "$FUNCTION" --region "$REGION"
     aws lambda update-function-configuration --function-name "$FUNCTION" --region "$REGION" \
         --memory-size "$MEMORY" --timeout "$TIMEOUT" \
-        --environment "Variables={PYTHONUNBUFFERED=1,TRADEVAL_API_KEY=$KEY}" >/dev/null
+        --environment "$ENVIRONMENT" >/dev/null
 else
     aws lambda create-function --function-name "$FUNCTION" --region "$REGION" \
         --package-type Image --code "ImageUri=$IMAGE" --role "$ROLE_ARN" \
         --architectures arm64 --memory-size "$MEMORY" --timeout "$TIMEOUT" \
-        --environment "Variables={PYTHONUNBUFFERED=1,TRADEVAL_API_KEY=$KEY}" \
+        --environment "$ENVIRONMENT" \
         --description "The trade checklist over HTTP." >/dev/null
 fi
 aws lambda wait function-updated-v2 --function-name "$FUNCTION" --region "$REGION"

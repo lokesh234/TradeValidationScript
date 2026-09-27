@@ -31,7 +31,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, stories, valuation
+from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, squeeze, stories, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -922,6 +922,16 @@ def create_mobile_router(config: Config) -> APIRouter:
     @router.get("/market/valuation", response_model=MarketValuationResponse)
     def market_valuation() -> MarketValuationResponse:
         return MarketValuationResponse(**valuation.spy_valuation())
+
+    @router.get("/squeeze")
+    def squeeze_odds() -> Dict[str, Any]:
+        """The chance of a squeeze at the next monthly OPEX, with the history
+        behind it -- the file tradeval-squeeze publishes, passed through as it
+        is (its squeeze/export.py holds the contract). 503 until one exists."""
+        try:
+            return squeeze.latest()
+        except squeeze.NotPublished as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/market/snapshot", response_model=MarketSnapshotResponse)
     def market_snapshot() -> MarketSnapshotResponse:
