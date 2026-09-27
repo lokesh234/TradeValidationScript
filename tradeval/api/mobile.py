@@ -379,6 +379,11 @@ class CompanyValuationResponse(BaseModel):
     target_mean: Optional[float] = None
     target_low: Optional[float] = None
     analyst_count: Optional[int] = None
+    # Trailing growth: percent a year over the last ``growth_years`` fiscal
+    # years; None where either end was a loss.
+    eps_growth: Optional[float] = None
+    revenue_growth: Optional[float] = None
+    growth_years: Optional[int] = None
 
 
 class ValuationsResponse(BaseModel):
