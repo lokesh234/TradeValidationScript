@@ -9,8 +9,10 @@ from tradeval.data import fundamentals, quotes
 
 INFO = {
     "MU": {"quoteType": "EQUITY", "longName": "Micron Technology, Inc.", "trailingPE": 24.4, "forwardPE": 6.79, "trailingEps": 44.27, "forwardEps": 159.1,
-           "targetHighPrice": 2200.0, "targetMeanPrice": 1515.54, "targetLowPrice": 361.0, "numberOfAnalystOpinions": 46},
-    "ACHR": {"quoteType": "EQUITY", "shortName": "Archer Aviation Inc.", "trailingPE": None, "forwardPE": -7.07, "trailingEps": -1.08, "forwardEps": -0.81},
+           "targetHighPrice": 2200.0, "targetMeanPrice": 1515.54, "targetLowPrice": 361.0, "numberOfAnalystOpinions": 46,
+           "priceToSalesTrailing12Months": 4.2},
+    "ACHR": {"quoteType": "EQUITY", "shortName": "Archer Aviation Inc.", "trailingPE": None, "forwardPE": -7.07, "trailingEps": -1.08, "forwardEps": -0.81,
+             "totalRevenue": 2_000_000, "marketCap": 9_000_000},
     "VOO": {"quoteType": "ETF", "shortName": "Vanguard S&P 500 ETF", "trailingPE": "24.87", "forwardPE": "Infinity"},
 }
 
@@ -50,10 +52,17 @@ def test_reads_the_ratios_and_the_earnings_behind_them(market):
     assert found["MU"] == {"name": "Micron Technology, Inc.", "quote_type": "EQUITY", "trailing_pe": 24.4,
                            "forward_pe": 6.79, "trailing_eps": 44.27, "forward_eps": 159.1,
                            "target_high": 2200.0, "target_mean": 1515.54, "target_low": 361.0, "analyst_count": 46,
+                           "price_to_sales": 4.2,
                            "eps_growth": pytest.approx(100, abs=0.1), "revenue_growth": pytest.approx(58.7, abs=0.1),
                            "growth_years": 3}
     assert found["ACHR"]["trailing_pe"] is None and found["ACHR"]["forward_eps"] == -0.81
     assert found["NOPE"] is None
+
+
+def test_price_to_sales_is_worked_out_from_totals_when_not_given(market):
+    found = fundamentals.valuations(["ACHR", "VOO"])
+    assert found["ACHR"]["price_to_sales"] == pytest.approx(4.5)
+    assert found["VOO"]["price_to_sales"] is None, "a fund has no sales of its own"
 
 
 def test_numbers_that_are_not_numbers_become_none(market):

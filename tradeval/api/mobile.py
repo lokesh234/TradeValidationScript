@@ -380,6 +380,9 @@ class CompanyValuationResponse(BaseModel):
     target_mean: Optional[float] = None
     target_low: Optional[float] = None
     analyst_count: Optional[int] = None
+    # Market value over twelve months' sales, company-wide; None for funds,
+    # coins, or no figure.
+    price_to_sales: Optional[float] = None
     # Trailing growth: percent a year over the last ``growth_years`` fiscal
     # years; None where either end was a loss.
     eps_growth: Optional[float] = None

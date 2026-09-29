@@ -51,6 +51,11 @@ _FIELDS = {
     "target_mean": ("targetMeanPrice",),
     "target_low": ("targetLowPrice",),
     "analyst_count": ("numberOfAnalystOpinions",),
+    # Market value over twelve months' sales, for the whole company: a
+    # holding's share of the sales is its value divided by this. Per-share
+    # revenue would be simpler but is wrong for companies with several share
+    # classes -- Yahoo gives Berkshire's on the Class A basis, 1,500 B shares.
+    "price_to_sales": ("priceToSalesTrailing12Months",),
 }
 
 # How far back the trailing growth reaches, in fiscal years.
@@ -84,6 +89,13 @@ def _number(value) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _ratio(value, sales) -> Optional[float]:
+    """Price to sales worked out from the totals, when Yahoo gives those but
+    not the ratio. None unless both are there and the sales are positive."""
+    value, sales = _number(value), _number(sales)
+    return value / sales if value is not None and sales and sales > 0 else None
 
 
 def _line(df: pd.DataFrame, names) -> Dict[pd.Timestamp, float]:
@@ -137,6 +149,8 @@ def _valuation(symbol: str) -> Optional[dict]:
         out[field] = value if field in ("name", "quote_type") else _number(value)
     if out["analyst_count"] is not None:
         out["analyst_count"] = int(out["analyst_count"])
+    if out["price_to_sales"] is None:
+        out["price_to_sales"] = _ratio(info.get("marketCap"), info.get("totalRevenue"))
     out["name"] = out["name"] or symbol
     if out["quote_type"] in _REPORTING:
         out.update(_growth(symbol))
