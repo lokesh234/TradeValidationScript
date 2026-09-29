@@ -421,3 +421,25 @@ def test_single_option_choices_and_payoff(client, monkeypatch, side):
     assert client.post("/mobile/trades/option-payoff", json=payload).status_code == 422
     payload["side"] = "both"
     assert client.post("/mobile/trades/options", json=payload).status_code == 422
+
+
+def test_spending_outlook_is_consistent_in_list_and_detail(client, monkeypatch):
+    import datetime as dt
+    from tradeval.data import spending_outlook
+
+    original = spending_outlook.outlook
+    monkeypatch.setattr(spending_outlook, "outlook", lambda name: original(name, dt.date(2026, 9, 29)))
+    listing = client.get("/mobile/spending-flows")
+    assert listing.status_code == 200
+    flows = listing.json()["flows"]
+    for flow in flows:
+        detail = client.get(f"/mobile/spending-flows/{flow['choice']}")
+        assert detail.status_code == 200
+        assert detail.json()["outlook"] == flow["outlook"]
+    assert flows[0]["outlook"]["change_pct"] == 50
+    assert flows[0]["outlook"]["published_on"] == "2026-09-23"
+    missing = flows[1]["outlook"]
+    assert missing["status"] == "unavailable"
+    assert missing["projected_amount"] is None
+    assert missing["change_pct"] is None
+    assert client.get("/mobile/spending-flows/not-a-flow").status_code == 422

@@ -2516,3 +2516,32 @@ request body.
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Discover spending outlooks
+
+`GET /mobile/spending-flows` and `GET /mobile/spending-flows/{choice}` now
+include an additive `outlook` object. Existing theme descriptions and beneficiary
+shares are unchanged. Amounts are annual nominal USD, **not billions of USD**.
+The payload includes `base_year`, `target_year`, `base_amount`,
+`projected_amount`, calculated `change_amount` and `change_pct`, `scope`,
+`coverage`, `source_name`, `source_url`, `published_on`, and `methodology`.
+
+- `available`: a curated pair covers the current UTC calendar year and the next.
+- `unavailable`: no verified pair has been added; amounts and changes are null.
+- `stale`: preserve the original dated comparison but flag it for an update;
+  never roll a forecast forward merely by changing its year labels.
+
+Maintain snapshots in `tradeval/data/spending_outlook.py`. Update both annual
+amounts and their provenance together, using the same publication and scope.
+Do not derive annual forecasts from the old free-text `size`, per-$1,000
+beneficiary shares, or company revenue growth. The initial records cover US
+hyperscaler capex (a proxy for AI), wafer fab equipment (a semiconductor
+segment), and all-media advertising (broader than digital). These boundaries
+must stay visible to users. Other themes explicitly lack a verified comparison.
+This is a curated source snapshot, not an automatically refreshed forecast feed.
+
+The client plots both amounts from zero, shows the dollar and percentage change,
+and links the publication. A change from rounded source totals can differ from
+the source's percentage based on unrounded data. These forecasts describe
+spending, not stock returns or company revenue. Add a new source-backed record
+to `FORECASTS` to enable the chart for another theme without changing the API or UI.

@@ -32,7 +32,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, squeeze, stories, valuation
+from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, spending_outlook, squeeze, stories, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -235,6 +235,24 @@ def _company_growth(symbol: str, cache_window: int) -> CompanyGrowthResponse:
     return result
 
 
+class SpendingOutlookResponse(BaseModel):
+    status: Literal["available", "unavailable", "stale"]
+    base_year: int
+    target_year: int
+    base_amount: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    projected_amount: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    change_amount: Optional[float] = Field(default=None, allow_inf_nan=False)
+    change_pct: Optional[float] = Field(default=None, allow_inf_nan=False)
+    currency: Literal["USD"] = "USD"
+    scope: Optional[str] = None
+    coverage: Optional[Literal["theme", "proxy", "segment", "broader_market"]] = None
+    source_name: Optional[str] = None
+    source_url: Optional[str] = None
+    published_on: Optional[dt.date] = None
+    methodology: Optional[str] = None
+    reason: Optional[str] = None
+
+
 class SpendingFlowResponse(BaseModel):
     choice: int
     name: str
@@ -244,6 +262,7 @@ class SpendingFlowResponse(BaseModel):
     catch: str
     split: str
     beneficiaries: List[BeneficiaryResponse]
+    outlook: SpendingOutlookResponse
 
 
 class SpendingFlowListResponse(BaseModel):
@@ -838,6 +857,7 @@ def _flow(choice: int, flow: spending.SpendingFlow) -> SpendingFlowResponse:
         what=flow.what,
         catch=flow.catch,
         split=flow.split,
+        outlook=SpendingOutlookResponse(**spending_outlook.outlook(flow.name)),
         beneficiaries=[
             BeneficiaryResponse(
                 symbol=winner.symbol,
