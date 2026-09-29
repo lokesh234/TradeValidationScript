@@ -82,7 +82,8 @@ def test_a_contract_the_chain_lacks_is_marked_not_found(client):
 def test_a_strike_typed_as_a_whole_number_finds_the_chain_float(client):
     body = client.post("/mobile/options/quotes", json={"symbol": "MU", "contracts": [
         {"option_type": "put", "strike": "95", "expiry": NEAR.isoformat()}]}).json()
-    assert body["quotes"][0]["found"] is True and body["quotes"][0]["strike"] == 95.0
+    assert body["quotes"][0]["found"] is True
+    assert body["quotes"][0]["strike"] == 95.0
 
 
 @pytest.mark.parametrize("contracts", [[], [_contract("call", 100, NEAR)] * 9, [{"option_type": "future", "strike": 1, "expiry": NEAR.isoformat()}]])

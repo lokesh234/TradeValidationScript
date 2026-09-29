@@ -218,27 +218,36 @@ class LongTermStrategy(OptionsPlaybook, Strategy):
 
     # -- balance sheet ------------------------------------------------------
 
-    def _check_balance_sheet(self) -> CheckResult:
-        """Debt load plus short-term solvency, graded on the worse of the two."""
-        name = "Balance sheet"
+    def _debt_to_equity(self) -> Optional[float]:
+        """Debt over equity as a multiple, from the profile or the balance sheet."""
         # Yahoo quotes debtToEquity as a percentage (6.5 means 0.065x).
         debt_equity = self.data.info_value("debtToEquity")
         if debt_equity is not None:
-            debt_equity = debt_equity / 100.0
-        else:
-            debt = self.data.latest(self.data.balance_sheet, "Total Debt")
-            equity = self.data.latest(
-                self.data.balance_sheet, "Stockholders Equity", "Total Equity Gross Minority Interest"
-            )
-            if debt is not None and equity and equity > 0:
-                debt_equity = debt / equity
+            return debt_equity / 100.0
+        debt = self.data.latest(self.data.balance_sheet, "Total Debt")
+        equity = self.data.latest(
+            self.data.balance_sheet, "Stockholders Equity", "Total Equity Gross Minority Interest"
+        )
+        if debt is not None and equity and equity > 0:
+            return debt / equity
+        return None
 
+    def _current_ratio(self) -> Optional[float]:
+        """Current assets over current liabilities, from the profile or the balance sheet."""
         current_ratio = self.data.info_value("currentRatio")
-        if current_ratio is None:
-            assets = self.data.latest(self.data.balance_sheet, "Current Assets", "Total Current Assets")
-            liabilities = self.data.latest(self.data.balance_sheet, "Current Liabilities", "Total Current Liabilities")
-            if assets is not None and liabilities and liabilities > 0:
-                current_ratio = assets / liabilities
+        if current_ratio is not None:
+            return current_ratio
+        assets = self.data.latest(self.data.balance_sheet, "Current Assets", "Total Current Assets")
+        liabilities = self.data.latest(self.data.balance_sheet, "Current Liabilities", "Total Current Liabilities")
+        if assets is not None and liabilities and liabilities > 0:
+            return assets / liabilities
+        return None
+
+    def _check_balance_sheet(self) -> CheckResult:
+        """Debt load plus short-term solvency, graded on the worse of the two."""
+        name = "Balance sheet"
+        debt_equity = self._debt_to_equity()
+        current_ratio = self._current_ratio()
 
         if debt_equity is None and current_ratio is None:
             return skipped(name, "no balance sheet data", weight=3.0)

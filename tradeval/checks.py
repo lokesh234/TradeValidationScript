@@ -168,8 +168,14 @@ def threshold_check(
         return skipped(name, missing_detail, weight, critical)
 
     if higher_is_better:
-        status = Status.PASS if value >= good else (Status.WARN if value >= warn else Status.FAIL)
+        meets_good, meets_warn = value >= good, value >= warn
     else:
-        status = Status.PASS if value <= good else (Status.WARN if value <= warn else Status.FAIL)
+        meets_good, meets_warn = value <= good, value <= warn
+    if meets_good:
+        status = Status.PASS
+    elif meets_warn:
+        status = Status.WARN
+    else:
+        status = Status.FAIL
 
     return CheckResult(name, status, detail, weight, critical, value_text)

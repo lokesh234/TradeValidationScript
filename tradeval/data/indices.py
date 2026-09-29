@@ -142,29 +142,44 @@ def moves(symbols: Sequence[str]) -> "dict[str, tuple[Optional[float], Optional[
 
     out = {}
     for symbol in wanted:
-        # Asking for one symbol comes back as its own column, as a bare series,
-        # or as a frame with a single column of another name, depending on the
-        # shape yfinance is in. All three are the same closes.
-        try:
-            column = frame[symbol]
-        except Exception:
-            # With more than one asked for, a column that is not there is a
-            # symbol Yahoo had nothing for -- and the frame's other columns
-            # belong to other stocks, so there is nothing to fall back to.
-            if len(wanted) > 1:
-                continue
-            column = frame
-        if getattr(column, "ndim", 1) > 1:
-            column = column.iloc[:, 0]
-        try:
-            last, previous = _last_two(column)
-        except Exception:
-            continue
-        if last is None:
-            continue
-        change = (last / previous - 1.0) * 100.0 if previous else None
-        out[symbol] = (last, change)
+        column = _closes(frame, symbol, len(wanted) > 1)
+        move = _close_and_change(column) if column is not None else None
+        if move is not None:
+            out[symbol] = move
     return out
+
+
+def _closes(frame, symbol: str, several: bool):
+    """One symbol's closes out of a batched download, or None.
+
+    Asking for one symbol comes back as its own column, as a bare series,
+    or as a frame with a single column of another name, depending on the
+    shape yfinance is in. All three are the same closes.
+    """
+    try:
+        column = frame[symbol]
+    except Exception:
+        # With more than one asked for, a column that is not there is a
+        # symbol Yahoo had nothing for -- and the frame's other columns
+        # belong to other stocks, so there is nothing to fall back to.
+        if several:
+            return None
+        column = frame
+    if getattr(column, "ndim", 1) > 1:
+        column = column.iloc[:, 0]
+    return column
+
+
+def _close_and_change(column) -> "Optional[tuple[float, Optional[float]]]":
+    """The last close and its percent change, or None without a last close."""
+    try:
+        last, previous = _last_two(column)
+    except Exception:
+        return None
+    if last is None:
+        return None
+    change = (last / previous - 1.0) * 100.0 if previous else None
+    return last, change
 
 
 def snapshot(

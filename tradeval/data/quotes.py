@@ -109,14 +109,22 @@ def latest_prices(symbols: Iterable[str]) -> Dict[str, Optional[Price]]:
         else:
             missing.append(symbol)
     if missing:
-        try:
-            frame = _download(missing)
-        except Exception:
-            frame = None
-        for symbol in missing:
-            price = _last_close(frame, symbol) if frame is not None and not frame.empty else None
-            _prices.put(symbol, price, FRESH_FOR if price else MISS_FOR)
-            out[symbol] = price
+        out.update(_download_prices(missing))
+    return out
+
+
+def _download_prices(symbols: List[str]) -> Dict[str, Optional[Price]]:
+    """One batched download for symbols the cache did not have, remembered --
+    a miss for less time than a price."""
+    try:
+        frame = _download(symbols)
+    except Exception:
+        frame = None
+    out: Dict[str, Optional[Price]] = {}
+    for symbol in symbols:
+        price = _last_close(frame, symbol) if frame is not None and not frame.empty else None
+        _prices.put(symbol, price, FRESH_FOR if price else MISS_FOR)
+        out[symbol] = price
     return out
 
 

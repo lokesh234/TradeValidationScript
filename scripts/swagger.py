@@ -105,10 +105,12 @@ ERROR_SCHEMA = {
     "required": ["detail"],
 }
 
+BATCH_PATH = "/validate/batch"
+
 # Paths grouped so the page reads in the order you would use them.
 TAGS = {
     "/validate": "validation",
-    "/validate/batch": "validation",
+    BATCH_PATH: "validation",
     "/strategies": "reference",
     "/health": "reference",
 }
@@ -125,12 +127,9 @@ SwaggerUIBundle({spec: %(spec)s, dom_id: "#ui", tryItOutEnabled: true});
 """
 
 
-def build() -> Dict[str, Any]:
-    """The schema ``serve:app`` would serve, with the notes above added."""
-    from serve import app
+def check_examples() -> None:
+    """Stop if a request example names a field ValidationRequest no longer has."""
     from tradeval.api import ValidationRequest
-
-    spec = app.openapi()
 
     known = set(ValidationRequest.__dataclass_fields__)
     for body in [VALIDATE_EXAMPLE, *BATCH_EXAMPLE]:
@@ -143,6 +142,34 @@ def build() -> Dict[str, Any]:
                 "longer has: %s" % ", ".join(sorted(unknown))
             )
 
+
+def document_body(path: str, operation: Dict[str, Any]) -> None:
+    """Add the examples and declared failures to an operation that takes a body."""
+    batch = path == BATCH_PATH
+    example = BATCH_EXAMPLE if batch else VALIDATE_EXAMPLE
+    for media in operation["requestBody"].get("content", {}).values():
+        media["example"] = example
+    success = operation.setdefault("responses", {}).setdefault("200", {})
+    success.setdefault("content", {}).setdefault("application/json", {})["example"] = (
+        BATCH_RESPONSE_EXAMPLE if batch else VALIDATE_RESPONSE_EXAMPLE
+    )
+    # FastAPI declares its own 422 for a body that fails parsing;
+    # ours also covers a body that parses and still describes an
+    # ungradeable trade, so the description is widened rather than
+    # a second entry added.
+    for status, (description, schema) in ERRORS.items():
+        response = operation.setdefault("responses", {}).setdefault(status, {})
+        response["description"] = description
+        response["content"] = {"application/json": {"schema": schema}}
+
+
+def build() -> Dict[str, Any]:
+    """The schema ``serve:app`` would serve, with the notes above added."""
+    from serve import app
+
+    spec = app.openapi()
+    check_examples()
+
     spec["servers"] = [{"url": "http://localhost:8000", "description": "uvicorn serve:app"}]
     spec.setdefault("components", {}).setdefault("schemas", {})["Error"] = ERROR_SCHEMA
 
@@ -151,21 +178,7 @@ def build() -> Dict[str, Any]:
             if path in TAGS:
                 operation["tags"] = [TAGS[path]]
             if "requestBody" in operation:
-                example = BATCH_EXAMPLE if path == "/validate/batch" else VALIDATE_EXAMPLE
-                for media in operation["requestBody"].get("content", {}).values():
-                    media["example"] = example
-                success = operation.setdefault("responses", {}).setdefault("200", {})
-                success.setdefault("content", {}).setdefault("application/json", {})["example"] = (
-                    BATCH_RESPONSE_EXAMPLE if path == "/validate/batch" else VALIDATE_RESPONSE_EXAMPLE
-                )
-                # FastAPI declares its own 422 for a body that fails parsing;
-                # ours also covers a body that parses and still describes an
-                # ungradeable trade, so the description is widened rather than
-                # a second entry added.
-                for status, (description, schema) in ERRORS.items():
-                    response = operation.setdefault("responses", {}).setdefault(status, {})
-                    response["description"] = description
-                    response["content"] = {"application/json": {"schema": schema}}
+                document_body(path, operation)
 
     spec.setdefault("tags", []).extend(
         [

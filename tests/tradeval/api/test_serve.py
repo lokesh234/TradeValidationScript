@@ -203,9 +203,9 @@ def test_mobile_endpoints_are_published_with_response_models(client):
         schema["paths"]["/mobile/bootstrap"]["get"]["responses"]["200"]
         ["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
     )
-    assert {"strategies", "instruments", "option_sides", "short_horizons", "default_short_horizon"} == set(
-        schema["components"]["schemas"][bootstrap_ref]["properties"]
-    )
+    assert set(schema["components"]["schemas"][bootstrap_ref]["properties"]) == {
+        "strategies", "instruments", "option_sides", "short_horizons", "default_short_horizon",
+    }
 
 
 def test_spending_growth_returns_percentages_dates_and_partial_results(client, monkeypatch):
@@ -280,7 +280,8 @@ def test_calendar_expectation_says_so_when_nothing_is_listed(client, monkeypatch
     monkeypatch.setattr(mobile.kalshi, "open_events", lambda series, **kw: [])
     body = client.get("/mobile/calendar/expectation?kind=PPI&date=2026-10-14").json()
     # Not an error: the exchange lists a release a few weeks out, no sooner.
-    assert body["listed"] is False and body["rungs"] == []
+    assert body["listed"] is False
+    assert body["rungs"] == []
 
 
 def test_calendar_expectation_refuses_a_kind_nobody_bets_on(client):

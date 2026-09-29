@@ -110,5 +110,7 @@ def test_from_dict_rejects_unknown_fields():
 
 def test_a_bare_request_is_valid():
     request = ValidationRequest(symbol="AMD", strategy="long")
-    assert request.entry is None and request.account is None
-    assert request.benchmark == "SPY" and request.period == "3y"
+    assert request.entry is None
+    assert request.account is None
+    assert request.benchmark == "SPY"
+    assert request.period == "3y"

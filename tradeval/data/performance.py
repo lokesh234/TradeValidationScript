@@ -260,6 +260,26 @@ def _years_later(day: dt.date, years: int) -> dt.date:
         return day.replace(year=day.year + years, day=28)
 
 
+def _estimate_anchor(revenue, annual: List[Period]) -> Optional[dt.date]:
+    """The fiscal year end the 0y row grows from, when it is the latest one
+    reported -- its year-ago revenue within 2% of that year's."""
+    if revenue is None or "0y" not in revenue.index or not annual:
+        return None
+    base = _number(revenue.loc["0y"].get("yearAgoRevenue"))
+    latest = annual[-1].revenue
+    if base and latest and abs(base / latest - 1) < 0.02:
+        return annual[-1].period_end
+    return None
+
+
+def _consensus_row(frame, period: str):
+    return frame.loc[period] if frame is not None and period in frame.index else None
+
+
+def _pick(row, key: str) -> Optional[float]:
+    return _number(row.get(key)) if row is not None else None
+
+
 def estimates(consensus, annual: List[Period]) -> List[Estimate]:
     """This fiscal year's and next year's consensus, pinned to calendar dates.
 
@@ -270,28 +290,22 @@ def estimates(consensus, annual: List[Period]) -> List[Estimate]:
     are still served, undated, rather than put under years they may not be.
     """
     revenue, eps = consensus.get("revenue"), consensus.get("eps")
-    anchor = None
-    if revenue is not None and "0y" in revenue.index and annual:
-        base = _number(revenue.loc["0y"].get("yearAgoRevenue"))
-        latest = annual[-1].revenue
-        if base and latest and abs(base / latest - 1) < 0.02:
-            anchor = annual[-1].period_end
+    anchor = _estimate_anchor(revenue, annual)
     found = []
     for offset, period in enumerate(("0y", "+1y"), start=1):
-        rev = revenue.loc[period] if revenue is not None and period in revenue.index else None
-        per = eps.loc[period] if eps is not None and period in eps.index else None
+        rev = _consensus_row(revenue, period)
+        per = _consensus_row(eps, period)
         if rev is None and per is None:
             continue
-        pick = lambda row, key: _number(row.get(key)) if row is not None else None
-        counts = [pick(row, "numberOfAnalysts") for row in (per, rev)]
+        counts = [_pick(row, "numberOfAnalysts") for row in (per, rev)]
         count = next((value for value in counts if value), None)
         found.append(Estimate(
             period=period,
             period_end=_years_later(anchor, offset) if anchor else None,
-            revenue_avg=pick(rev, "avg"), revenue_low=pick(rev, "low"), revenue_high=pick(rev, "high"),
-            revenue_year_ago=pick(rev, "yearAgoRevenue"),
-            eps_avg=pick(per, "avg"), eps_low=pick(per, "low"), eps_high=pick(per, "high"),
-            eps_year_ago=pick(per, "yearAgoEps"),
+            revenue_avg=_pick(rev, "avg"), revenue_low=_pick(rev, "low"), revenue_high=_pick(rev, "high"),
+            revenue_year_ago=_pick(rev, "yearAgoRevenue"),
+            eps_avg=_pick(per, "avg"), eps_low=_pick(per, "low"), eps_high=_pick(per, "high"),
+            eps_year_ago=_pick(per, "yearAgoEps"),
             analysts=int(count) if count else None,
         ))
     return found

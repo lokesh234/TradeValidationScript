@@ -58,7 +58,8 @@ def test_macro_and_companies_together(client):
     assert mu["earnings"] == {"date": _day(5).isoformat(), "session": "AMC", "confirmed": True,
                               "eps_estimate": 31.59, "revenue_estimate": 51244100130.0, "implied_move_pct": 9.8}
     assert mu["dividend"] == {"ex_date": _day(10).isoformat(), "pay_date": None, "amount": 0.1325}
-    assert body["companies"]["BTC-USD"]["earnings"] is None and body["companies"]["BTC-USD"]["sector"] is None
+    assert body["companies"]["BTC-USD"]["earnings"] is None
+    assert body["companies"]["BTC-USD"]["sector"] is None
     assert body["companies"]["NOPE"] is None
 
 
@@ -69,7 +70,8 @@ def test_macro_events_are_cut_to_the_window_like_the_calendar(client):
     assert fomc == {"date": _day(33).isoformat(), "kind": "FOMC", "at": "14:00 ET", "why": macro.WHY[macro.FOMC],
                     "days_away": 33, "forecastable": True}
     body = client.post("/mobile/catalysts", json={"symbols": ["MU"], "days": 40}).json()
-    assert body["macro"][-1]["kind"] == "OPEX" and body["macro"][-1]["forecastable"] is False
+    assert body["macro"][-1]["kind"] == "OPEX"
+    assert body["macro"][-1]["forecastable"] is False
 
 
 @pytest.mark.parametrize("payload", [

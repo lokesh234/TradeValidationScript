@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 import re
 from dataclasses import dataclass, replace
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -126,10 +127,17 @@ _PRICE_LEVEL = re.compile(
     r"\b(?:hit|reach|close|closes|finish|above|below|between|at|dip|dips|cross|crosses|fall|falls|drop|drops|"
     r"rise|rises|trade|trades)\b[^?]*\$\s?\d", re.IGNORECASE)
 
+# Agencies match in capitals only -- "sec" and "eu" are fragments of ordinary
+# words -- and the rest of the regulatory vocabulary in any case.
+_AGENCIES = ("FDA", "FTC", "DOJ", "SEC", "EU")
+_REGULATORY_WORDS = (
+    r"antitrust", r"approv\w*", r"(?:un)?ban(?:ned)?", r"fine[sd]?", r"regulat\w*",
+    r"European Commission", r"permit", r"license",
+)
+
 _CATEGORY_WORDS: Sequence[Tuple[str, re.Pattern]] = (
     ("legal", re.compile(r"\b(?:sue[sd]?|lawsuit|court|trial|verdict|ruling|judge|settle|settlement|appeal|convicted|charged|indicted)\b", re.I)),
-    ("regulatory", re.compile(r"\b(?:FDA|FTC|DOJ|SEC|EU|(?i:antitrust|approv\w*|(?:un)?ban(?:ned)?|fine[sd]?|regulat\w*|"
-                              r"European Commission|permit|license))\b")),
+    ("regulatory", re.compile(r"\b(?:%s|(?i:%s))\b" % ("|".join(_AGENCIES), "|".join(_REGULATORY_WORDS)))),
     ("deal", re.compile(r"\b(?:acquir\w*|acquisition|merge[rd]?|buy(?:s|out)?|take a stake|stake in|IPO|spin[- ]?off|tender offer)\b", re.I)),
     ("leadership", re.compile(r"\b(?:CEO|CFO|chair\w*|resign\w*|step down|layoffs?|fired|out as)\b", re.I)),
     ("contract", re.compile(r"\b(?:contract|partnership|partner|deal with|award\w*)\b", re.I)),
@@ -250,7 +258,7 @@ def _number(raw) -> Optional[float]:
         value = float(raw)
     except (TypeError, ValueError):
         return None
-    return value if value == value and abs(value) != float("inf") else None
+    return value if math.isfinite(value) else None
 
 
 def _list(raw) -> list:
@@ -288,41 +296,56 @@ def polymarket_search(phrase: str) -> List[dict]:
     return events
 
 
+def _polymarket_rung(raw: dict, event: dict, slug: str, names: List[str],
+                     today: dt.date, until: dt.date) -> Optional[Market]:
+    """One of an event's markets, if it is open, about the company and an
+    event, priced on its yes side, and closing inside the window."""
+    question = str(raw.get("question") or "").strip()
+    if raw.get("closed") or raw.get("active") is False or raw.get("acceptingOrders") is False:
+        return None
+    if not question or not names_company(question, names) or not about_an_event(question, names):
+        return None
+    outcomes = [str(outcome).lower() for outcome in _list(raw.get("outcomes"))]
+    prices = [_number(price) for price in _list(raw.get("outcomePrices"))]
+    if "yes" not in outcomes or len(prices) != len(outcomes):
+        return None
+    yes = prices[outcomes.index("yes")]
+    closes = _day(raw.get("endDate")) or _day(event.get("endDate"))
+    if yes is None or closes is None or not today <= closes <= until:
+        return None
+    volume = _number(raw.get("volumeNum")) or _number(raw.get("volume"))
+    return Market(
+        id="polymarket-%s" % raw.get("id"), source="Polymarket", question=question,
+        yes=round(min(1.0, max(0.0, yes)), 4), volume=volume, closes=closes,
+        url=POLYMARKET_EVENT_URL % slug if slug else "https://polymarket.com",
+        event="polymarket:%s" % (event.get("id") or slug),
+    )
+
+
+def _headline_rung(rungs: List[Market]) -> Market:
+    """The rung that speaks for its event.
+
+    A "by <date>" ladder is cumulative, so the rung nearest even odds is
+    when the market expects it. An "on <date>" ladder is not -- each rung
+    is one day -- and there the busiest rung is the one people believe.
+    """
+    if all(re.search(r"\bby\b", market.question, re.IGNORECASE) for market in rungs):
+        return min(rungs, key=lambda market: (abs(market.yes - 0.5), -(market.volume or 0.0)))
+    return max(rungs, key=lambda market: (market.volume or 0.0, -abs(market.yes - 0.5)))
+
+
 def _polymarket_markets(events: List[dict], names: List[str], today: dt.date, until: dt.date) -> List[Market]:
     out = []
     for event in events:
         slug = str(event.get("slug") or "")
-        rungs = []
-        for raw in event.get("markets") or []:
-            question = str(raw.get("question") or "").strip()
-            if raw.get("closed") or raw.get("active") is False or raw.get("acceptingOrders") is False:
-                continue
-            if not question or not names_company(question, names) or not about_an_event(question, names):
-                continue
-            outcomes = [str(outcome).lower() for outcome in _list(raw.get("outcomes"))]
-            prices = [_number(price) for price in _list(raw.get("outcomePrices"))]
-            if "yes" not in outcomes or len(prices) != len(outcomes):
-                continue
-            yes = prices[outcomes.index("yes")]
-            closes = _day(raw.get("endDate")) or _day(event.get("endDate"))
-            if yes is None or closes is None or not today <= closes <= until:
-                continue
-            volume = _number(raw.get("volumeNum")) or _number(raw.get("volume"))
-            rungs.append(Market(
-                id="polymarket-%s" % raw.get("id"), source="Polymarket", question=question,
-                yes=round(min(1.0, max(0.0, yes)), 4), volume=volume, closes=closes,
-                url=POLYMARKET_EVENT_URL % slug if slug else "https://polymarket.com",
-                event="polymarket:%s" % (event.get("id") or slug),
-            ))
+        rungs = [
+            rung
+            for rung in (_polymarket_rung(raw, event, slug, names, today, until) for raw in event.get("markets") or [])
+            if rung is not None
+        ]
         if not rungs:
             continue
-        # A "by <date>" ladder is cumulative, so the rung nearest even odds is
-        # when the market expects it. An "on <date>" ladder is not -- each rung
-        # is one day -- and there the busiest rung is the one people believe.
-        if all(re.search(r"\bby\b", market.question, re.IGNORECASE) for market in rungs):
-            chosen = min(rungs, key=lambda market: (abs(market.yes - 0.5), -(market.volume or 0.0)))
-        else:
-            chosen = max(rungs, key=lambda market: (market.volume or 0.0, -abs(market.yes - 0.5)))
+        chosen = _headline_rung(rungs)
         # Ranked against other events by the trade on every rung that names
         # the company -- not the event's total, which for "which AI labs will
         # commit" is mostly money on other labs. The rung's own is reported.
@@ -334,38 +357,52 @@ def _polymarket_markets(events: List[dict], names: List[str], today: dt.date, un
 # -- Kalshi --------------------------------------------------------------------
 
 
+def _kalshi_question(market: kalshi.EventMarket) -> str:
+    """The event's title, with the outcome's subtitle when it adds something."""
+    question = market.title.strip()
+    if market.subtitle and market.subtitle.strip() and market.subtitle.strip() not in question:
+        question = "%s (%s)" % (question, market.subtitle.strip())
+    return question
+
+
+def _kalshi_cents(market: kalshi.EventMarket) -> Optional[float]:
+    """The midpoint when both sides are quoted; the last trade when not.
+    A book quoted 0 to 100 is no market at all."""
+    bid, ask = market.yes_bid, market.yes_ask
+    if bid is not None and ask is not None and ask > 0 and not (bid <= 0 and ask >= 100):
+        return (bid + ask) / 2.0
+    return market.last_price
+
+
+def _kalshi_market(market: kalshi.EventMarket, names: List[str], today: dt.date, until: dt.date) -> Optional[Market]:
+    question = _kalshi_question(market)
+    if not market.open or market.close_time is None:
+        return None
+    # The series title is checked too: a "say" market is often only
+    # recognisable as one by its series ("NVDA Earnings Mention").
+    if not names_company(question, names) or not about_an_event(question + " " + (market.series_title or ""), names):
+        return None
+    closes = _eastern(market.close_time)
+    if not today <= closes <= until:
+        return None
+    cents = _kalshi_cents(market)
+    if cents is None or cents <= 0:
+        return None
+    series = (market.event_ticker or market.ticker).split("-")[0].lower()
+    return Market(
+        id="kalshi-%s" % market.ticker, source="Kalshi", question=question,
+        yes=round(min(1.0, max(0.0, cents / 100.0)), 4), volume=market.volume, closes=closes,
+        url=KALSHI_MARKET_URL % series, event="kalshi:%s" % (market.event_ticker or market.ticker),
+        weight=market.volume or 0.0,
+    )
+
+
 def _kalshi_markets(found: List[kalshi.EventMarket], names: List[str], today: dt.date, until: dt.date) -> List[Market]:
-    out = []
-    for market in found:
-        question = market.title.strip()
-        if market.subtitle and market.subtitle.strip() and market.subtitle.strip() not in question:
-            question = "%s (%s)" % (question, market.subtitle.strip())
-        if not market.open or market.close_time is None:
-            continue
-        # The series title is checked too: a "say" market is often only
-        # recognisable as one by its series ("NVDA Earnings Mention").
-        if not names_company(question, names) or not about_an_event(question + " " + (market.series_title or ""), names):
-            continue
-        closes = _eastern(market.close_time)
-        if not today <= closes <= until:
-            continue
-        # The midpoint when both sides are quoted; the last trade when not.
-        # A book quoted 0 to 100 is no market at all.
-        bid, ask = market.yes_bid, market.yes_ask
-        if bid is not None and ask is not None and ask > 0 and not (bid <= 0 and ask >= 100):
-            cents = (bid + ask) / 2.0
-        else:
-            cents = market.last_price
-        if cents is None or cents <= 0:
-            continue
-        series = (market.event_ticker or market.ticker).split("-")[0].lower()
-        out.append(Market(
-            id="kalshi-%s" % market.ticker, source="Kalshi", question=question,
-            yes=round(min(1.0, max(0.0, cents / 100.0)), 4), volume=market.volume, closes=closes,
-            url=KALSHI_MARKET_URL % series, event="kalshi:%s" % (market.event_ticker or market.ticker),
-            weight=market.volume or 0.0,
-        ))
-    return out
+    return [
+        market
+        for market in (_kalshi_market(item, names, today, until) for item in found)
+        if market is not None
+    ]
 
 
 def markets(symbol: str, name: Optional[str], today: dt.date, until: dt.date,

@@ -12,7 +12,10 @@ def option_legs(strategy, side):
     if expiry is None:
         return []
     ladder = strategy.data.option_ladder(expiry, strategy.max_strikes() or strategy.ctx.strikes, include_itm=True)
-    return list((ladder[0] if side == "call" else ladder[1]) if ladder else [])
+    if not ladder:
+        return []
+    calls, puts = ladder[0], ladder[1]
+    return list(calls if side == "call" else puts)
 
 
 def selected_option(strategy, request):

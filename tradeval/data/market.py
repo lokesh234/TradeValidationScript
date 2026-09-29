@@ -115,6 +115,48 @@ def _naive_index(index: pd.Index) -> pd.DatetimeIndex:
     return idx.normalize()
 
 
+def _calendar_dates(cal: Any) -> List[dt.date]:
+    """Report dates from Yahoo's calendar, which arrives as a dict or a frame."""
+    candidates: List[dt.date] = []
+    if isinstance(cal, dict):
+        raw = cal.get("Earnings Date") or cal.get("earningsDate") or []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        candidates.extend(parsed for parsed in map(_as_date, raw) if parsed)
+    elif isinstance(cal, pd.DataFrame) and not cal.empty:
+        for row in ("Earnings Date", "EarningsDate"):
+            if row in cal.index:
+                values = np.atleast_1d(cal.loc[row].values)
+                candidates.extend(parsed for parsed in map(_as_date, values) if parsed)
+    return candidates
+
+
+# Sessions after a report whose close-to-close move is the reaction, counted
+# from the session the report date falls in.
+_REACTION_OFFSETS = {"AMC": [1], "BMO": [0], "?": [0, 1]}
+
+
+def _report_session(hour: int) -> str:
+    """After-hours reports move the *next* session; pre-market ones move the
+    same session. Hour 0 means Yahoo didn't say."""
+    if hour >= 12:
+        return "AMC"
+    return "BMO" if hour > 0 else "?"
+
+
+def _biggest_move(closes: pd.Series, pos: int, offsets: Sequence[int]) -> Optional[float]:
+    """The largest one-session percent move among the sessions offered."""
+    best: Optional[float] = None
+    for offset in offsets:
+        i = pos + offset
+        if i <= 0 or i >= len(closes):
+            continue
+        move = (closes.iloc[i] / closes.iloc[i - 1] - 1.0) * 100.0
+        if math.isfinite(move) and (best is None or abs(move) > abs(best)):
+            best = float(move)
+    return best
+
+
 @dataclass
 class EarningsReaction:
     """How the stock actually moved on a past earnings report."""
@@ -559,30 +601,14 @@ class MarketData:
         should be prepared for the rest to be unavailable.
         """
         today = dt.date.today()
-        cal = self.calendar
-        candidates: List[dt.date] = []
-        if isinstance(cal, dict):
-            raw = cal.get("Earnings Date") or cal.get("earningsDate") or []
-            if not isinstance(raw, (list, tuple)):
-                raw = [raw]
-            for item in raw:
-                parsed = _as_date(item)
-                if parsed:
-                    candidates.append(parsed)
-        elif isinstance(cal, pd.DataFrame) and not cal.empty:
-            for row in ("Earnings Date", "EarningsDate"):
-                if row in cal.index:
-                    for item in np.atleast_1d(cal.loc[row].values):
-                        parsed = _as_date(item)
-                        if parsed:
-                            candidates.append(parsed)
+        candidates = _calendar_dates(self.calendar)
 
         table = self.earnings_calendar
         if table is not None:
             for stamp in _naive_index(table.index):
                 candidates.append(stamp.date())
 
-        future = sorted(set(d for d in candidates if d >= today))
+        future = sorted({d for d in candidates if d >= today})
         if not future:
             self._note("No upcoming earnings date published")
         return future
@@ -617,20 +643,9 @@ class MarketData:
             if day > today:
                 continue
 
-            # After-hours reports move the *next* session; pre-market ones move
-            # the same session. Hour 0 means Yahoo didn't say.
-            session = "AMC" if hour >= 12 else ("BMO" if hour > 0 else "?")
+            session = _report_session(hour)
             pos = int(dates.searchsorted(day))
-            offsets = {"AMC": [1], "BMO": [0], "?": [0, 1]}[session]
-
-            best: Optional[float] = None
-            for offset in offsets:
-                i = pos + offset
-                if i <= 0 or i >= len(closes):
-                    continue
-                move = (closes.iloc[i] / closes.iloc[i - 1] - 1.0) * 100.0
-                if math.isfinite(move) and (best is None or abs(move) > abs(best)):
-                    best = float(move)
+            best = _biggest_move(closes, pos, _REACTION_OFFSETS[session])
 
             if best is not None:
                 surprise = None

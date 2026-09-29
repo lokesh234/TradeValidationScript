@@ -71,11 +71,12 @@ WHY = {
 
 # Most land at 08:30 ET, before the open. The FOMC statement is 14:00 ET with
 # the press conference at 14:30, which is where the second move usually is.
+BEFORE_THE_OPEN = "08:30 ET"
 WHEN = {
     FOMC: "14:00 ET",
-    CPI: "08:30 ET",
-    NFP: "08:30 ET",
-    PPI: "08:30 ET",
+    CPI: BEFORE_THE_OPEN,
+    NFP: BEFORE_THE_OPEN,
+    PPI: BEFORE_THE_OPEN,
     OPEX: "16:00 ET",
     REBAL: "16:00 ET",
 }
@@ -290,21 +291,18 @@ def market_event(event: MacroEvent, events: Sequence[Dict[str, Any]]) -> Optiona
     if not listing:
         return None
     _, rule = listing
-    for candidate in events:
-        ticker = candidate.get("event_ticker")
-        if rule == BY_MEETING:
-            strike = str(candidate.get("strike_date") or "")[:10]
-            if strike and strike == event.date.isoformat():
-                return candidate
-            continue
-        parts = _suffix(ticker)
-        if not parts:
-            continue
-        year, month, day = parts
-        if rule == BY_RELEASE_DATE:
-            if day and (year, month, day) == (event.date.year, event.date.month, event.date.day):
-                return candidate
-        elif rule == BY_PRIOR_MONTH and day is None:
-            if (year, month) == _prior_month(event.date):
-                return candidate
-    return None
+    return next((candidate for candidate in events if _lists(rule, candidate, event)), None)
+
+
+def _lists(rule: str, candidate: Dict[str, Any], event: MacroEvent) -> bool:
+    """Whether the exchange's event is ours, read the way its series dates them."""
+    if rule == BY_MEETING:
+        strike = str(candidate.get("strike_date") or "")[:10]
+        return bool(strike) and strike == event.date.isoformat()
+    parts = _suffix(candidate.get("event_ticker"))
+    if not parts:
+        return False
+    year, month, day = parts
+    if rule == BY_RELEASE_DATE:
+        return bool(day) and (year, month, day) == (event.date.year, event.date.month, event.date.day)
+    return rule == BY_PRIOR_MONTH and day is None and (year, month) == _prior_month(event.date)

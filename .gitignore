@@ -25,3 +25,8 @@ reddit.json
 .env
 .env.*
 !.env.example
+
+# Coverage and SonarQube scanner output
+coverage.xml
+.coverage
+.scannerwork/

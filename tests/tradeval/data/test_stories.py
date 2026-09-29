@@ -807,8 +807,9 @@ def test_patience_caps_clients_and_stops_calls_after_the_deadline(monkeypatch):
             assert (HttpClient("x", timeout=15.0).timeout, HttpClient("x").retries) == (3.0, 0)
         assert client.get_json("https://example.com/a") == {"ok": True}
     with http.patience(3.0, 0, time.monotonic() - 1):
+        late = HttpClient("x")
         with pytest.raises(HttpError):
-            HttpClient("x").get_json("https://example.com/b")
+            late.get_json("https://example.com/b")
     assert sent == [3.0]
 
 

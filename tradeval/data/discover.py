@@ -13,7 +13,7 @@ import time
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 import pandas as pd
 
@@ -391,6 +391,29 @@ def _screen(sector: Optional[str], min_market_cap: float) -> List[Dict[str, Any]
     return list(quotes or [])
 
 
+def _take_pass(
+    rows: Iterable[Dict[str, Any]],
+    start: dt.date,
+    end: dt.date,
+    label: str,
+    found: Dict[str, Candidate],
+    picked: Dict[str, tuple],
+) -> None:
+    """Fold one screen's rows into ``found``, keyed by company."""
+    for row in rows:
+        candidate = _to_candidate(row, start, end, label)
+        if not candidate:
+            continue
+        key = _company_key(candidate.name)
+        volume = _traded_volume(row)
+        seen = picked.get(key)
+        # First pass wins the company, so a priority sector keeps its label;
+        # within one pass the more traded line wins.
+        if seen is None or (seen[1] == label and volume > seen[0]):
+            picked[key] = (volume, label)
+            found[key] = candidate
+
+
 def _collect(
     start: dt.date, end: dt.date, limit: int, sector: Optional[str], min_market_cap: float
 ) -> List[Candidate]:
@@ -400,18 +423,7 @@ def _collect(
     picked: Dict[str, tuple] = {}
     for query_sector in ([sector] if sector else []) + [None]:
         label = query_sector or "Other"
-        for row in _screen(query_sector, min_market_cap):
-            candidate = _to_candidate(row, start, end, label)
-            if not candidate:
-                continue
-            key = _company_key(candidate.name)
-            volume = _traded_volume(row)
-            seen = picked.get(key)
-            # First pass wins the company, so a priority sector keeps its label;
-            # within one pass the more traded line wins.
-            if seen is None or (seen[1] == label and volume > seen[0]):
-                picked[key] = (volume, label)
-                found[key] = candidate
+        _take_pass(_screen(query_sector, min_market_cap), start, end, label, found, picked)
         # Stop early once the priority sector alone has filled the list.
         if query_sector and len(found) >= limit:
             break
@@ -472,6 +484,52 @@ def _year_of_trading(row: Dict[str, Any], now: Optional[float] = None) -> bool:
     return age_days >= 365
 
 
+def _by_company(rows: Iterable[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """Screen rows grouped by company, untradeable and capless lines dropped."""
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    for row in rows:
+        symbol = row.get("symbol")
+        # Same treatment a sector listing gets: tradeable US lines only, and
+        # one line per company, or Alphabet arrives twice and Tencent arrives
+        # as both an ADR and a foreign ordinary with different highs.
+        if not symbol or row.get("exchange") not in TRADEABLE_EXCHANGES:
+            continue
+        if _positive(row.get("marketCap")) is None:
+            continue
+        key = _company_key(row.get("shortName") or row.get("longName") or symbol)
+        groups.setdefault(key, []).append(row)
+    return groups
+
+
+def _beaten(rows: List[Dict[str, Any]], min_off_high_pct: float) -> Optional[BeatenCompany]:
+    """One company's most traded line, if it is far enough below its high."""
+    pick = max(rows, key=_traded_volume)
+    cap = _positive(pick.get("marketCap"))
+    price = _positive(pick.get("regularMarketPrice"))
+    high = _positive(pick.get("fiftyTwoWeekHigh"))
+    if cap is None or price is None or high is None or high <= price:
+        return None
+    off_high_pct = (high - price) / high * 100
+    if off_high_pct < min_off_high_pct:
+        return None
+    peak = cap * (high / price)
+    name = min(
+        (str(row.get("shortName") or row.get("longName") or "") for row in rows),
+        key=lambda text: (len(text) == 0, len(text)),
+    )
+    return BeatenCompany(
+        symbol=str(pick.get("symbol")),
+        name=name or str(pick.get("symbol")),
+        market_cap=cap,
+        peak_market_cap=peak,
+        lost_market_cap=peak - cap,
+        off_high_pct=off_high_pct,
+        price=price,
+        high=high,
+        short_history=not _year_of_trading(pick),
+    )
+
+
 def beaten_down(
     limit: int = 20, min_market_cap: float = 1e11, min_off_high_pct: float = 10.0,
     sort: str = "lost",
@@ -496,48 +554,12 @@ def beaten_down(
     lost the most money, and sorting a page of the latter would leave them out
     entirely while looking like an answer.
     """
-    groups: Dict[str, List[Dict[str, Any]]] = {}
-    for row in _screen(None, min_market_cap):
-        symbol = row.get("symbol")
-        # Same treatment a sector listing gets: tradeable US lines only, and
-        # one line per company, or Alphabet arrives twice and Tencent arrives
-        # as both an ADR and a foreign ordinary with different highs.
-        if not symbol or row.get("exchange") not in TRADEABLE_EXCHANGES:
-            continue
-        if _positive(row.get("marketCap")) is None:
-            continue
-        key = _company_key(row.get("shortName") or row.get("longName") or symbol)
-        groups.setdefault(key, []).append(row)
-
-    found: List[BeatenCompany] = []
-    for rows in groups.values():
-        pick = max(rows, key=_traded_volume)
-        cap = _positive(pick.get("marketCap"))
-        price = _positive(pick.get("regularMarketPrice"))
-        high = _positive(pick.get("fiftyTwoWeekHigh"))
-        if cap is None or price is None or high is None or high <= price:
-            continue
-        off_high_pct = (high - price) / high * 100
-        if off_high_pct < min_off_high_pct:
-            continue
-        peak = cap * (high / price)
-        name = min(
-            (str(row.get("shortName") or row.get("longName") or "") for row in rows),
-            key=lambda text: (len(text) == 0, len(text)),
-        )
-        found.append(
-            BeatenCompany(
-                symbol=str(pick.get("symbol")),
-                name=name or str(pick.get("symbol")),
-                market_cap=cap,
-                peak_market_cap=peak,
-                lost_market_cap=peak - cap,
-                off_high_pct=off_high_pct,
-                price=price,
-                high=high,
-                short_history=not _year_of_trading(pick),
-            )
-        )
+    groups = _by_company(_screen(None, min_market_cap))
+    found = [
+        company
+        for company in (_beaten(rows, min_off_high_pct) for rows in groups.values())
+        if company is not None
+    ]
 
     ranked = (lambda item: item.off_high_pct) if sort == "percent" else (lambda item: item.lost_market_cap)
     found.sort(key=ranked, reverse=True)

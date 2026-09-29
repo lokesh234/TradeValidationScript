@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import types
 
 import pytest
 
@@ -42,6 +43,21 @@ def _patch_json(monkeypatch, payload, capture=None):
         return payload
 
     monkeypatch.setattr(kalshi.HttpClient, "get_json", get_json, raising=False)
+
+
+def _pin_clock(monkeypatch, when):
+    """Make the module's "now" a fixed moment.
+
+    Search drops markets that have already closed, so a fixture with a real
+    close date would change meaning the day that date passes.
+    """
+
+    class _Pinned(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return when if tz is None else when.astimezone(tz)
+
+    monkeypatch.setattr(kalshi, "dt", types.SimpleNamespace(datetime=_Pinned, timezone=dt.timezone))
 
 
 # -- prices ----------------------------------------------------------------
@@ -164,7 +180,8 @@ def test_a_market_with_no_close_time_says_so():
 def test_timestamps_survive_more_decimals_than_python_parses():
     """The exchange sends nine fractional digits; 3.9's parser takes six."""
     parsed = kalshi._timestamp("2026-08-18T01:47:05.781094123Z")
-    assert parsed is not None and parsed.year == 2026
+    assert parsed is not None
+    assert parsed.year == 2026
     assert parsed.tzinfo is not None
     assert kalshi._timestamp("not a date") is None
     assert kalshi._timestamp(None) is None
@@ -204,6 +221,8 @@ SEARCH_PAYLOAD = {
 
 def test_search_returns_one_market_per_event(monkeypatch):
     """An event fans out per outcome; listing all of them buries the events."""
+    # Before the September decision closes, so its first market is still live.
+    _pin_clock(monkeypatch, dt.datetime(2026, 8, 17, 20, 0, tzinfo=dt.timezone.utc))
     _patch_json(monkeypatch, SEARCH_PAYLOAD)
     hits = kalshi.search("fed")
     assert [h.ticker for h in hits] == ["KXFEDDECISION-26SEP-H0", "KXRATECUT-26DEC31"]
@@ -394,7 +413,8 @@ def test_expectation_falls_back_to_the_last_trade_when_nobody_is_quoting(monkeyp
 def test_expectation_survives_a_ladder_with_no_prices(monkeypatch):
     _patch_json(monkeypatch, {"markets": [{"floor_strike": 1.0}]})
     found = kalshi.expectation("KXNOTHING")
-    assert found.rungs == [] and found.median is None
+    assert found.rungs == []
+    assert found.median is None
 
 
 def test_expectation_has_no_median_when_the_ladder_never_crosses_even(monkeypatch):

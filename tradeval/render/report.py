@@ -7,7 +7,7 @@ import re
 import shutil
 import sys
 from dataclasses import replace
-from typing import List, Optional, Sequence
+from typing import List, NamedTuple, Optional, Sequence, cast
 
 from tradeval.analysis import dates
 from tradeval.checks import Status
@@ -159,6 +159,16 @@ def weight_text(weight: float) -> str:
     return "x%g" % weight
 
 
+class _CheckColumns(NamedTuple):
+    """Where the check table's columns fall, measured once for every row."""
+
+    name_w: int
+    value_w: int
+    weight_w: int
+    detail_col: int
+    inline: bool
+
+
 def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) -> List[str]:
     """One line per check where the width allows, two where it doesn't."""
     results = report.results
@@ -170,47 +180,54 @@ def _render_checks(report: Report, palette: Palette, verbose: bool, width: int) 
     detail_col = 9 + weight_w + 1 + name_w + 2 + value_w + 2
     detail_room = width - detail_col
     inline = verbose and detail_room >= MIN_INLINE_DETAIL
+    columns = _CheckColumns(name_w, value_w, weight_w, detail_col, inline)
 
     out: List[str] = []
     for result in results:
-        badge = palette.status(result.status, "%-4s" % result.status.value)
-        flag = palette.red("!") if (result.critical and result.status is Status.FAIL) else " "
-        # Grey, because the weight is a fact about the checklist rather than
-        # about this stock. A skipped check keeps its weight on show: it is
-        # what the coverage figure is missing.
-        weight = palette.grey("%*s" % (weight_w, weight_text(result.weight)))
-        detail = result.detail if verbose else ""
-        # An over-long value would push the detail out of its column, so that
-        # row drops the detail to its own line rather than breaking alignment.
-        fits = bool(detail) and inline and len(result.value) <= value_w
+        out.extend(_check_lines(result, palette, verbose, width, columns))
+    return out
 
-        # Pad a column only when something follows it. Trailing padding would
-        # otherwise sit inside a colour escape, where rstrip cannot reach it,
-        # and the coloured and plain renderings would drift apart.
-        # ljust never truncates, so a long value overflows rather than losing
-        # digits.
-        if fits:
-            head = "  %s %s %s %s  %s  " % (
-                badge, flag, weight, result.name.ljust(name_w),
-                _check_value(result, result.value.ljust(value_w), palette),
-            )
-            lines = _wrap_text(detail, width, " " * detail_col)
-            out.append(head + palette.grey(lines[0].strip()))
-            out.extend(palette.grey(line) for line in lines[1:])
-            continue
 
-        if result.value:
-            out.append(
-                "  %s %s %s %s  %s"
-                % (badge, flag, weight, result.name.ljust(name_w), _check_value(result, result.value, palette))
-            )
-        else:
-            out.append("  %s %s %s %s" % (badge, flag, weight, result.name))
+def _check_lines(result, palette: Palette, verbose: bool, width: int, columns: _CheckColumns) -> List[str]:
+    """One check's row, and its detail where there is one to show."""
+    name_w, value_w, weight_w, detail_col, inline = columns
+    badge = palette.status(result.status, "%-4s" % result.status.value)
+    flag = palette.red("!") if (result.critical and result.status is Status.FAIL) else " "
+    # Grey, because the weight is a fact about the checklist rather than
+    # about this stock. A skipped check keeps its weight on show: it is
+    # what the coverage figure is missing.
+    weight = palette.grey("%*s" % (weight_w, weight_text(result.weight)))
+    detail = result.detail if verbose else ""
+    # An over-long value would push the detail out of its column, so that
+    # row drops the detail to its own line rather than breaking alignment.
+    fits = bool(detail) and inline and len(result.value) <= value_w
 
-        if detail:
-            # Keep the detail in its column when there is one to keep it in.
-            indent = " " * (detail_col if inline else 12 + weight_w)
-            out.extend(palette.grey(line) for line in _wrap_text(detail, width, indent))
+    # Pad a column only when something follows it. Trailing padding would
+    # otherwise sit inside a colour escape, where rstrip cannot reach it,
+    # and the coloured and plain renderings would drift apart.
+    # ljust never truncates, so a long value overflows rather than losing
+    # digits.
+    if fits:
+        head = "  %s %s %s %s  %s  " % (
+            badge, flag, weight, result.name.ljust(name_w),
+            _check_value(result, result.value.ljust(value_w), palette),
+        )
+        lines = _wrap_text(detail, width, " " * detail_col)
+        return [head + palette.grey(lines[0].strip())] + [palette.grey(line) for line in lines[1:]]
+
+    out: List[str] = []
+    if result.value:
+        out.append(
+            "  %s %s %s %s  %s"
+            % (badge, flag, weight, result.name.ljust(name_w), _check_value(result, result.value, palette))
+        )
+    else:
+        out.append("  %s %s %s %s" % (badge, flag, weight, result.name))
+
+    if detail:
+        # Keep the detail in its column when there is one to keep it in.
+        indent = " " * (detail_col if inline else 12 + weight_w)
+        out.extend(palette.grey(line) for line in _wrap_text(detail, width, indent))
     return out
 
 
@@ -237,7 +254,7 @@ def _render_verdict(report: Report, palette: Palette) -> List[str]:
     filled = int(round(verdict.score / 100.0 * 30))
     meter = "[" + "#" * filled + "." * (30 - filled) + "]"
 
-    counts = {status: 0 for status in Status}
+    counts = dict.fromkeys(Status, 0)
     for result in report.results:
         counts[result.status] += 1
 
@@ -466,7 +483,7 @@ def _halves(panel: Panel, cut: int) -> "tuple[Panel, Panel]":
 
     def part(rows: Sequence[Sequence[str]], offset: int, title: str, **extra) -> Panel:
         shift = lambda values: [i - offset for i in values if 0 <= i - offset < len(rows)]
-        return replace(
+        return cast(Panel, replace(
             panel,
             title=title,
             rows=list(rows),
@@ -477,7 +494,7 @@ def _halves(panel: Panel, cut: int) -> "tuple[Panel, Panel]":
             # Halves of one table belong beside each other before anything else.
             pair_key="split:%s" % panel.title,
             **extra,
-        )
+        ))
 
     # Neither half carries the title or the description: the caller prints
     # those above both, which is also what lines the two header rows up. The
@@ -499,14 +516,7 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
         left |= set(range(2, len(widths)))
 
     def line(cells: Sequence[str], colorize: bool = False) -> str:
-        # Labels and text columns run left, figures right.
-        parts = []
-        for i, cell in enumerate(cells):
-            # Pad on the plain text, then colour -- escape codes would
-            # otherwise be counted as width and break the alignment.
-            padded = cell.ljust(widths[i]) if i in left else cell.rjust(widths[i])
-            parts.append(_color_cell(cell, padded, palette) if colorize and i else padded)
-        return ("  " + "  ".join(parts)).rstrip()
+        return _panel_line(cells, widths, left, palette, colorize)
 
     # A half of a split table has no title of its own -- the whole table's is
     # printed above both halves.
@@ -523,32 +533,54 @@ def _render_panel(panel: Panel, palette: Palette, width: int = FALLBACK_WIDTH) -
         # weight rather than the header's grey.
         out.append(palette.bold(line(panel.subheaders)))
     for index, row in enumerate(panel.rows):
-        if index in panel.sections:
-            # Headings carry the title's colour, a step down from it in weight,
-            # so blocks separate without competing with the panel name. The
-            # blank line above does most of the work -- the reader is asking
-            # one question at a time, and this is where the question changes.
-            # A heading opening the table needs no gap: the header row is
-            # already above it.
-            if index:
-                out.append("")
-            out.append(palette.cyan(_section_rule(row[0], widths, width)))
-            continue
-        if index in panel.dim:
-            out.append(palette.grey(line(row)))
-            continue
-        if panel.label_value_note:
-            out.append(_render_info_row(row, widths, left, palette, panel.row_styles.get(index)))
-            continue
-        text = line(row, colorize=panel.color_signed)
-        marker = MARKER_PREFIX + panel.highlight_label
-        out.append(palette.cyan(text + marker) if index in panel.highlight else text)
+        out.extend(_panel_row(panel, index, row, widths, left, palette, width))
     if panel.note:
         # The note is about the table, not a row of it, so it stands off the
         # bottom rather than reading as one more line of data.
         out.append("")
         out.extend(palette.grey(l) for l in _wrap_text(panel.note, width, "  "))
     return out
+
+
+def _panel_line(
+    cells: Sequence[str], widths: Sequence[int], left: set, palette: Palette, colorize: bool = False
+) -> str:
+    """One table line: labels and text columns run left, figures right."""
+    parts = []
+    for i, cell in enumerate(cells):
+        # Pad on the plain text, then colour -- escape codes would
+        # otherwise be counted as width and break the alignment.
+        padded = cell.ljust(widths[i]) if i in left else cell.rjust(widths[i])
+        parts.append(_color_cell(cell, padded, palette) if colorize and i else padded)
+    return ("  " + "  ".join(parts)).rstrip()
+
+
+def _panel_row(
+    panel: Panel,
+    index: int,
+    row: Sequence[str],
+    widths: Sequence[int],
+    left: set,
+    palette: Palette,
+    width: int,
+) -> List[str]:
+    """The lines one row of a panel prints as: a section heading, or a row."""
+    if index in panel.sections:
+        # Headings carry the title's colour, a step down from it in weight,
+        # so blocks separate without competing with the panel name. The
+        # blank line above does most of the work -- the reader is asking
+        # one question at a time, and this is where the question changes.
+        # A heading opening the table needs no gap: the header row is
+        # already above it.
+        rule = palette.cyan(_section_rule(row[0], widths, width))
+        return ["", rule] if index else [rule]
+    if index in panel.dim:
+        return [palette.grey(_panel_line(row, widths, left, palette))]
+    if panel.label_value_note:
+        return [_render_info_row(row, widths, left, palette, panel.row_styles.get(index))]
+    text = _panel_line(row, widths, left, palette, colorize=panel.color_signed)
+    marker = MARKER_PREFIX + panel.highlight_label
+    return [palette.cyan(text + marker) if index in panel.highlight else text]
 
 
 def _section_rule(label: str, widths: Sequence[int], width: int) -> str:
@@ -562,6 +594,10 @@ def _section_rule(label: str, widths: Sequence[int], width: int) -> str:
     table = min(2 + sum(widths) + 2 * (len(widths) - 1), width)
     head = "  " + label + " "
     return head + "-" * max(table - len(head), 0)
+
+
+# The column of an info row where the notes start: label, figure, then note.
+_INFO_NOTE = 2
 
 
 def _render_info_row(
@@ -582,7 +618,6 @@ def _render_info_row(
         painter = getattr(palette, style, None) if style else None
         return painter(padded) if painter else _sign_colour(plain, padded, palette)
 
-    first_note = 2
     # Stop at the last cell with content. Padding an empty trailing cell would
     # bury spaces inside a colour escape where rstrip cannot reach them, and
     # the coloured and plain renderings would drift apart.
@@ -602,17 +637,22 @@ def _render_info_row(
             padded = cell.ljust(widths[index]) if index < last else cell
         else:
             padded = cell.rjust(widths[index])
-        if index == 0:
-            parts.append(padded)
-        elif index == first_note:
-            parts.append(palette.grey(padded))
-        elif index > first_note:
-            # Anything past the note is standing reference text -- true of the
-            # metric, not of this stock -- so it sits a shade quieter again.
-            parts.append(palette.faint(padded))
-        else:
+        if index == 1:
             parts.append(figure(padded, cell.strip()))
+        else:
+            parts.append(_info_text(index, padded, palette))
     return "  " + "  ".join(parts)
+
+
+def _info_text(index: int, padded: str, palette: Palette) -> str:
+    """The label as it is, the note dimmed, and anything past the note --
+    standing reference text, true of the metric rather than of this stock --
+    a shade quieter again."""
+    if index == 0:
+        return padded
+    if index == _INFO_NOTE:
+        return palette.grey(padded)
+    return palette.faint(padded)
 
 
 def _sign_colour(plain: str, padded: str, palette: Palette) -> str:

@@ -121,7 +121,9 @@ def _row(df: Optional[pd.DataFrame], period: str):
 def _session(stamp: pd.Timestamp) -> str:
     """After-hours reports move the next session; pre-market ones the same day."""
     hour = int(stamp.hour)
-    return "AMC" if hour >= 12 else ("BMO" if hour > 0 else "?")
+    if hour >= 12:
+        return "AMC"
+    return "BMO" if hour > 0 else "?"
 
 
 def next_report(data: MarketData):
@@ -203,6 +205,27 @@ def _credible(iv_percent: Optional[float]) -> Optional[float]:
     return iv if MIN_IV <= iv <= MAX_IV else None
 
 
+def _term_structure_move(
+    data: MarketData, after: dt.date, before: dt.date, iv_after: float, days_after: int
+) -> Optional[ImpliedMove]:
+    """The report's move from the gap between the expiries either side of it."""
+    before_quote = data.atm_quote(before)
+    iv_before = _credible(before_quote.iv) if before_quote else None
+    if iv_before is None:
+        return None
+    years = days_after / 365.0
+    # Total variance to the later expiry is ordinary variance over its
+    # life plus the report's own; the earlier expiry's volatility is
+    # the ordinary rate.
+    event_variance = (iv_after ** 2 - iv_before ** 2) * years
+    if event_variance <= 0:
+        return None
+    sigma = math.sqrt(event_variance)
+    # Expected absolute size of a normal move is sigma * sqrt(2/pi).
+    return ImpliedMove(sigma * math.sqrt(2 / math.pi) * 100.0, "term structure", after, before,
+                       iv_after * 100.0, iv_before * 100.0)
+
+
 def implied_move(data: MarketData, date: Optional[dt.date], session: str) -> Optional[ImpliedMove]:
     """How big a move the options price on the report itself.
 
@@ -229,19 +252,9 @@ def implied_move(data: MarketData, date: Optional[dt.date], session: str) -> Opt
     days_after = max(after_quote.days_out, 1)
 
     if before is not None and iv_after is not None:
-        before_quote = data.atm_quote(before)
-        iv_before = _credible(before_quote.iv) if before_quote else None
-        if iv_before is not None:
-            years = days_after / 365.0
-            # Total variance to the later expiry is ordinary variance over its
-            # life plus the report's own; the earlier expiry's volatility is
-            # the ordinary rate.
-            event_variance = (iv_after ** 2 - iv_before ** 2) * years
-            if event_variance > 0:
-                sigma = math.sqrt(event_variance)
-                # Expected absolute size of a normal move is sigma * sqrt(2/pi).
-                return ImpliedMove(sigma * math.sqrt(2 / math.pi) * 100.0, "term structure", after, before,
-                                   iv_after * 100.0, iv_before * 100.0)
+        move = _term_structure_move(data, after, before, iv_after, days_after)
+        if move is not None:
+            return move
 
     if (after - dt.date.today()).days <= STRADDLE_DAYS and data.price > 0:
         return ImpliedMove(after_quote.straddle / data.price * 100.0, "straddle", after,

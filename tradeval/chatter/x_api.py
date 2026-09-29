@@ -150,7 +150,6 @@ def _to_document(post: Dict[str, Any], authors: Dict[str, Dict[str, Any]]) -> Op
 
     metrics = post.get("public_metrics") or {}
     author = authors.get(str(post.get("author_id") or "")) or {}
-    followers = ((author.get("public_metrics") or {}).get("followers_count")) or 0
 
     return Document(
         text=str(post.get("text") or ""),

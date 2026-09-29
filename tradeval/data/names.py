@@ -15,8 +15,10 @@ from __future__ import annotations
 import re
 from typing import Optional
 
+# The lookbehind starts a match only where a run of commas and spaces begins,
+# rather than once more at every character inside it.
 LEGAL_SUFFIX_RE = re.compile(
-    r"[,\s]+(?:incorporated|inc|corporation|corp|company|limited|ltd|plc|co|"
+    r"(?<![,\s])[,\s]+(?:incorporated|inc|corporation|corp|company|limited|ltd|plc|co|"
     r"l\.?\s*l\.?\s*c|n\.?\s*v|s\.?\s*a|a\.?\s*g|s\.?\s*p\.?\s*a)\.?$",
     re.IGNORECASE,
 )

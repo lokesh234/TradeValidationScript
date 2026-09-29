@@ -55,6 +55,31 @@ def _to_document(message: dict) -> Optional[Document]:
     )
 
 
+def _get_page(client: HttpClient, symbol: str, max_id: Optional[int], have_some: bool):
+    """One page of the stream, or None to stop paging.
+
+    A failure on the first page is the whole lookup failing; a failure further
+    back only means the window is shorter than asked for.
+    """
+    params = {"max": max_id} if max_id else None
+    try:
+        return client.get_json(STREAM_URL % symbol.upper(), params=params)
+    except HttpError as exc:
+        if not have_some:
+            raise BuzzUnavailable("StockTwits request failed: %s" % exc) from exc
+        return None
+
+
+def _older_page(payload, messages, page: List[Document], cutoff: dt.datetime) -> Optional[int]:
+    """The id to page back from, or None once the window or the feed is used up."""
+    if any(d.created < cutoff for d in page) or len(messages) < PAGE_SIZE:
+        return None
+    cursor = (payload or {}).get("cursor") or {}
+    if not cursor.get("more") or not cursor.get("max"):
+        return None
+    return cursor["max"]
+
+
 def fetch_messages(
     symbol: str,
     window_days: int = 7,
@@ -70,14 +95,7 @@ def fetch_messages(
     max_id: Optional[int] = None
     try:
         for _ in range(max(max_pages, 1)):
-            params = {"max": max_id} if max_id else None
-            try:
-                payload = client.get_json(STREAM_URL % symbol.upper(), params=params)
-            except HttpError as exc:
-                if not documents:
-                    raise BuzzUnavailable("StockTwits request failed: %s" % exc) from exc
-                break
-
+            payload = _get_page(client, symbol, max_id, bool(documents))
             messages = (payload or {}).get("messages") or []
             if not messages:
                 break
@@ -85,13 +103,9 @@ def fetch_messages(
             page = [d for d in (_to_document(m) for m in messages) if d]
             documents.extend(d for d in page if d.created >= cutoff)
 
-            # Stop once we have paged past the window, or the feed is exhausted.
-            if any(d.created < cutoff for d in page) or len(messages) < PAGE_SIZE:
+            max_id = _older_page(payload, messages, page, cutoff)
+            if max_id is None:
                 break
-            cursor = (payload or {}).get("cursor") or {}
-            if not cursor.get("more") or not cursor.get("max"):
-                break
-            max_id = cursor["max"]
     finally:
         if owned:
             client.close()

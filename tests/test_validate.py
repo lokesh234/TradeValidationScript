@@ -138,23 +138,23 @@ def test_numbered_choices_formats_a_menu_line():
 
 def test_resolve_option_side_spread_ignores_side_flag():
     args = validate.build_parser().parse_args(["NVDA", "--instrument", "C", "--side", "P"])
-    assert validate.resolve_option_side("short", args, "call_spread") == "call"
+    assert validate.resolve_option_side(args, "call_spread") == "call"
 
 
 def test_resolve_option_side_stock_is_both():
     args = validate.build_parser().parse_args(["NVDA"])
-    assert validate.resolve_option_side("short", args, "stock") == "both"
+    assert validate.resolve_option_side(args, "stock") == "both"
 
 
 def test_resolve_option_side_uses_explicit_flag():
     args = validate.build_parser().parse_args(["NVDA", "--side", "c"])
-    assert validate.resolve_option_side("short", args, "options") == "call"
+    assert validate.resolve_option_side(args, "options") == "call"
 
 
 def test_resolve_contracts_defaults_to_one_for_stock():
     args = validate.build_parser().parse_args(["NVDA", "--contracts", "5"])
-    assert validate.resolve_contracts("short", args, "stock") == 1
-    assert validate.resolve_contracts("short", args, "options") == 5
+    assert validate.resolve_contracts(args, "stock") == 1
+    assert validate.resolve_contracts(args, "options") == 5
 
 
 def test_resolve_horizon_uses_flag_or_default():
@@ -360,7 +360,8 @@ def test_main_list_spending_buzz_folds_the_flow(capsys):
         assert validate.main(["--list-spending-buzz", "6"]) == 0
     out = capsys.readouterr().out
     assert "ASML" in out
-    assert "FLOW" in out and "50 Warm" in out
+    assert "FLOW" in out
+    assert "50 Warm" in out
 
 
 def test_main_list_spending_buzz_unknown_flow_exits_two(capsys):
@@ -421,7 +422,8 @@ def test_main_list_indices_prints_the_market_header(capsys):
     out = capsys.readouterr().out
     assert "S&P 500" in out
     # The curve comes through the same flag; the shell front end prints one block.
-    assert "10-year yield" in out and "+3.0 bp" in out
+    assert "10-year yield" in out
+    assert "+3.0 bp" in out
 
 
 def test_main_list_indices_exits_nonzero_when_the_fetch_fails(capsys):
@@ -457,7 +459,8 @@ def test_main_event_search_prints_a_pickable_line_per_market(capsys):
     out = capsys.readouterr().out
     # Tab separated, because trade.sh draws its own picker from this.
     assert out.splitlines()[0].startswith("KXFEDDECISION-26SEP-H0\t")
-    assert "yes 70/71c" in out and "30 days" in out
+    assert "yes 70/71c" in out
+    assert "30 days" in out
 
 
 def test_main_event_search_carries_the_quote_as_a_third_field(capsys):
@@ -489,7 +492,9 @@ def test_main_event_grades_the_contract_and_prints_the_sheet(capsys):
     out = capsys.readouterr().out
     assert code == 0
     assert fetch.call_args[0][0] == "KXFEDDECISION-26SEP-H0"
-    assert "Edge vs price" in out and "THE CONTRACT" in out and "WHAT IT PAYS" in out
+    assert "Edge vs price" in out
+    assert "THE CONTRACT" in out
+    assert "WHAT IT PAYS" in out
     # No ticker was resolved and no price history was fetched to get here.
     assert "Event Contract (yes)" in out
 

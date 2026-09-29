@@ -57,6 +57,13 @@ from tradeval.strategies.event_contract import (
     resolve_side as resolve_event_side,
 )
 
+# What an interrupted prompt prints before the run exits 130.
+CANCELLED = "\nCancelled."
+
+# A machine-readable row for trade.sh, which splits on the tab: the symbol,
+# then the line to show for it.
+TAB_ROW = "%s\t%s"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -404,23 +411,9 @@ def browse_spending(
     separate thing to look at. ``scorer`` adds the chatter column, at the cost
     of a lookup per name.
     """
-    flow = None
-    while flow is None:
-        if choice is None:
-            for line in layout_panels([spending.menu_panel()], palette, width):
-                print(line)
-            try:
-                choice = input("\nWhich flow? [1-%d]: " % len(spending.FLOWS)).strip()
-            except EOFError:
-                return []
-        if not choice:
-            choice = None
-            continue
-        try:
-            flow = spending.resolve(choice)
-        except ValueError as exc:
-            print("  %s" % exc)
-            choice = None
+    flow = _pick_flow(palette, width, choice)
+    if flow is None:
+        return []
 
     snapshots = spending.flow_snapshots(flow)
     chatter = None
@@ -436,6 +429,26 @@ def browse_spending(
     if chatter is not None:
         print(flow_buzz.headline(chatter, palette))
     return snapshots
+
+
+def _pick_flow(palette, width: int, choice: Optional[str]):
+    """The flow ``choice`` names, asking until one is named; None at end of input."""
+    while True:
+        if choice is None:
+            for line in layout_panels([spending.menu_panel()], palette, width):
+                print(line)
+            try:
+                choice = input("\nWhich flow? [1-%d]: " % len(spending.FLOWS)).strip()
+            except EOFError:
+                return None
+        if not choice:
+            choice = None
+            continue
+        try:
+            return spending.resolve(choice)
+        except ValueError as exc:
+            print("  %s" % exc)
+            choice = None
 
 
 def _buzz_column(chatter) -> Optional[dict]:
@@ -456,26 +469,42 @@ def prompt_symbols(
     """Ask for tickers, offering a shortlist appropriate to the trade type."""
     if existing:
         return existing
+    candidates, typed = _shortlist(key, config, sector, spend, palette, width, scorer)
+    if typed:
+        return [typed]
+    return _ask_for_symbols(candidates)
 
-    candidates = []
+
+def _shortlist(
+    key: str,
+    config: Config,
+    sector: Optional[str],
+    spend: Optional[str],
+    palette,
+    width: int,
+    scorer,
+) -> "tuple[List, Optional[str]]":
+    """The candidates to offer, and a ticker when the sector prompt got one."""
     if spend is not None:
         # An explicit --spending overrides the trade type's usual shortlist:
         # the caller asked to shop from the flow, whatever they are trading.
-        candidates = browse_spending(
+        return browse_spending(
             palette or make_palette(no_color=True),
             width or detect_width(),
             spend or None,
             scorer,
-        )
-    elif key == "earnings":
-        candidates = show_earnings_menu(config)
-    elif key in ("short", "long"):
+        ), None
+    if key == "earnings":
+        return show_earnings_menu(config), None
+    if key in ("short", "long"):
         # A long-term hold is found the same way a swing trade is: by looking
         # at a sector and picking the biggest names in it.
-        candidates, typed = show_sector_menu(sector)
-        if typed:
-            return [typed]
+        return show_sector_menu(sector)
+    return [], None
 
+
+def _ask_for_symbols(candidates: List) -> List[str]:
+    """Read a pick off the shortlist, or tickers typed in its place."""
     prompt = (
         "\nPick a number, or type ticker(s): " if candidates else "Ticker(s), space separated: "
     )
@@ -656,7 +685,7 @@ def prompt_instrument() -> str:
             print("  %s" % exc)
 
 
-def resolve_instrument(key: str, args: argparse.Namespace) -> str:
+def resolve_instrument(args: argparse.Namespace) -> str:
     """Shares, contracts or a spread -- every trade type can be taken any way."""
     if args.instrument:
         return resolve_instrument_choice(args.instrument)
@@ -701,24 +730,35 @@ def prompt_earnings_date(data: MarketData) -> Optional[dt.date]:
     """
     upcoming = data.upcoming_earnings
 
-    print("\nUpcoming earnings for %s:" % data.symbol)
-    today = dt.date.today()
-    for slot in range(EARNINGS_SLOTS):
-        if slot < len(upcoming):
-            day = upcoming[slot]
-            days = (day - today).days
-            when = "today" if days == 0 else ("in %d day%s" % (days, "" if days == 1 else "s"))
-            print("  %d) %s  (%s)" % (slot + 1, dates.format_date(day), when))
-        else:
-            print("  %d) Not Available" % (slot + 1))
-
+    _print_earnings_slots(data.symbol, upcoming)
     if not upcoming:
         print("\nYahoo has no scheduled report for this symbol.")
         return None
     if len(upcoming) == 1:
         print("\nOnly one scheduled report published -- using %s." % dates.format_date(upcoming[0]))
         return upcoming[0]
+    return _pick_report(upcoming)
 
+
+def _days_away(days: int) -> str:
+    if days == 0:
+        return "today"
+    return "in %d day%s" % (days, "" if days == 1 else "s")
+
+
+def _print_earnings_slots(symbol: str, upcoming: List[dt.date]) -> None:
+    """Every slot, filled or not, so the menu keeps its shape."""
+    print("\nUpcoming earnings for %s:" % symbol)
+    today = dt.date.today()
+    for slot in range(EARNINGS_SLOTS):
+        if slot < len(upcoming):
+            day = upcoming[slot]
+            print("  %d) %s  (%s)" % (slot + 1, dates.format_date(day), _days_away((day - today).days)))
+        else:
+            print("  %d) Not Available" % (slot + 1))
+
+
+def _pick_report(upcoming: List[dt.date]) -> dt.date:
     while True:
         try:
             raw = input("\nWhich report are you trading? [1-%d]: " % len(upcoming)).strip()
@@ -989,13 +1029,7 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     if not (wants_shares or wants_count or wants_floor or wants_strikes or wants_pick):
         return
 
-    panel = None if args.profile_shown else strategy.profile_panel()
-    if panel:
-        for line in layout_panels([panel], palette, width):
-            print(line)
-        # The report would print the same table a screen later. Once is enough.
-        ctx.profile_shown = True
-
+    _show_profile(strategy, args, palette, width)
     if wants_strikes:
         ctx.strikes = prompt_strikes(ctx.strikes, strategy.max_strikes())
     # Asked before the pairings are built, not after: a floor decides which
@@ -1003,7 +1037,22 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     # out until the ratio is met, rather than listing widths that never clear it.
     if wants_floor:
         ctx.min_reward_risk = prompt_min_reward_risk()
+    _show_prices(strategy, palette, width)
+    if wants_pick:
+        _pick_contract(strategy, palette, width)
+    _ask_size(strategy, wants_shares, wants_count)
 
+
+def _show_profile(strategy, args: argparse.Namespace, palette, width: int) -> None:
+    panel = None if args.profile_shown else strategy.profile_panel()
+    if panel:
+        for line in layout_panels([panel], palette, width):
+            print(line)
+        # The report would print the same table a screen later. Once is enough.
+        strategy.ctx.profile_shown = True
+
+
+def _show_prices(strategy, palette, width: int) -> None:
     chain = strategy.price_panels()
     for line in layout_panels(chain, palette, width):
         print(line)
@@ -1012,27 +1061,33 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
     # from is settled by now, and a pairing typed at the prompt below needs to
     # be able to ask for the table again -- it will not be in the one that was
     # just printed.
-    ctx.chain_shown = bool(chain)
+    strategy.ctx.chain_shown = bool(chain)
 
-    if wants_pick:
-        labels = strategy.contract_labels()
-        if labels:
-            # A spread is two choices, and the table only ever varies one of
-            # them, so the prompt takes a pair off the chain as readily as a
-            # row off the list.
-            strikes = strategy.spread_strikes() if ctx.trades_spread else None
-            strategy.choose_contract(
-                prompt_contract(labels, "spread" if ctx.trades_spread else "strike", strikes)
-            )
-            # A pairing typed by hand was in none of the tables above, so it is
-            # priced here on its own -- once, where it was chosen, rather than
-            # by reprinting a ladder the reader has already read.
-            chosen = strategy.chosen_spread_panel()
-            if chosen is not None:
-                for line in layout_panels([chosen], palette, width):
-                    print(line)
-                print("")
 
+def _pick_contract(strategy, palette, width: int) -> None:
+    ctx = strategy.ctx
+    labels = strategy.contract_labels()
+    if not labels:
+        return
+    # A spread is two choices, and the table only ever varies one of
+    # them, so the prompt takes a pair off the chain as readily as a
+    # row off the list.
+    strikes = strategy.spread_strikes() if ctx.trades_spread else None
+    strategy.choose_contract(
+        prompt_contract(labels, "spread" if ctx.trades_spread else "strike", strikes)
+    )
+    # A pairing typed by hand was in none of the tables above, so it is
+    # priced here on its own -- once, where it was chosen, rather than
+    # by reprinting a ladder the reader has already read.
+    chosen = strategy.chosen_spread_panel()
+    if chosen is not None:
+        for line in layout_panels([chosen], palette, width):
+            print(line)
+        print("")
+
+
+def _ask_size(strategy, wants_shares: bool, wants_count: bool) -> None:
+    ctx = strategy.ctx
     if wants_shares:
         shares = prompt_shares(strategy.data.price)
         if shares:
@@ -1042,25 +1097,24 @@ def size_position(strategy, args: argparse.Namespace, palette, width: int) -> No
         ctx.contracts = prompt_contracts("spreads" if ctx.trades_spread else "contracts")
 
 
-
-def resolve_contracts(key: str, args: argparse.Namespace, instrument: str) -> int:
+def resolve_contracts(args: argparse.Namespace, instrument: str) -> int:
     """The count from the command line. The prompt happens later, with prices."""
     if instrument == "stock" or args.contracts is None:
         return 1
     return args.contracts
 
 
-def resolve_event_plan(key: str, args: argparse.Namespace) -> EventPlan:
+def resolve_event_plan(args: argparse.Namespace) -> EventPlan:
     """Ask what is being traded, in the order the answers depend on each other."""
-    instrument = resolve_instrument(key, args)
+    instrument = resolve_instrument(args)
     return EventPlan(
         instrument=instrument,
-        side=resolve_option_side(key, args, instrument),
-        contracts=resolve_contracts(key, args, instrument),
+        side=resolve_option_side(args, instrument),
+        contracts=resolve_contracts(args, instrument),
     )
 
 
-def resolve_option_side(key: str, args: argparse.Namespace, instrument: str = "options") -> str:
+def resolve_option_side(args: argparse.Namespace, instrument: str = "options") -> str:
     """Which side of the chain to display. A spread has already picked one."""
     if instrument in SPREAD_SIDES:
         return SPREAD_SIDES[instrument]
@@ -1088,7 +1142,7 @@ def reddit_setup(path: Optional[str] = None) -> int:
         user_agent = input("User agent [%s]: " % buzz.DEFAULT_USER_AGENT).strip()
         redirect_uri = input("Redirect URI [%s]: " % buzz.DEFAULT_REDIRECT_URI).strip()
     except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
+        print(CANCELLED)
         return 130
 
     if not client_id:
@@ -1125,7 +1179,7 @@ def x_setup(path: Optional[str] = None) -> int:
     try:
         token = getpass.getpass("Bearer token (hidden): ").strip()
     except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
+        print(CANCELLED)
         return 130
 
     if not token:
@@ -1179,7 +1233,8 @@ def _company_name(symbol: str) -> "tuple[str, Optional[str]]":
     try:
         data = MarketData(symbol)
         name = data.name
-    except Exception:  # noqa: BLE001 -- offline is a state, not a failure here
+    except Exception:  # noqa: BLE001
+        # Offline is a state, not a failure here.
         return "", "saved without a name -- could not reach Yahoo to look it up"
     if name == symbol:
         return "", "Yahoo publishes nothing under '%s' -- check the symbol" % symbol
@@ -1239,7 +1294,7 @@ def favourite_list(machine_readable: bool, palette=None) -> int:
     priced = favourites.with_quotes(saved)
     if machine_readable:
         for item, quote in priced:
-            print("%s\t%s" % (item.symbol, favourites.format_line(item, quote)))
+            print(TAB_ROW % (item.symbol, favourites.format_line(item, quote)))
         return 0
     if not saved:
         print("No saved stocks yet. Save one with:  validate.py --favourite NVDA")
@@ -1663,6 +1718,44 @@ def prompt_probability() -> Optional[float]:
         print("  A probability lives between 0 and 100.")
 
 
+def _event_flag_problem(args: argparse.Namespace) -> Optional[str]:
+    """What is wrong with the event flags, or None when they are usable."""
+    if args.probability is not None and not 0.0 <= args.probability <= 100.0:
+        return "--probability is a percentage between 0 and 100."
+    if args.event_price is not None and not 0.0 < args.event_price < 100.0:
+        return "--event-price is in cents, between 0 and 100."
+    # Checked here as well as in the symbol run's flag checks, because this
+    # path returns before those run.
+    if args.contracts is not None and args.contracts < 1:
+        return "--contracts must be at least 1."
+    return None
+
+
+def _ask_probability(market, side: str, palette) -> Optional[float]:
+    """Ask for the estimate with the market on screen.
+
+    Asked rather than skipped quietly: without an estimate the heaviest check
+    on the sheet does not run. The market is shown first, because the number
+    being typed is a disagreement with it.
+    """
+    print("\n%s  %s" % (palette.bold(market.ticker), market.title))
+    quote = market.ask(side)
+    if quote is not None:
+        print(
+            palette.grey(
+                "  buying %s at %.0fc -- the market puts it at %s"
+                % (side, quote, ("%.1f%%" % (market.mid or quote)).replace(".0%", "%"))
+            )
+        )
+    try:
+        return prompt_probability()
+    except EOFError:
+        # End of input is an answer -- "no estimate" -- and the rest of the
+        # sheet still grades what the contract costs to own.
+        print()
+        return None
+
+
 def run_event_contract(
     args: argparse.Namespace, config: Config, palette, width: int
 ) -> int:
@@ -1673,16 +1766,9 @@ def run_event_contract(
     except ValueError as exc:
         print("Invalid --event-side '%s'. %s" % (args.event_side, exc), file=sys.stderr)
         return 2
-    if args.probability is not None and not 0.0 <= args.probability <= 100.0:
-        print("--probability is a percentage between 0 and 100.", file=sys.stderr)
-        return 2
-    if args.event_price is not None and not 0.0 < args.event_price < 100.0:
-        print("--event-price is in cents, between 0 and 100.", file=sys.stderr)
-        return 2
-    # Checked here as well as below, because this path returns before the
-    # shared argument validation the symbol run does.
-    if args.contracts is not None and args.contracts < 1:
-        print("--contracts must be at least 1.", file=sys.stderr)
+    problem = _event_flag_problem(args)
+    if problem:
+        print(problem, file=sys.stderr)
         return 2
 
     try:
@@ -1693,26 +1779,10 @@ def run_event_contract(
 
     probability = args.probability
     if probability is None and sys.stdin.isatty() and not args.quiet:
-        # Asked here rather than skipped quietly: without an estimate the
-        # heaviest check on the sheet does not run. Asked with the market on
-        # screen, because the number being typed is a disagreement with it.
-        print("\n%s  %s" % (palette.bold(market.ticker), market.title))
-        quote = market.ask(side)
-        if quote is not None:
-            print(
-                palette.grey(
-                    "  buying %s at %.0fc -- the market puts it at %s"
-                    % (side, quote, ("%.1f%%" % (market.mid or quote)).replace(".0%", "%"))
-                )
-            )
         try:
-            probability = prompt_probability()
-        except EOFError:
-            # End of input is an answer -- "no estimate" -- and the rest of the
-            # sheet still grades what the contract costs to own.
-            print()
+            probability = _ask_probability(market, side, palette)
         except KeyboardInterrupt:
-            print("\nCancelled.")
+            print(CANCELLED)
             return 130
 
     trade = EventTrade(
@@ -1790,7 +1860,7 @@ def validate_symbol(
 ) -> Report:
     palette = palette or make_palette(no_color=True)
     width = width or detect_width()
-    plan = plan or resolve_event_plan(key, args)
+    plan = plan or resolve_event_plan(args)
 
     # Downloaded here rather than left to the service: which scheduled report
     # is being traded is a question about this symbol's calendar, so it cannot
@@ -1825,235 +1895,261 @@ def validate_symbol(
     return strategy.run()
 
 
-def main(argv: Optional[List[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+def _list_sectors() -> int:
+    for line in discover.format_sector_menu():
+        print(line)
+    return 0
 
+
+def _resolve_sector_flag(choice: str) -> int:
     try:
-        config = Config.load(args.config) if args.config else Config()
-        # Typed on the command line, so it wins over the file it was run with.
-        config.weights = validate_weights({**config.weights, **parse_weight_flags(args.weight)})
-    except (OSError, ValueError) as exc:
-        print("Config error: %s" % exc, file=sys.stderr)
+        print(discover.resolve_sector(choice))
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
         return 2
+    return 0
 
-    # Built before the listing handlers, not after: the shell front end reads
-    # those back through a pipe, where colour has to be asked for explicitly.
-    palette = make_palette(force_color=args.color, no_color=args.no_color)
-    width = detect_width(args.width)
 
-    if args.list_sectors:
-        for line in discover.format_sector_menu():
-            print(line)
-        return 0
+def _list_indices(palette) -> int:
+    quotes = indices.snapshot()
+    for line in indices.format_lines(quotes, palette):
+        print(line)
+    return 0 if quotes else 1
 
-    # Validating a menu choice costs nothing; listing its companies costs a
-    # round trip per name, so the shell front end resolves first and fetches once.
-    if args.resolve_sector:
-        try:
-            print(discover.resolve_sector(args.resolve_sector))
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 2
-        return 0
 
-    if args.list_indices:
-        quotes = indices.snapshot()
-        for line in indices.format_lines(quotes, palette):
-            print(line)
-        return 0 if quotes else 1
+def _event_search(text: str, config: Config) -> int:
+    """Machine-readable for trade.sh, which draws its own picker."""
+    try:
+        matches = kalshi.search(text, limit=config.event_contract.search_limit)
+    except kalshi.KalshiError as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    for market in matches:
+        print(
+            "%s\t%s\t%s"
+            % (market.ticker, format_event_match(market), event_quote_field(market))
+        )
+    return 0 if matches else 1
 
-    if args.event_search:
-        # Machine-readable for trade.sh, which draws its own picker.
-        try:
-            matches = kalshi.search(args.event_search, limit=config.event_contract.search_limit)
-        except kalshi.KalshiError as exc:
-            print(exc, file=sys.stderr)
-            return 1
-        for market in matches:
-            print(
-                "%s\t%s\t%s"
-                % (market.ticker, format_event_match(market), event_quote_field(market))
+
+def _list_events(palette) -> int:
+    events = macro.upcoming(limit=6)
+    for line in macro.format_lines(events, palette=palette):
+        print(line)
+    if macro.running_out():
+        # Silence here would read as "nothing scheduled", which is a very
+        # different thing from "the table stops here".
+        print(
+            palette.grey(
+                "  The published releases stop here -- what is left above is "
+                "worked out from the third-Friday rule. Refresh EVENTS in "
+                "tradeval/data/macro.py from federalreserve.gov and bls.gov."
             )
-        return 0 if matches else 1
+        )
+    print(palette.grey("  " + sessions.month_end_line()))
+    return 0 if events else 1
 
-    if args.list_events:
-        events = macro.upcoming(limit=6)
-        for line in macro.format_lines(events, palette=palette):
-            print(line)
-        if macro.running_out():
-            # Silence here would read as "nothing scheduled", which is a very
-            # different thing from "the table stops here".
-            print(
-                palette.grey(
-                    "  The published releases stop here -- what is left above is "
-                    "worked out from the third-Friday rule. Refresh EVENTS in "
-                    "tradeval/data/macro.py from federalreserve.gov and bls.gov."
-                )
+
+def _resolve_sector_or_ticker(choice: str) -> int:
+    sector = discover.sector_or_none(choice)
+    if sector:
+        print("sector:%s" % sector)
+    else:
+        print("ticker:%s" % resolve_symbols([choice])[0])
+    return 0
+
+
+def _list_spending(palette) -> int:
+    for line in spending.menu_lines(palette):
+        print(line)
+    return 0
+
+
+def _list_spending_winners(choice: str, palette) -> int:
+    try:
+        flow = spending.resolve(choice)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    snapshots = {snap.symbol: snap for snap in spending.flow_snapshots(flow)}
+    largest = spending.largest_share(flow)
+    for winner in flow.winners:
+        print(
+            TAB_ROW
+            % (
+                winner.symbol,
+                spending.format_winner(
+                    winner, snapshots.get(winner.symbol), palette, largest
+                ),
             )
-        print(palette.grey("  " + sessions.month_end_line()))
-        return 0 if events else 1
+        )
+    return 0 if flow.winners else 1
 
-    if args.resolve_sector_or_ticker:
-        choice = args.resolve_sector_or_ticker
-        sector = discover.sector_or_none(choice)
-        if sector:
-            print("sector:%s" % sector)
-        else:
-            print("ticker:%s" % resolve_symbols([choice])[0])
-        return 0
 
-    if args.list_spending:
-        for line in spending.menu_lines(palette):
-            print(line)
-        return 0
+def _list_spending_buzz(choice: str, args: argparse.Namespace, config: Config, palette) -> int:
+    try:
+        flow = spending.resolve(choice)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    chatter = flow_buzz.score_flow(flow, config.buzz, buzz_scorer(args, config))
+    for line in flow_buzz.format_lines(chatter, flow, palette):
+        print(line)
+    return 0 if chatter.available else 1
 
-    if args.list_spending_winners:
-        try:
-            flow = spending.resolve(args.list_spending_winners)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 2
-        snapshots = {snap.symbol: snap for snap in spending.flow_snapshots(flow)}
-        largest = spending.largest_share(flow)
-        for winner in flow.winners:
-            print(
-                "%s\t%s"
-                % (
-                    winner.symbol,
-                    spending.format_winner(
-                        winner, snapshots.get(winner.symbol), palette, largest
-                    ),
-                )
-            )
-        return 0 if flow.winners else 1
 
-    if args.list_spending_buzz:
-        try:
-            flow = spending.resolve(args.list_spending_buzz)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 2
-        chatter = flow_buzz.score_flow(flow, config.buzz, buzz_scorer(args, config))
-        for line in flow_buzz.format_lines(chatter, flow, palette):
-            print(line)
-        return 0 if chatter.available else 1
+def _list_sector_companies(choice: str) -> int:
+    try:
+        sector = discover.resolve_sector(choice)
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
+        return 2
+    companies = discover.sector_companies(sector)
+    for item in companies:
+        print(TAB_ROW % (item.symbol, discover.format_company(item)))
+    return 0 if companies else 1
 
-    if args.list_sector_companies:
-        try:
-            sector = discover.resolve_sector(args.list_sector_companies)
-        except ValueError as exc:
-            print(exc, file=sys.stderr)
-            return 2
-        companies = discover.sector_companies(sector)
-        for item in companies:
-            print("%s\t%s" % (item.symbol, discover.format_company(item)))
-        return 0 if companies else 1
 
-    if args.buzz_source:
-        print(config.buzz.source)
-        return 0
+def _print_buzz_source(config: Config) -> int:
+    print(config.buzz.source)
+    return 0
 
-    if args.x_setup:
-        return x_setup()
 
-    if args.x_status:
-        return x_status()
+def _list_earnings(config: Config) -> int:
+    """Machine-readable for trade.sh, which draws its own menu."""
+    rules = config.earnings
+    try:
+        candidates, _, _ = discover.find_earnings_candidates(
+            limit=rules.discovery_limit,
+            sector=rules.discovery_sector or None,
+            min_market_cap=rules.discovery_min_market_cap,
+        )
+    except Exception:
+        return 1
+    for item in candidates:
+        print(TAB_ROW % (item.symbol, discover.format_candidate(item)))
+    return 0 if candidates else 1
 
-    if args.reddit_status:
-        return reddit_status(args.reddit_credentials)
 
-    if args.db_status:
-        return db_status()
+def run_listing(args: argparse.Namespace, config: Config, palette) -> Optional[int]:
+    """The one-shot flags: each prints or stores something and exits before
+    any trade is asked about. The first one given wins, in this order; None
+    when none was given.
 
-    if args.favourite:
-        return favourite_add(args.favourite)
+    Validating a menu choice costs nothing; listing its companies costs a
+    round trip per name, so the shell front end resolves first and fetches once.
+    """
+    handlers = [
+        (args.list_sectors, _list_sectors),
+        (args.resolve_sector, lambda: _resolve_sector_flag(args.resolve_sector)),
+        (args.list_indices, lambda: _list_indices(palette)),
+        (args.event_search, lambda: _event_search(args.event_search, config)),
+        (args.list_events, lambda: _list_events(palette)),
+        (args.resolve_sector_or_ticker, lambda: _resolve_sector_or_ticker(args.resolve_sector_or_ticker)),
+        (args.list_spending, lambda: _list_spending(palette)),
+        (args.list_spending_winners, lambda: _list_spending_winners(args.list_spending_winners, palette)),
+        (args.list_spending_buzz, lambda: _list_spending_buzz(args.list_spending_buzz, args, config, palette)),
+        (args.list_sector_companies, lambda: _list_sector_companies(args.list_sector_companies)),
+        (args.buzz_source, lambda: _print_buzz_source(config)),
+        (args.x_setup, x_setup),
+        (args.x_status, x_status),
+        (args.reddit_status, lambda: reddit_status(args.reddit_credentials)),
+        (args.db_status, db_status),
+        (args.favourite, lambda: favourite_add(args.favourite)),
+        (args.unfavourite, lambda: favourite_remove(args.unfavourite)),
+        (args.favourites or args.list_favourites, lambda: favourite_list(args.list_favourites, palette)),
+        (args.track, lambda: track_add(args.track)),
+        (args.untrack, lambda: track_remove(args.untrack)),
+        (args.tracked or args.list_tracked, lambda: track_list(args.list_tracked, palette)),
+        (args.reddit_setup, lambda: reddit_setup(args.reddit_credentials)),
+        (args.reddit_authorize, lambda: reddit_authorize(args.reddit_credentials)),
+        (args.list_earnings, lambda: _list_earnings(config)),
+    ]
+    for given, handler in handlers:
+        if given:
+            return handler()
+    return None
 
-    if args.unfavourite:
-        return favourite_remove(args.unfavourite)
 
-    if args.favourites or args.list_favourites:
-        return favourite_list(args.list_favourites, palette)
+def show_profile(args: argparse.Namespace, config: Config, palette, width: int) -> int:
+    symbol = resolve_symbols([args.profile])[0]
+    try:
+        data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
+    except Exception as exc:  # noqa: BLE001
+        # Reported, not handled: whatever went wrong, there is nothing to show.
+        print("%s: %s" % (symbol, exc), file=sys.stderr)
+        return 1
+    # Any strategy builds the same profile; the long term one asks for
+    # nothing else, so it is the cheapest way to reach it.
+    panel = STRATEGIES["long"](TradeContext(data=data, config=config)).stock_info_panel()
+    if panel is None:
+        print("%s: nothing to show." % symbol, file=sys.stderr)
+        return 1
+    for line in layout_panels([panel], palette, width):
+        print(line)
+    return 0
 
-    if args.track:
-        return track_add(args.track)
 
-    if args.untrack:
-        return track_remove(args.untrack)
+def _choice_problem(flag: str, raw: Optional[str], resolver) -> Optional[str]:
+    """Why a menu flag's value is not one of its choices, or None."""
+    if not raw:
+        return None
+    try:
+        resolver(raw)
+    except ValueError as exc:
+        return "Invalid %s '%s'. %s" % (flag, raw, exc)
+    return None
 
-    if args.tracked or args.list_tracked:
-        return track_list(args.list_tracked, palette)
 
-    if args.reddit_setup:
-        return reddit_setup(args.reddit_credentials)
-
-    if args.reddit_authorize:
-        return reddit_authorize(args.reddit_credentials)
-
-    if args.list_earnings:
-        # Machine-readable for trade.sh, which draws its own menu.
-        rules = config.earnings
-        try:
-            candidates, _, _ = discover.find_earnings_candidates(
-                limit=rules.discovery_limit,
-                sector=rules.discovery_sector or None,
-                min_market_cap=rules.discovery_min_market_cap,
-            )
-        except Exception:
-            return 1
-        for item in candidates:
-            print("%s\t%s" % (item.symbol, discover.format_candidate(item)))
-        return 0 if candidates else 1
-
-    config.benchmark = args.benchmark
-
-    if args.profile:
-        symbol = resolve_symbols([args.profile])[0]
-        try:
-            data = MarketData(symbol, benchmark=args.benchmark, period=args.period)
-        except (DataError, Exception) as exc:  # noqa: BLE001 -- reported, not handled
-            print("%s: %s" % (symbol, exc), file=sys.stderr)
-            return 1
-        # Any strategy builds the same profile; the long term one asks for
-        # nothing else, so it is the cheapest way to reach it.
-        panel = STRATEGIES["long"](TradeContext(data=data, config=config)).stock_info_panel()
-        if panel is None:
-            print("%s: nothing to show." % symbol, file=sys.stderr)
-            return 1
-        for line in layout_panels([panel], palette, width):
-            print(line)
-        return 0
-
-    # A claim on an event is not a company, so it takes none of the machinery
-    # below: no history to fetch, no chain to price, no peers to read across.
-    if args.event:
-        return run_event_contract(args, config, palette, width)
-
-    if args.instrument:
-        try:
-            resolve_instrument_choice(args.instrument)
-        except ValueError as exc:
-            print("Invalid --instrument '%s'. %s" % (args.instrument, exc), file=sys.stderr)
-            return 2
-
-    if args.side:
-        try:
-            resolve_side(args.side)
-        except ValueError as exc:
-            print("Invalid --side '%s'. %s" % (args.side, exc), file=sys.stderr)
-            return 2
-
+def trade_flag_problem(args: argparse.Namespace) -> Optional[str]:
+    """What is wrong with the flags describing a trade, or None."""
+    problem = _choice_problem("--instrument", args.instrument, resolve_instrument_choice)
+    problem = problem or _choice_problem("--side", args.side, resolve_side)
+    if problem:
+        return problem
     if args.contracts is not None and args.contracts < 1:
-        print("--contracts must be at least 1.", file=sys.stderr)
-        return 2
-
+        return "--contracts must be at least 1."
     if args.min_reward_risk is not None and args.min_reward_risk <= 0:
-        print("--min-reward-risk must be greater than 0.", file=sys.stderr)
-        return 2
-
+        return "--min-reward-risk must be greater than 0."
     if args.strikes is not None and args.strikes < 1:
-        print("--strikes must be at least 1.", file=sys.stderr)
-        return 2
+        return "--strikes must be at least 1."
+    return None
 
+
+def _print_run_notes(symbols: List[str], key: str, args: argparse.Namespace, config: Config, palette) -> None:
+    if len(symbols) > 1 and any(v is not None for v in (args.entry, args.stop, args.target)):
+        print(
+            palette.yellow(
+                "Note: --entry/--stop/--target describe one trade; they will be applied "
+                "to every symbol listed."
+            )
+        )
+
+    if args.peers and key == "earnings" and config.earnings.peer_limit > 0:
+        print(
+            "Looking up peer earnings reactions -- one request per peer, "
+            "this takes about 10 seconds.",
+            file=sys.stderr,
+        )
+
+
+def _finish(reports: List[Report], failures: int, palette, width: int) -> int:
+    """Print the summary and pick the exit status."""
+    if not reports:
+        return 1
+
+    summary = render_summary(reports, palette, width)
+    if summary:
+        print(summary)
+
+    if failures:
+        return 1
+    # Exit non-zero when nothing is tradeable, so this composes in a shell pipeline.
+    return 0 if any(r.verdict.label != "NO-GO" for r in reports) else 3
+
+
+def run_trades(args: argparse.Namespace, config: Config, palette, width: int) -> int:
+    """Ask for the trade type and symbols, then grade each symbol in turn."""
     try:
         # Strategy first: it decides which trade details are worth asking for.
         key = prompt_trade_type(args.trade_type)
@@ -2073,34 +2169,21 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
+        print(CANCELLED)
         return 130
 
-    if len(symbols) > 1 and any(v is not None for v in (args.entry, args.stop, args.target)):
-        print(
-            palette.yellow(
-                "Note: --entry/--stop/--target describe one trade; they will be applied "
-                "to every symbol listed."
-            )
-        )
-
-    if args.peers and key == "earnings" and config.earnings.peer_limit > 0:
-        print(
-            "Looking up peer earnings reactions -- one request per peer, "
-            "this takes about 10 seconds.",
-            file=sys.stderr,
-        )
+    _print_run_notes(symbols, key, args, config, palette)
 
     try:
         horizon = resolve_horizon(key, args, config)
         # Asked once here rather than inside the per-symbol loop, so a list of
         # tickers does not re-ask what is being traded for each one.
-        plan = resolve_event_plan(key, args)
+        plan = resolve_event_plan(args)
     except SystemExit as exc:
         print(exc, file=sys.stderr)
         return 2
     except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
+        print(CANCELLED)
         return 130
 
     buzz_scores = resolve_buzz(symbols, args, config)
@@ -2137,17 +2220,45 @@ def main(argv: Optional[List[str]] = None) -> int:
             # number and has no business shaping a score.
             show_upside(report, args, palette, width)
 
-    if not reports:
-        return 1
+    return _finish(reports, failures, palette, width)
 
-    summary = render_summary(reports, palette, width)
-    if summary:
-        print(summary)
 
-    if failures:
-        return 1
-    # Exit non-zero when nothing is tradeable, so this composes in a shell pipeline.
-    return 0 if any(r.verdict.label != "NO-GO" for r in reports) else 3
+def main(argv: Optional[List[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+
+    try:
+        config = Config.load(args.config) if args.config else Config()
+        # Typed on the command line, so it wins over the file it was run with.
+        config.weights = validate_weights({**config.weights, **parse_weight_flags(args.weight)})
+    except (OSError, ValueError) as exc:
+        print("Config error: %s" % exc, file=sys.stderr)
+        return 2
+
+    # Built before the listing handlers, not after: the shell front end reads
+    # those back through a pipe, where colour has to be asked for explicitly.
+    palette = make_palette(force_color=args.color, no_color=args.no_color)
+    width = detect_width(args.width)
+
+    status = run_listing(args, config, palette)
+    if status is not None:
+        return status
+
+    config.benchmark = args.benchmark
+
+    if args.profile:
+        return show_profile(args, config, palette, width)
+
+    # A claim on an event is not a company, so it takes none of the machinery
+    # below: no history to fetch, no chain to price, no peers to read across.
+    if args.event:
+        return run_event_contract(args, config, palette, width)
+
+    problem = trade_flag_problem(args)
+    if problem:
+        print(problem, file=sys.stderr)
+        return 2
+
+    return run_trades(args, config, palette, width)
 
 
 if __name__ == "__main__":

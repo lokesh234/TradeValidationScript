@@ -64,7 +64,8 @@ def main(symbol: str = "KO") -> int:
                 report = STRATEGIES[key](ctx).run()
                 plain = render(report, make_palette(no_color=True), width=150)
                 coloured = ANSI.sub("", render(report, make_palette(force_color=True), width=150))
-            except Exception as exc:  # noqa: BLE001 -- reporting, not handling
+            except Exception as exc:  # noqa: BLE001
+                # Reporting, not handling: a crash is one line of the output.
                 print("%-9s %-12s CRASH %s: %s" % (key, instrument, type(exc).__name__, exc))
                 failures += 1
                 continue

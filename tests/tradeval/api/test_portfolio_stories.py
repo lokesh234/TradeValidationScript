@@ -72,13 +72,16 @@ def test_the_contract(client):
     assert body["fresh_for_seconds"] == 12 * 60 * 60
     assert list(body["companies"]) == ["ORCL", "META", "BTC-USD", "NOPE"]
     orcl = body["companies"]["ORCL"]
-    assert orcl["name"] == "Oracle Corporation" and orcl["cik"] == "0001341439"
+    assert orcl["name"] == "Oracle Corporation"
+    assert orcl["cik"] == "0001341439"
     assert orcl["stories"][0] == dict(FILING, happened_on=_day(-5).isoformat(),
                                       sources=[dict(FILING["sources"][0], published=_day(-5).isoformat())])
     mention = orcl["stories"][1]
-    assert mention["date"] == mention["window_start"] == _day(40).isoformat() and mention["status"] == "pending"
+    assert mention["date"] == mention["window_start"] == _day(40).isoformat()
+    assert mention["status"] == "pending"
     market = body["companies"]["META"]["stories"][0]
-    assert market["likelihood"] == MARKET["likelihood"] and market["window_start"] is None
+    assert market["likelihood"] == MARKET["likelihood"]
+    assert market["window_start"] is None
     assert market["sources"][0]["published"] is None
     assert body["companies"]["BTC-USD"] == {"name": "Bitcoin USD", "cik": None, "stories": []}
     assert body["companies"]["NOPE"] is None
@@ -122,7 +125,8 @@ def test_symbols_not_finished_in_time_are_listed_as_pending(monkeypatch):
         "ORCL": {"name": "Oracle Corporation", "cik": "0001341439", "stories": [MENTION]}})
     body = TestClient(serve.app).post("/mobile/stories", json={"symbols": ["ORCL", "meta", "NVDA", "META"]}).json()
     assert body["pending"] == ["META", "NVDA"]
-    assert body["companies"]["META"] is None and body["companies"]["NVDA"] is None
+    assert body["companies"]["META"] is None
+    assert body["companies"]["NVDA"] is None
     assert body["companies"]["ORCL"]["stories"][0]["id"] == "orcl-mention-abc"
 
 

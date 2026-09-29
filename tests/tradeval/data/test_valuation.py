@@ -12,12 +12,14 @@ def test_issuer_value_and_date_are_paired():
 
 @pytest.mark.parametrize("value", ["N/A", "nan", "inf", "-1", "0"])
 def test_invalid_values_are_not_published(value):
+    page = document(value)
     with pytest.raises(ValueError):
-        valuation.parse_valuation(document(value))
+        valuation.parse_valuation(page)
 
 def test_missing_section_is_not_confused_with_index():
+    page = document().replace("Fund Characteristics", "Other")
     with pytest.raises(ValueError):
-        valuation.parse_valuation(document().replace("Fund Characteristics", "Other"))
+        valuation.parse_valuation(page)
 
 def test_cache_and_failure_are_safe(monkeypatch):
     monkeypatch.setattr(valuation, "_cached", None)

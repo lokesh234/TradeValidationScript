@@ -315,14 +315,23 @@ def _merge_section(target: Any, raw: Dict[str, Any], path: str) -> None:
         if isinstance(value, dict) and hasattr(current, "__dataclass_fields__"):
             _merge_section(current, value, "%s.%s" % (path, key))
         elif isinstance(value, dict) and isinstance(current, dict):
-            for sub_key, sub_value in value.items():
-                existing = current.get(sub_key)
-                if isinstance(sub_value, dict) and hasattr(existing, "__dataclass_fields__"):
-                    _merge_section(existing, sub_value, "%s.%s.%s" % (path, key, sub_key))
-                else:
-                    current[sub_key] = sub_value
+            _merge_mapping(current, value, "%s.%s" % (path, key))
         else:
             setattr(target, key, value)
+
+
+def _merge_mapping(current: Dict[str, Any], raw: Dict[str, Any], path: str) -> None:
+    """Overlay a JSON fragment onto a dict of sections, such as the horizons.
+
+    A section that is a dataclass is merged field by field; anything else is
+    replaced, and a new key is simply added.
+    """
+    for sub_key, sub_value in raw.items():
+        existing = current.get(sub_key)
+        if isinstance(sub_value, dict) and hasattr(existing, "__dataclass_fields__"):
+            _merge_section(existing, sub_value, "%s.%s" % (path, sub_key))
+        else:
+            current[sub_key] = sub_value
 
 
 @dataclass

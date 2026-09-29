@@ -55,6 +55,11 @@ def _vs(symbol: str, what: str) -> Link:
     return Link(symbol, RIVAL, what)
 
 
+# Descriptions that recur across the table.
+SAME = "the same"  # as the entry above it
+ETCH_AND_DEPOSITION = "etch and deposition"
+DATA_CENTRE_SWITCHING = "data centre switching"
+
 # Concentrated on the AI and semiconductor complex, which is where a supply
 # chain is the whole investment case and where one name's guidance moves eight
 # others. Add a ticker by adding a key.
@@ -79,7 +84,7 @@ LINKS: Dict[str, List[Link]] = {
         _from("TSM", "fabricates the CPU and GPU die"),
         _from("MU", "HBM for the MI accelerators"),
         _to("MSFT", "an accelerator second source"),
-        _to("META", "the same"),
+        _to("META", SAME),
         _to("ORCL", "OCI capacity"),
         _to("DELL", "servers and workstations"),
         _vs("NVDA", "the incumbent it is trying to take share from"),
@@ -98,7 +103,7 @@ LINKS: Dict[str, List[Link]] = {
     "TSM": [
         _from("ASML", "the lithography, with no second supplier at the leading edge"),
         _from("AMAT", "deposition and etch"),
-        _from("LRCX", "etch and deposition"),
+        _from("LRCX", ETCH_AND_DEPOSITION),
         _from("KLAC", "process control before the wafer ships"),
         _from("ENTG", "the ultrapure materials every step consumes"),
         _to("NVDA", "leading-edge accelerator die"),
@@ -124,7 +129,7 @@ LINKS: Dict[str, List[Link]] = {
         _vs("ASML", "shares the customer's budget, not the tool"),
     ],
     "LRCX": [
-        _to("TSM", "etch and deposition"),
+        _to("TSM", ETCH_AND_DEPOSITION),
         _to("MU", "the memory cycle, where its leverage is"),
         _to("INTC", "foundry capacity"),
         _vs("AMAT", "the same tools, the same customers"),
@@ -132,13 +137,13 @@ LINKS: Dict[str, List[Link]] = {
     ],
     "KLAC": [
         _to("TSM", "process control -- finding the defect before the wafer ships"),
-        _to("INTC", "the same"),
+        _to("INTC", SAME),
         _to("MU", "memory yield"),
         _vs("ONTO", "inspection and metrology, weighted to packaging"),
     ],
     "MU": [
         _from("AMAT", "the tools that build the memory fab"),
-        _from("LRCX", "etch and deposition"),
+        _from("LRCX", ETCH_AND_DEPOSITION),
         _from("ASML", "DUV lithography"),
         _to("NVDA", "HBM committed years ahead of delivery"),
         _to("AMD", "HBM for the MI line"),
@@ -158,8 +163,8 @@ LINKS: Dict[str, List[Link]] = {
         _from("AVGO", "the merchant switch silicon inside the box"),
         _from("COHR", "the optics that go in the ports"),
         _to("META", "the fabric between training racks"),
-        _to("MSFT", "data centre switching"),
-        _to("ORCL", "the same"),
+        _to("MSFT", DATA_CENTRE_SWITCHING),
+        _to("ORCL", SAME),
         _vs("CSCO", "the incumbent it took the data centre from"),
     ],
     "COHR": [
@@ -170,7 +175,7 @@ LINKS: Dict[str, List[Link]] = {
     ],
     "VRT": [
         _to("MSFT", "power and cooling inside the hall"),
-        _to("META", "the same"),
+        _to("META", SAME),
         _to("CRWV", "the fit-out of a neocloud site"),
         _vs("ETN", "electrical distribution, from meter to rack"),
     ],
@@ -193,7 +198,7 @@ LINKS: Dict[str, List[Link]] = {
     ],
     "AMZN": [
         _from("NVDA", "accelerators for AWS"),
-        _from("ANET", "data centre switching"),
+        _from("ANET", DATA_CENTRE_SWITCHING),
         _from("VRT", "power and cooling"),
         _vs("MSFT", "cloud share"),
         _vs("GOOGL", "cloud, and advertising against retail media"),
@@ -222,9 +227,9 @@ LINKS: Dict[str, List[Link]] = {
     "ORCL": [
         _from("NVDA", "OCI accelerator capacity, funded on debt"),
         _from("AMD", "a second source"),
-        _from("ANET", "data centre switching"),
+        _from("ANET", DATA_CENTRE_SWITCHING),
         _vs("MSFT", "cloud, from far behind"),
-        _vs("AMZN", "the same"),
+        _vs("AMZN", SAME),
     ],
 }
 

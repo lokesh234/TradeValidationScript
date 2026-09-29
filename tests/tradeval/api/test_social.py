@@ -34,12 +34,14 @@ def test_sample_counts_deduplicate_and_exclude_old_posts(monkeypatch):
 def test_missing_source_and_provider_errors_never_look_neutral(monkeypatch):
     monkeypatch.setattr(social.x_api.XCredentials, 'load', lambda: None)
     result = social.build_social('NVDA', 'x', Config().buzz)
-    assert result['status'] == 'not_configured' and result['summary'] is None
+    assert result['status'] == 'not_configured'
+    assert result['summary'] is None
     def fail(*args):
         raise RuntimeError('secret-token-and-internal-path')
     monkeypatch.setattr(social, 'fetch_documents', fail)
     result = social.build_social('NVDA', 'stocktwits', Config().buzz)
-    assert result['status'] == 'unavailable' and result['summary'] is None
+    assert result['status'] == 'unavailable'
+    assert result['summary'] is None
     assert 'secret-token' not in str(result)
 
 

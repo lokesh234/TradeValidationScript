@@ -23,6 +23,11 @@ from tradeval.data.market import AtmQuote, OptionQuote
 from .base import Panel
 
 
+# Number formats for money and strikes, thousands separated.
+WHOLE_NUMBER = "{:,.0f}"
+TWO_DECIMALS = "{:,.2f}"
+
+
 def _scale(value: Optional[float], count: int) -> Optional[float]:
     """Extend a per-contract figure to the whole position."""
     return None if value is None else value * count
@@ -41,7 +46,7 @@ def _signed_money(value: Optional[float]) -> str:
     """Dollar P&L with an explicit sign: +$1,180 / -$402."""
     if value is None:
         return "-"
-    return "%s$%s" % ("+" if value >= 0 else "-", "{:,.0f}".format(abs(value)))
+    return "%s$%s" % ("+" if value >= 0 else "-", WHOLE_NUMBER.format(abs(value)))
 
 
 def _return_pct(value: Optional[float]) -> str:
@@ -553,27 +558,56 @@ class OptionsPlaybook:
         quote = self.front_quote
         days_to_expiry = float(quote.days_out) if quote else 0.0
         volatility = self.reprice_volatility
-        rows = []
-        for spread in built:
-            odds = spread.chance_of_max(spot, days_to_expiry, volatility)
-            rows.append(
-                [
-                    spread.label,
-                    "%s wide" % spreads.format_strike(spread.width),
-                    _money_cell(spread.cost),
-                    _money_cell(spread.max_profit),
-                    "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
-                    "%.0fc" % spread.priced_at if spread.priced_at is not None else "-",
-                    "%.0f%%" % odds if odds is not None else "-",
-                    "{:,.2f}".format(spread.breakeven) if spread.breakeven else "-",
-                    _signed_pct(spread.breakeven_move_pct(spot)),
-                    _signed_pct(self._directional(spread.target_move_pct(spot))),
-                ]
-            )
+        rows = [self._spread_row(spread, spot, days_to_expiry, volatility) for spread in built]
 
         marked, marker, outruns = self._spread_marker(built, spot, implied)
         kind = self.ctx.spread_kind or "call"
         self._check_budget_covers_a_spread(built)
+        note = self._spread_table_note(built, for_choice, implied, outruns)
+        return Panel(
+            # Titled for what it is: the ladder, or the one pairing that was
+            # named. Two tables under one title, a screen apart, would read as
+            # the same table printed twice.
+            title=(
+                "YOUR %s SPREAD -- %s, %s expiry"
+                % (kind.upper(), built[0].label, dates.format_date(self.front_quote.expiry))
+                if for_choice
+                else "%s DEBIT SPREADS -- %s expiry, per spread"
+                % (kind.upper(), dates.format_date(self.front_quote.expiry))
+            ),
+            headers=[
+                "Strikes", "Width", "Debit", "Max profit",
+                "Reward:risk", "Costs", "IV odds", "Breakeven", "B/E move", "To max",
+            ],
+            rows=rows,
+            highlight=marked,
+            highlight_label=marker,
+            left_align=[0],
+            note=note,
+        )
+
+    def _spread_row(
+        self, spread: spreads.VerticalSpread, spot: float, days_to_expiry: float, volatility: Optional[float]
+    ) -> List[str]:
+        odds = spread.chance_of_max(spot, days_to_expiry, volatility)
+        return [
+            spread.label,
+            "%s wide" % spreads.format_strike(spread.width),
+            _money_cell(spread.cost),
+            _money_cell(spread.max_profit),
+            "%.2f:1" % spread.reward_risk if spread.reward_risk else "-",
+            "%.0fc" % spread.priced_at if spread.priced_at is not None else "-",
+            "%.0f%%" % odds if odds is not None else "-",
+            TWO_DECIMALS.format(spread.breakeven) if spread.breakeven else "-",
+            _signed_pct(spread.breakeven_move_pct(spot)),
+            _signed_pct(self._directional(spread.target_move_pct(spot))),
+        ]
+
+    def _spread_table_note(
+        self, built: List[spreads.VerticalSpread], for_choice: bool, implied: Optional[float], outruns: bool
+    ) -> str:
+        """The note under the spread table: what was named or searched, and how
+        to read the Costs and IV odds columns."""
         if for_choice:
             note = (
                 "The pairing you named: long %s, short %s. Max profit needs the "
@@ -619,27 +653,7 @@ class OptionsPlaybook:
                 "  Every pairing above is inside that move -- the ladder runs out "
                 "before the move does, so --strikes buys wider ones."
             )
-        return Panel(
-            # Titled for what it is: the ladder, or the one pairing that was
-            # named. Two tables under one title, a screen apart, would read as
-            # the same table printed twice.
-            title=(
-                "YOUR %s SPREAD -- %s, %s expiry"
-                % (kind.upper(), built[0].label, dates.format_date(self.front_quote.expiry))
-                if for_choice
-                else "%s DEBIT SPREADS -- %s expiry, per spread"
-                % (kind.upper(), dates.format_date(self.front_quote.expiry))
-            ),
-            headers=[
-                "Strikes", "Width", "Debit", "Max profit",
-                "Reward:risk", "Costs", "IV odds", "Breakeven", "B/E move", "To max",
-            ],
-            rows=rows,
-            highlight=marked,
-            highlight_label=marker,
-            left_align=[0],
-            note=note,
-        )
+        return note
 
     def _floor_note(self, built: List[spreads.VerticalSpread]) -> str:
         """Say what a stated reward:risk floor did to the list, if anything."""
@@ -714,22 +728,7 @@ class OptionsPlaybook:
             if len(built) == 1:
                 moves = _finer_moves(moves)
             for move in moves:
-                # The ladder runs in position-relative terms, so label each row
-                # with what the stock did: a put spread wants the fall.
-                stock_move = move if self.ctx.spread_kind == "call" else -move
-                if stock_move == 0:
-                    stock_move = 0.0  # negating zero would print a '-0.0%' row
-                profits = ["%+.1f%% move" % stock_move]
-                returns = ["  return on cost"]
-                values = ["  position value" if count > 1 else "  spread value"]
-                for spread in built:
-                    value = spread.value_after_move(spot, move, days_left, volatility, rate)
-                    cost = spread.cost
-                    profit = None if value is None or cost is None else value - cost
-                    pct = None if profit is None or not cost else profit / cost * 100.0
-                    profits.append(_signed_money(_scale(profit, count)))
-                    returns.append(_return_pct(pct))
-                    values.append(_money_cell(_scale(value, count)))
+                profits, returns, values = self._spread_move_rows(built, move, spot, days_left, volatility, rate)
                 rows.append(profits)
                 rows.append(returns)
                 dim.append(len(rows))
@@ -759,6 +758,35 @@ class OptionsPlaybook:
             )
         return panels
 
+    def _spread_move_rows(
+        self,
+        built: List[spreads.VerticalSpread],
+        move: float,
+        spot: float,
+        days_left: float,
+        volatility: float,
+        rate: float,
+    ) -> "tuple[List[str], List[str], List[str]]":
+        """The profit, return and value rows for one move, a column per spread."""
+        count = self.ctx.contracts
+        # The ladder runs in position-relative terms, so label each row
+        # with what the stock did: a put spread wants the fall.
+        stock_move = move if self.ctx.spread_kind == "call" else -move
+        if stock_move == 0:
+            stock_move = 0.0  # negating zero would print a '-0.0%' row
+        profits = ["%+.1f%% move" % stock_move]
+        returns = ["  return on cost"]
+        values = ["  position value" if count > 1 else "  spread value"]
+        for spread in built:
+            value = spread.value_after_move(spot, move, days_left, volatility, rate)
+            cost = spread.cost
+            profit = None if value is None or cost is None else value - cost
+            pct = None if profit is None or not cost else profit / cost * 100.0
+            profits.append(_signed_money(_scale(profit, count)))
+            returns.append(_return_pct(pct))
+            values.append(_money_cell(_scale(value, count)))
+        return profits, returns, values
+
     def _check_budget_covers_a_spread(self, built: List[spreads.VerticalSpread]) -> None:
         """Say so when the money set aside cannot open even the narrowest pairing."""
         budget = self.ctx.risk_dollars
@@ -772,7 +800,7 @@ class OptionsPlaybook:
             self.note(
                 "Your $%s budget does not cover %s here -- the narrowest pairing costs "
                 "$%s for that size. Buy fewer, or narrow the width further."
-                % ("{:,.0f}".format(budget), plural, "{:,.0f}".format(cheapest))
+                % (WHOLE_NUMBER.format(budget), plural, WHOLE_NUMBER.format(cheapest))
             )
 
     def _spread_moves(self, built: List[spreads.VerticalSpread]) -> List[float]:
@@ -859,7 +887,7 @@ class OptionsPlaybook:
                 "Your $%s budget does not cover %s near the money -- the cheapest of "
                 "these strikes costs $%s for that size. Buy fewer, go further out of "
                 "the money, use a spread, or raise the budget."
-                % ("{:,.0f}".format(budget), plural, "{:,.0f}".format(cheapest))
+                % (WHOLE_NUMBER.format(budget), plural, WHOLE_NUMBER.format(cheapest))
             )
 
     def _ladder_row(self, quote: OptionQuote, days_out: int) -> List[str]:
@@ -875,7 +903,7 @@ class OptionsPlaybook:
         gamma = pricing.gamma(spot, quote.strike, days_out, vol, rate)
         theta = pricing.theta(quote.kind, spot, quote.strike, days_out, vol, rate)
         return [
-            "{:,.2f}".format(quote.strike),
+            TWO_DECIMALS.format(quote.strike),
             "%.2f" % quote.bid if quote.bid else "-",
             "%.2f" % quote.ask if quote.ask else "-",
             "%.2f" % quote.mid if quote.mid else "-",
@@ -909,30 +937,37 @@ class OptionsPlaybook:
                     return leg.contract_cost()
         return None
 
+    def _spread_premium(self, pick: Optional[str]) -> "tuple[Optional[float], Optional[str]]":
+        """The debit a spread risks, and how the position is named.
+
+        A spread risks the net debit, not the long leg's premium. The
+        pairing chosen, or the narrowest -- the cheapest way into the
+        structure -- when the choice was left open.
+        """
+        built = self._chosen(self.spreads, lambda spread: spread.label)
+        priced = [spread for spread in built if spread.cost]
+        if not priced:
+            return None, None
+        cheapest = min(priced, key=lambda spread: spread.cost)
+        # Named from the pairing actually priced rather than from what
+        # was typed: a pick the chain could not honour has already been
+        # reported, and repeating it here would attach the note to a
+        # structure nobody is being quoted.
+        honoured = pick and any(_same_contract(s.label, pick) for s in built)
+        position = (
+            "%s debit spread" % cheapest.label
+            if honoured
+            else "narrowest %s debit spread" % self.ctx.spread_kind
+        )
+        return cheapest.cost, position
+
     def _derive_premium_from_contracts(self) -> None:
         """Price the position from the ATM contract when no premium was given."""
         quote = self.front_quote
         cost, position = None, None
         pick = self.ctx.contract
         if self.ctx.trades_spread:
-            # A spread risks the net debit, not the long leg's premium. The
-            # pairing chosen, or the narrowest -- the cheapest way into the
-            # structure -- when the choice was left open.
-            built = self._chosen(self.spreads, lambda spread: spread.label)
-            priced = [spread for spread in built if spread.cost]
-            if priced:
-                cheapest = min(priced, key=lambda spread: spread.cost)
-                cost = cheapest.cost
-                # Named from the pairing actually priced rather than from what
-                # was typed: a pick the chain could not honour has already been
-                # reported, and repeating it here would attach the note to a
-                # structure nobody is being quoted.
-                honoured = pick and any(_same_contract(s.label, pick) for s in built)
-                position = (
-                    "%s debit spread" % cheapest.label
-                    if honoured
-                    else "narrowest %s debit spread" % self.ctx.spread_kind
-                )
+            cost, position = self._spread_premium(pick)
         elif pick:
             # A chosen strike is the position, so it is what the risk cap
             # grades -- not the at-the-money contract nobody is buying.
@@ -949,9 +984,9 @@ class OptionsPlaybook:
                 "Dollars at risk estimated at $%s (%d x $%s, the %s). "
                 "Pass --premium to override."
                 % (
-                    "{:,.0f}".format(derived),
+                    WHOLE_NUMBER.format(derived),
                     self.ctx.contracts,
-                    "{:,.0f}".format(cost),
+                    WHOLE_NUMBER.format(cost),
                     position,
                 )
             )
@@ -1069,6 +1104,48 @@ class OptionsPlaybook:
         sizing = "per contract" if count == 1 else "%d contracts" % count
         return "%s -- %s, %s%s" % (stage, kind, sizing, self.payoff_conditions(days_left, volatility))
 
+    def _contract_rows(
+        self,
+        priced: List[OptionQuote],
+        sign: str,
+        spot: float,
+        days_left: float,
+        volatility: float,
+        rate: float,
+    ) -> "tuple[List[List[str]], List[int]]":
+        """A payoff table's rows, three per move, and which of them recede.
+
+        Each move: the P&L, the same thing as a percentage, then what the
+        position is then worth. Only the last of those recedes -- the return
+        is a verdict, so it keeps its colour.
+        """
+        count = self.ctx.contracts
+        # One contract leaves room for the moves between the moves.
+        moves = self.option_rules.profit_move_pcts
+        if len(priced) == 1:
+            moves = _finer_moves(moves)
+        rows, dim = [], []
+        for move in moves:
+            profits = [_move_label(move, sign)]
+            returns = ["  return on cost"]
+            values = ["  position value" if count > 1 else "  contract price"]
+            for q in priced:
+                args = (q.kind, spot, q.strike, move, days_left, volatility, rate)
+                value = pricing.value_after_move(*args)
+                cost = q.mid * 100.0
+                profit = None if value is None else value - cost
+                # Percent return is the same whatever the contract
+                # count, so it is taken before scaling.
+                pct = None if profit is None or cost <= 0 else profit / cost * 100.0
+                profits.append(_signed_money(_scale(profit, count)))
+                returns.append(_return_pct(pct))
+                values.append(_money_cell(_scale(value, count)))
+            rows.append(profits)
+            rows.append(returns)
+            dim.append(len(rows))
+            rows.append(values)
+        return rows, dim
+
     def _profit_panels(self) -> List[Panel]:
         quote = self.front_quote
         ladder = self.data.option_ladder(quote.expiry, self.ctx.strikes) if quote else None
@@ -1091,39 +1168,12 @@ class OptionsPlaybook:
                     continue
                 sign = "+" if kind == "CALLS" else "-"
                 count = self.ctx.contracts
-                # One contract leaves room for the moves between the moves.
-                moves = self.option_rules.profit_move_pcts
-                if len(priced) == 1:
-                    moves = _finer_moves(moves)
-                rows, dim = [], []
-                for move in moves:
-                    profits = [_move_label(move, sign)]
-                    returns = ["  return on cost"]
-                    values = ["  position value" if count > 1 else "  contract price"]
-                    for q in priced:
-                        args = (q.kind, spot, q.strike, move, days_left, volatility, rate)
-                        value = pricing.value_after_move(*args)
-                        cost = q.mid * 100.0
-                        profit = None if value is None else value - cost
-                        # Percent return is the same whatever the contract
-                        # count, so it is taken before scaling.
-                        pct = None if profit is None or cost <= 0 else profit / cost * 100.0
-                        profits.append(_signed_money(_scale(profit, count)))
-                        returns.append(_return_pct(pct))
-                        values.append(_money_cell(_scale(value, count)))
-                    # Each move: the P&L, the same thing as a percentage, then
-                    # what the position is then worth. Only the last of those
-                    # recedes -- the return is a verdict, so it keeps its
-                    # colour.
-                    rows.append(profits)
-                    rows.append(returns)
-                    dim.append(len(rows))
-                    rows.append(values)
+                rows, dim = self._contract_rows(priced, sign, spot, days_left, volatility, rate)
 
                 panels.append(
                     Panel(
                         title=self._payoff_title(title, kind.lower(), days_left, volatility, len(stages)),
-                        headers=["Strike"] + ["{:,.2f}".format(q.strike) for q in priced],
+                        headers=["Strike"] + [TWO_DECIMALS.format(q.strike) for q in priced],
                         subheaders=["Cost now"] + [_cost(q, count) for q in priced],
                         rows=rows,
                         dim=dim,

@@ -31,6 +31,10 @@ from tradeval.context import TradeContext
 
 UNAVAILABLE = "Not Available"
 
+# Formats shared by the panels.
+SIGNED_PERCENT = "%+.1f%%"
+DOLLARS_AND_CENTS = "$%.2f"
+
 
 def _num(value: Optional[float], fmt: str) -> str:
     return fmt % value if value is not None else UNAVAILABLE
@@ -49,7 +53,7 @@ def _pct_of(fraction: Optional[float], template: str = "%s") -> str:
 
 def _growth_pct(fraction: Optional[float]) -> str:
     """Signed growth rate, so direction reads at a glance."""
-    return "%+.1f%%" % (fraction * 100.0) if fraction is not None else UNAVAILABLE
+    return SIGNED_PERCENT % (fraction * 100.0) if fraction is not None else UNAVAILABLE
 
 
 # Sentence enders that are not the end of a sentence. Yahoo's summaries open
@@ -405,7 +409,7 @@ class Strategy(ABC):
             pnl.append("%s$%s" % ("+" if profit >= 0 else "-", "{:,.0f}".format(abs(profit))))
             value.append("${:,.0f}".format(committed + profit))
             account.append(
-                "%+.1f%%" % (profit / self.ctx.account_size * 100.0)
+                SIGNED_PERCENT % (profit / self.ctx.account_size * 100.0)
                 if self.ctx.account_size
                 else ""
             )
@@ -513,12 +517,12 @@ class Strategy(ABC):
             ["Market cap", _money(data.market_cap), "", GOOD_MARKET_CAP],
             [
                 "Price",
-                _num(spot, "$%.2f"),
+                _num(spot, DOLLARS_AND_CENTS),
                 _num(data.range_position_pct(), "%.0f%% of 52w range"),
                 GOOD_RANGE_POSITION,
             ],
-            ["52-week high", _num(high, "$%.2f"), _gap_note(spot, high, "below")],
-            ["52-week low", _num(low, "$%.2f"), _gap_note(spot, low, "above")],
+            ["52-week high", _num(high, DOLLARS_AND_CENTS), _gap_note(spot, high, "below")],
+            ["52-week low", _num(low, DOLLARS_AND_CENTS), _gap_note(spot, low, "above")],
             [
                 "Traded per day",
                 _money(data.avg_dollar_volume()),
@@ -540,7 +544,7 @@ class Strategy(ABC):
             if value is None:
                 return [label, UNAVAILABLE, "not enough history", guide]
             side = "above" if spot >= value else "below"
-            return [label, "$%.2f" % value, _gap_note(spot, value, side), guide]
+            return [label, DOLLARS_AND_CENTS % value, _gap_note(spot, value, side), guide]
 
         def moving_average(window: int) -> Optional[float]:
             # An EWM produces a number from the very first bar, so a young
@@ -565,7 +569,7 @@ class Strategy(ABC):
             ],
             [
                 "ATR (14)",
-                _num(self.atr, "$%.2f"),
+                _num(self.atr, DOLLARS_AND_CENTS),
                 _num(self.atr_pct, "%.1f%% of price"),
                 GOOD_ATR,
             ],
@@ -585,7 +589,7 @@ class Strategy(ABC):
                 rows.append(
                     [
                         label,
-                        "%+.1f%%" % (stock - market),
+                        SIGNED_PERCENT % (stock - market),
                         "%+.1f%% against %+.1f%%" % (stock, market),
                         GOOD_RELATIVE_STRENGTH,
                     ]
@@ -812,7 +816,7 @@ class Strategy(ABC):
         if rating:
             coverage.append(rating)
 
-        spread = _span(low, high, "$%.2f")
+        spread = _span(low, high, DOLLARS_AND_CENTS)
         if low and high and mean:
             # Disagreement measured against the anchor, not the price. It goes
             # in the note beside the coverage, which keeps the figure column
@@ -820,7 +824,7 @@ class Strategy(ABC):
             coverage.insert(0, "%.0f%% wide" % ((high - low) / mean * 100.0))
 
         return [
-            ["Analyst target", _num(mean, "$%.2f"), upside, GOOD_ANALYST_TARGET],
+            ["Analyst target", _num(mean, DOLLARS_AND_CENTS), upside, GOOD_ANALYST_TARGET],
             ["Target range", spread, ", ".join(coverage), GOOD_TARGET_SPREAD],
         ]
 

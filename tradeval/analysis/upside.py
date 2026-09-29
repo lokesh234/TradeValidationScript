@@ -35,7 +35,10 @@ BARE_NUMBER_FLOOR = 1e6
 # asking for one more thing.
 YEARS = (3, 5, 10)
 
-_AMOUNT = re.compile(r"^\$?\s*([0-9][0-9,_]*\.?[0-9]*)\s*([KMBT])?$", re.IGNORECASE)
+# The fraction is one optional group so the digits either side of the point
+# cannot be traded between two stars, which backtracks badly on a near miss.
+_AMOUNT = re.compile(r"^\$?\s*([0-9][0-9,_]*(?:\.[0-9]*)?)\s*([KMBT])?$", re.IGNORECASE)
+WHOLE_DOLLARS = "${:,.0f}"
 
 
 def parse_cap(raw: str) -> float:
@@ -75,7 +78,7 @@ def format_cap(value: Optional[float]) -> str:
     for cutoff, suffix in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
         if abs(value) >= cutoff:
             return "$%.2f%s" % (value / cutoff, suffix)
-    return "${:,.0f}".format(value)
+    return WHOLE_DOLLARS.format(value)
 
 
 def annual_rate(multiple: float, years: int) -> Optional[float]:
@@ -194,7 +197,7 @@ def panel(projection: Projection) -> Panel:
         rows.append(
             [
                 "Your position",
-                "${:,.0f}".format(projection.cost),
+                WHOLE_DOLLARS.format(projection.cost),
                 _shares_note(held, projection.price),
                 "",
             ]
@@ -202,7 +205,7 @@ def panel(projection: Projection) -> Panel:
         rows.append(
             [
                 "Worth at that cap",
-                "${:,.0f}".format(projection.value),
+                WHOLE_DOLLARS.format(projection.value),
                 _shares_note(held, implied),
                 "",
             ]

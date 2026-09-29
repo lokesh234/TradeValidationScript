@@ -158,7 +158,7 @@ class ValidationRequest:
     @classmethod
     def from_dict(cls, payload: Dict[str, Any]) -> "ValidationRequest":
         """Build from a JSON body, parsing the fields JSON cannot express."""
-        known = {f for f in cls.__dataclass_fields__}
+        known = set(cls.__dataclass_fields__)
         unknown = set(payload) - known
         if unknown:
             raise ValueError("unknown field(s): %s" % ", ".join(sorted(unknown)))

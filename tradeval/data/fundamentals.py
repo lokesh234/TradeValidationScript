@@ -21,6 +21,7 @@ shown, with the earnings figure here to decide it by.
 
 from __future__ import annotations
 
+import math
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Iterable, Optional, Tuple
 
@@ -82,7 +83,7 @@ def _number(value) -> Optional[float]:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number and abs(number) != float("inf") else None
+    return number if math.isfinite(number) else None
 
 
 def _line(df: pd.DataFrame, names) -> Dict[pd.Timestamp, float]:

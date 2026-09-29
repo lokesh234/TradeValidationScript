@@ -27,6 +27,7 @@ that is far more often a dropped request than a stock without options.
 from __future__ import annotations
 
 import datetime as dt
+import math
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Iterable, Optional, Tuple
 
@@ -56,7 +57,7 @@ def _number(value) -> Optional[float]:
         number = float(value)
     except (TypeError, ValueError):
         return None
-    return number if number == number and abs(number) != float("inf") else None
+    return number if math.isfinite(number) else None
 
 
 def _day(value) -> Optional[dt.date]:
@@ -64,7 +65,7 @@ def _day(value) -> Optional[dt.date]:
     seconds in the profile."""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
-            return dt.datetime.utcfromtimestamp(value).date()
+            return dt.datetime.fromtimestamp(value, dt.timezone.utc).date()
         except (OverflowError, OSError, ValueError):
             return None
     return _as_date(value)

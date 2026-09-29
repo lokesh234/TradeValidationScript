@@ -94,8 +94,9 @@ def test_a_server_that_is_not_up_says_how_to_start_it(monkeypatch):
     monkeypatch.setattr(
         db, "driver", lambda: _refusing_driver("connection refused, is the server running?")
     )
+    config = db.settings({})
     with pytest.raises(db.DatabaseUnavailable) as caught:
-        db.connect(db.settings({}))
+        db.connect(config)
     assert "./trade.sh db up" in str(caught.value)
 
 
@@ -103,8 +104,9 @@ def test_a_bad_password_says_so_rather_than_blaming_docker(monkeypatch):
     monkeypatch.setattr(
         db, "driver", lambda: _refusing_driver('password authentication failed for user "tradeval"')
     )
+    config = db.settings({})
     with pytest.raises(db.DatabaseUnavailable) as caught:
-        db.connect(db.settings({}))
+        db.connect(config)
     assert "credentials" in str(caught.value)
     assert "tradeval" in str(caught.value)
 

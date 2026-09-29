@@ -157,23 +157,26 @@ def test_fetch_posts_returns_newest_first():
 
 
 def test_fetch_posts_without_a_token_says_it_costs_money():
+    client = _client(_payload())
     with pytest.raises(XUnavailable, match="charges for read access"):
-        x_api.fetch_posts("NVDA", credentials=None, http=_client(_payload()))
+        x_api.fetch_posts("NVDA", credentials=None, http=client)
 
 
 def test_fetch_posts_translates_403_into_the_tier_problem():
     """403 here almost always means a tier that cannot search, not a bad token."""
     client = MagicMock()
     client.get_json.side_effect = HttpError("forbidden", status=403)
+    credentials = XCredentials("t")
     with pytest.raises(XUnavailable, match="paid tier"):
-        x_api.fetch_posts("NVDA", credentials=XCredentials("t"), http=client)
+        x_api.fetch_posts("NVDA", credentials=credentials, http=client)
 
 
 def test_fetch_posts_translates_401_into_a_bad_token():
     client = MagicMock()
     client.get_json.side_effect = HttpError("unauthorized", status=401)
+    credentials = XCredentials("t")
     with pytest.raises(XUnavailable, match="rejected the token"):
-        x_api.fetch_posts("NVDA", credentials=XCredentials("t"), http=client)
+        x_api.fetch_posts("NVDA", credentials=credentials, http=client)
 
 
 def test_fetch_posts_clamps_max_results_to_the_endpoint_range():

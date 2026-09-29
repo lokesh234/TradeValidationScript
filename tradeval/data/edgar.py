@@ -37,7 +37,7 @@ import os
 import re
 import threading
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tradeval.data.http import HttpClient, HttpError, current_patience
 from tradeval.data.limits import for_provider
@@ -288,18 +288,23 @@ def exhibits(filing: Filing) -> List[str]:
     out = []
     for row in rows:
         name = str((row or {}).get("name") or "")
-        if name == filing.document or not _EXHIBIT_99.search(name):
-            continue
-        if not name.lower().endswith((".htm", ".html", ".txt")):
-            continue
-        try:
-            size = int(row.get("size") or 0)
-        except (TypeError, ValueError):
-            size = 0
-        if size > MAX_DOCUMENT_BYTES:
-            continue
-        out.append(name)
+        if _readable_exhibit(filing, row, name):
+            out.append(name)
     return sorted(out)
+
+
+def _readable_exhibit(filing: Filing, row: Dict[str, Any], name: str) -> bool:
+    """An EX-99 other than the filing's own document, in a text format, and
+    not too large to fetch."""
+    if name == filing.document or not _EXHIBIT_99.search(name):
+        return False
+    if not name.lower().endswith((".htm", ".html", ".txt")):
+        return False
+    try:
+        size = int(row.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    return size <= MAX_DOCUMENT_BYTES
 
 
 # -- documents as text ---------------------------------------------------------
@@ -310,10 +315,13 @@ _HIDDEN = re.compile(r"<(script|style|head|ix:header|xbrli?:[a-z]+)\b.*?</\1\s*>
 _COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # Tags that end a line where a browser would. Everything else is inline, and
 # goes without a space: "<span>Octo</span><span>ber</span>" is one word.
-_BLOCK = re.compile(
-    r"<\s*/?\s*(p|div|br|tr|td|th|li|ul|ol|table|h[1-6]|center|blockquote|section|dt|dd|hr|title|pre)\b[^>]*>",
-    re.IGNORECASE,
+_BLOCK_TAGS = (
+    "p", "div", "br", "tr", "td", "th", "li", "ul", "ol", "table", "h[1-6]",
+    "center", "blockquote", "section", "dt", "dd", "hr", "title", "pre",
 )
+# The slash and the space after it are one optional group, so a run of spaces
+# cannot be split between two stars and retried every way on a near miss.
+_BLOCK = re.compile(r"<\s*(?:/\s*)?(%s)\b[^>]*>" % "|".join(_BLOCK_TAGS), re.IGNORECASE)
 _TAG = re.compile(r"<[^>]*>")
 _INVISIBLE = re.compile("[​‌‍﻿­]")
 

@@ -19,9 +19,10 @@ import math
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from functools import lru_cache
 from copy import deepcopy
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Iterator, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
@@ -711,6 +712,11 @@ def _earnings_preview(symbol: str, cache_window: int):
     return result
 
 
+def _maybe(model, found):
+    """``model`` built from a data-layer record's fields, or None without one."""
+    return model(**vars(found)) if found else None
+
+
 def _build_earnings_preview(symbol: str):
     try:
         data = MarketData(symbol)
@@ -730,7 +736,7 @@ def _build_earnings_preview(symbol: str):
         quarter=QuarterConsensusResponse(**vars(found.quarter)),
         trends=[EstimateTrendResponse(**vars(item)) for item in found.trends],
         history=[PastReportResponse(**vars(item)) for item in found.history],
-        implied=ImpliedMoveResponse(**vars(found.implied)) if found.implied else None,
+        implied=_maybe(ImpliedMoveResponse, found.implied),
         implied_note=found.implied_note,
         options_listed=found.options_listed,
         typical_move_pct=found.typical_move_pct,
@@ -758,8 +764,8 @@ def _performance(symbol: str, cache_window: int):
         name=data.name,
         annual=[PeriodResponse(**vars(item)) for item in found.annual],
         quarters=[PeriodResponse(**vars(item)) for item in found.quarters],
-        trailing=TrailingResponse(**vars(found.trailing)) if found.trailing else None,
-        latest_quarter=QuarterComparisonResponse(**vars(found.latest_quarter)) if found.latest_quarter else None,
+        trailing=_maybe(TrailingResponse, found.trailing),
+        latest_quarter=_maybe(QuarterComparisonResponse, found.latest_quarter),
         gross_margin_pct=found.gross_margin_pct,
         operating_margin_pct=found.operating_margin_pct,
         net_margin_pct=found.net_margin_pct,
@@ -767,19 +773,31 @@ def _performance(symbol: str, cache_window: int):
         free_cash_flow=found.free_cash_flow,
         market_cap=found.market_cap,
         next_earnings=found.next_earnings,
-        forward=ForwardResponse(
-            **{key: value for key, value in vars(found.forward).items() if key != "estimates"},
-            estimates=[EstimateResponse(**vars(item)) for item in found.forward.estimates],
-        ) if found.forward else None,
-        cash=CashResponse(
-            annual=[CashPeriodResponse(**vars(item)) for item in found.cash.annual],
-            quarters=[CashPeriodResponse(**vars(item)) for item in found.cash.quarters],
-            trailing=CashPeriodResponse(**vars(found.cash.trailing)) if found.cash.trailing else None,
-            shares_outstanding=found.cash.shares_outstanding,
-            total_cash=found.cash.total_cash,
-            total_debt=found.cash.total_debt,
-            beta=found.cash.beta,
-        ) if found.cash else None,
+        forward=_forward(found.forward),
+        cash=_cash(found.cash),
+    )
+
+
+def _forward(forward) -> Optional[ForwardResponse]:
+    if not forward:
+        return None
+    return ForwardResponse(
+        **{key: value for key, value in vars(forward).items() if key != "estimates"},
+        estimates=[EstimateResponse(**vars(item)) for item in forward.estimates],
+    )
+
+
+def _cash(cash) -> Optional[CashResponse]:
+    if not cash:
+        return None
+    return CashResponse(
+        annual=[CashPeriodResponse(**vars(item)) for item in cash.annual],
+        quarters=[CashPeriodResponse(**vars(item)) for item in cash.quarters],
+        trailing=_maybe(CashPeriodResponse, cash.trailing),
+        shares_outstanding=cash.shares_outstanding,
+        total_cash=cash.total_cash,
+        total_debt=cash.total_debt,
+        beta=cash.beta,
     )
 
 
@@ -881,8 +899,276 @@ def _not_found(exc: Exception) -> HTTPException:
     return HTTPException(status_code=404, detail=str(exc))
 
 
+def _cache_window() -> int:
+    """The fifteen-minute slot the provider caches above are keyed on."""
+    return int(time.time() // 900)
+
+
+@contextmanager
+def _status_on(error, status_code: int) -> Iterator[None]:
+    """Answer ``error`` with ``status_code`` and its message, cause chained."""
+    try:
+        yield
+    except error as exc:
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+
+
+@contextmanager
+def _service_errors() -> Iterator[None]:
+    """A trade the service refused is the caller's to fix (422); a symbol the
+    provider does not know is a 404. ValidationError is caught innermost so it
+    is judged first, as it was when these were two except clauses."""
+    with _status_on(DataError, 404), _status_on(ValidationError, 422):
+        yield
+
+
+def _found(result):
+    """Unwrap a cached lookup, whose failure is cached as its DataError."""
+    if isinstance(result, DataError):
+        raise _not_found(result)
+    return result
+
+
+def _resolve(resolver, choice: str):
+    """Look a menu choice up; one the menu does not have is a 422."""
+    with _status_on(ValueError, 422):
+        return resolver(choice)
+
+
+def _sector_kind(name: str) -> str:
+    return "theme" if name in discover.THEMES else "sector"
+
+
+def _optional_panel(panel) -> Optional[PanelResponse]:
+    return _panel(panel) if panel else None
+
+
+def _clean_symbols(symbols: List[str]) -> List[str]:
+    return [symbol.strip().upper() for symbol in symbols if symbol.strip()]
+
+
+def _per_symbol(found: Dict[str, Any], symbols, build) -> Dict[str, Any]:
+    """One entry per symbol, first mention first, null where nothing was found."""
+    return {symbol: (build(found[symbol]) if found.get(symbol) else None) for symbol in dict.fromkeys(symbols)}
+
+
+def _contract_quote(contract: ContractRequest, quote) -> ContractQuoteResponse:
+    """A requested contract's prices; found only when the chain has a mid for it."""
+    if quote is None:
+        return ContractQuoteResponse(
+            option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry, found=False,
+        )
+    return ContractQuoteResponse(
+        option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry,
+        found=quote.mid is not None, bid=quote.bid, ask=quote.ask, mid=quote.mid,
+    )
+
+
+def _position_quotes(position: OptionPositionRequest) -> OptionQuotesResponse:
+    symbol = position.symbol.strip().upper()
+    return OptionQuotesResponse(symbol=symbol, quotes=[
+        _contract_quote(contract, quotes.contract_quote(symbol, contract.option_type, contract.strike, contract.expiry))
+        for contract in position.contracts
+    ])
+
+
+def _expectation(kind: str, date: dt.date) -> ExpectationResponse:
+    kind = kind.upper()
+    if kind not in macro.MARKET_SERIES:
+        raise HTTPException(status_code=422, detail="No market covers %s." % kind)
+    series, _ = macro.MARKET_SERIES[kind]
+    empty = ExpectationResponse(kind=kind, date=date, listed=False, unit=macro.MARKET_UNITS.get(kind))
+    with _status_on(kalshi.KalshiError, 503):
+        listings = kalshi.open_events(series)
+        match = macro.market_event(macro.MacroEvent(date, kind), listings)
+        if not match:
+            return empty
+        found = kalshi.expectation(str(match.get("event_ticker")))
+    if not found.rungs:
+        return empty
+    return ExpectationResponse(
+        kind=kind,
+        date=date,
+        listed=True,
+        event_ticker=found.event_ticker,
+        title=str(match.get("title") or found.title),
+        median=found.median,
+        unit=macro.MARKET_UNITS.get(kind),
+        volume=found.volume,
+        spread=found.spread,
+        smoothed=found.smoothed,
+        rungs=[RungResponse(strike=r.strike, probability=r.probability, label=r.label, volume=r.volume)
+               for r in found.rungs],
+        buckets=[BucketResponse(**{"from": b["from"], "to": b["to"], "probability": b["probability"]})
+                 for b in found.buckets],
+    )
+
+
+_SPREAD_INSTRUMENTS = ("call_spread", "put_spread")
+
+
+def _long_leg(legs, buy_strike: Optional[float]):
+    """The leg to buy: the one at ``buy_strike`` when it is named, otherwise
+    the first the chain lists. A named strike the expiry lacks is a 422."""
+    if buy_strike is None:
+        return legs[0] if legs else None
+    long_leg = next((leg for leg in legs if leg.strike == buy_strike), None)
+    if long_leg is None:
+        raise HTTPException(status_code=422, detail="The buy strike is not available on this expiry.")
+    return long_leg
+
+
+def _sold_legs(legs, long_leg, instrument: str) -> list:
+    """The legs a debit spread can sell against ``long_leg``, nearest first:
+    higher strikes for a call spread, lower ones for a put spread."""
+    if instrument == "call_spread":
+        candidates = [leg for leg in legs if leg.strike > long_leg.strike]
+    else:
+        candidates = [leg for leg in legs if leg.strike < long_leg.strike]
+    return sorted(candidates, key=lambda leg: abs(leg.strike - long_leg.strike))
+
+
+def _spread_rows(legs, long_leg, instrument: str) -> List[SpreadChoiceResponse]:
+    """Every debit spread that buys ``long_leg``. A pair with no price, or one
+    that costs its whole width or more, cannot pay off and is left out."""
+    from tradeval.analysis.spreads import VerticalSpread
+    rows = []
+    for short in _sold_legs(legs, long_leg, instrument):
+        spread = VerticalSpread(long_leg, short)
+        if spread.debit is None or spread.debit >= spread.width:
+            continue
+        rows.append(SpreadChoiceResponse(
+            contract="%g/%g" % (long_leg.strike, short.strike),
+            buy_strike=long_leg.strike, sell_strike=short.strike,
+            debit=spread.debit, max_loss=spread.max_loss,
+            max_profit=spread.max_profit, breakeven=spread.breakeven,
+            reward_risk=spread.reward_risk,
+        ))
+    return rows
+
+
+def _spread_choices(request: ValidationRequest, config: Config, buy_strike: Optional[float], limit: int) -> SpreadPickerResponse:
+    if request.instrument not in _SPREAD_INSTRUMENTS:
+        raise HTTPException(status_code=422, detail="Choose a debit spread instrument.")
+    with _service_errors():
+        strategy = prepare(request, config)
+        legs = strategy.spread_legs()
+        strikes = sorted({leg.strike for leg in legs})
+        long_leg = _long_leg(legs, buy_strike)
+        built = _spread_rows(legs, long_leg, request.instrument) if long_leg else []
+        return SpreadPickerResponse(symbol=strategy.data.symbol, price=strategy.data.price,
+            as_of=strategy.data.last_date, expiry=strategy.chain_expiry,
+            buy_strike=long_leg.strike if long_leg else None, available_strikes=strikes,
+            spreads=built[:limit], has_more=len(built) > limit)
+
+
+def _option_choices(request: ValidationRequest, config: Config) -> Dict[str, Any]:
+    from tradeval.api.option_explorer import choices
+    if request.instrument != "options":
+        raise HTTPException(status_code=422, detail="Choose the options instrument.")
+    with _service_errors():
+        return choices(prepare(request, config), request)
+
+
+def _option_payoff(request: ValidationRequest, config: Config) -> Dict[str, Any]:
+    from tradeval.api.option_explorer import payoff
+    if request.instrument != "options" or not request.contract or not request.expiry:
+        raise HTTPException(status_code=422, detail="Select an option and expiry first.")
+    with _service_errors():
+        return payoff(prepare(request, config), request)
+
+
+def _spread_prices(spot: float, spread) -> List[float]:
+    """The price axis: a hundred steps either side of the strikes and spot,
+    plus those points themselves and the breakeven."""
+    strikes = (spread.long_leg.strike, spread.short_leg.strike)
+    radius = max(spot * .15, spread.width * 2)
+    low = max(.01, min(spot, *strikes) - radius)
+    high = max(spot, *strikes) + radius
+    return sorted(set([round(low + (high-low)*i/100, 4) for i in range(101)] + [spot, *strikes, spread.breakeven]))
+
+
+def _spread_curve(spread, prices: List[float], left: float, volatility: float, rate: float) -> Dict[str, Any]:
+    """The spread's value per contract at each price, ``left`` days out."""
+    from tradeval.analysis.pricing import black_scholes
+    values = []
+    for price in prices:
+        long_value = black_scholes(spread.kind, price, spread.long_leg.strike, left, volatility, rate)
+        short_value = black_scholes(spread.kind, price, spread.short_leg.strike, left, volatility, rate)
+        values.append(round(max(0, min(spread.width, long_value-short_value))*100, 4))
+    return {"days_left": round(left, 3), "values": values}
+
+
+def _spread_payoff(request: ValidationRequest, config: Config) -> Dict[str, Any]:
+    if request.instrument not in _SPREAD_INSTRUMENTS or not request.contract:
+        raise HTTPException(status_code=422, detail="Select a debit spread first.")
+    with _service_errors():
+        strategy = prepare(request, config)
+        apply_sizing(strategy, request)
+        spread = strategy._typed_spread()
+        spot = strategy.data.price
+        days = max(0, (strategy.chain_expiry - dt.date.today()).days)
+        volatility = strategy.reprice_volatility
+        rate = strategy.option_rules.risk_free_rate_pct / 100.0
+        prices = _spread_prices(spot, spread)
+        remaining = [days * (1-i/60) for i in range(61)] if days and volatility else [0]
+        curves = [_spread_curve(spread, prices, left, volatility or .2, rate) for left in remaining]
+        return {"symbol": strategy.data.symbol, "contract": request.contract,
+            "expiry": strategy.chain_expiry, "spot": spot, "cost": spread.cost,
+            "width": spread.width, "breakeven": spread.breakeven,
+            "volatility_pct": volatility*100 if volatility else None,
+            "rate_pct": rate*100, "prices": prices, "curves": curves,
+            "model_note": "Black-Scholes estimates with fixed volatility and rates, no dividends, fees, or early exercise. Expiry values use intrinsic value. " + strategy.volatility_caveat}
+
+
+def _trade_preview(request: ValidationRequest, config: Config) -> TradePreviewResponse:
+    with _service_errors():
+        strategy = prepare(request, config)
+        apply_sizing(strategy, request)
+
+    profile = strategy.profile_panel()
+    option_panels = strategy.option_panels() if strategy.ctx.trades_options else []
+    key = strategy.key
+    return TradePreviewResponse(
+        symbol=strategy.data.symbol,
+        name=strategy.data.name,
+        strategy=StrategyChoice(
+            choice=list(STRATEGIES).index(key) + 1,
+            key=key,
+            name=strategy.name,
+            description=strategy.description,
+        ),
+        price=strategy.data.price,
+        as_of=strategy.data.last_date,
+        profile=_optional_panel(profile),
+        option_panels=[_panel(panel) for panel in option_panels],
+    )
+
+
+def _validate_event_contract(request: EventContractRequest, config: Config) -> Dict[str, Any]:
+    with _status_on(kalshi.KalshiError, 404):
+        market = kalshi.fetch(request.ticker)
+    report = EventContractStrategy(
+        market,
+        EventTrade(
+            side=resolve_side(request.side),
+            probability=request.probability,
+            contracts=request.contracts,
+            account_size=request.account,
+            limit_price=request.limit_price,
+        ),
+        deepcopy(config),
+        siblings=kalshi.siblings(market.event_ticker) if market.event_ticker else [],
+    ).run()
+    return report_to_dict(report)
+
+
 def create_mobile_router(config: Config) -> APIRouter:
-    """Build the mobile router against the server's read-only base config."""
+    """Build the mobile router against the server's read-only base config.
+
+    The routes stay thin -- their signatures and docstrings are the contract
+    /docs publishes -- and hand the work to the functions above.
+    """
     router = APIRouter(prefix="/mobile", tags=["mobile"])
 
     @router.get("/bootstrap", response_model=BootstrapResponse)
@@ -910,7 +1196,7 @@ def create_mobile_router(config: Config) -> APIRouter:
         min_off_high_pct: float = Query(default=10.0, ge=0, le=100),
         sort: Literal["lost", "percent"] = Query(default="lost"),
     ) -> BeatenDownResponse:
-        found = _beaten_down(limit, min_market_cap, min_off_high_pct, sort, int(time.time() // 900))
+        found = _beaten_down(limit, min_market_cap, min_off_high_pct, sort, _cache_window())
         return BeatenDownResponse(
             companies=[BeatenCompanyResponse(**vars(item)) for item in found],
             sort=sort,
@@ -928,10 +1214,8 @@ def create_mobile_router(config: Config) -> APIRouter:
         """The chance of a squeeze at the next monthly OPEX, with the history
         behind it -- the file tradeval-squeeze publishes, passed through as it
         is (its squeeze/export.py holds the contract). 503 until one exists."""
-        try:
+        with _status_on(squeeze.NotPublished, 503):
             return squeeze.latest()
-        except squeeze.NotPublished as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     @router.get("/market/snapshot", response_model=MarketSnapshotResponse)
     def market_snapshot() -> MarketSnapshotResponse:
@@ -962,37 +1246,7 @@ def create_mobile_router(config: Config) -> APIRouter:
         out, so a print in two months is simply not up yet. That is answered
         with listed=false rather than an error, because nothing is wrong.
         """
-        kind = kind.upper()
-        if kind not in macro.MARKET_SERIES:
-            raise HTTPException(status_code=422, detail="No market covers %s." % kind)
-        series, _ = macro.MARKET_SERIES[kind]
-        empty = ExpectationResponse(kind=kind, date=date, listed=False, unit=macro.MARKET_UNITS.get(kind))
-        try:
-            listings = kalshi.open_events(series)
-            match = macro.market_event(macro.MacroEvent(date, kind), listings)
-            if not match:
-                return empty
-            found = kalshi.expectation(str(match.get("event_ticker")))
-        except kalshi.KalshiError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        if not found.rungs:
-            return empty
-        return ExpectationResponse(
-            kind=kind,
-            date=date,
-            listed=True,
-            event_ticker=found.event_ticker,
-            title=str(match.get("title") or found.title),
-            median=found.median,
-            unit=macro.MARKET_UNITS.get(kind),
-            volume=found.volume,
-            spread=found.spread,
-            smoothed=found.smoothed,
-            rungs=[RungResponse(strike=r.strike, probability=r.probability, label=r.label, volume=r.volume)
-                   for r in found.rungs],
-            buckets=[BucketResponse(**{"from": b["from"], "to": b["to"], "probability": b["probability"]})
-                     for b in found.buckets],
-        )
+        return _expectation(kind, date)
 
     @router.get("/calendar", response_model=CalendarResponse)
     def calendar(limit: int = Query(default=12, ge=1, le=50)) -> CalendarResponse:
@@ -1007,25 +1261,18 @@ def create_mobile_router(config: Config) -> APIRouter:
     def sectors() -> SectorListResponse:
         return SectorListResponse(
             sectors=[
-                SectorResponse(
-                    choice=choice,
-                    name=name,
-                    kind="theme" if name in discover.THEMES else "sector",
-                )
+                SectorResponse(choice=choice, name=name, kind=_sector_kind(name))
                 for choice, name in enumerate(discover.MENU_CHOICES, start=1)
             ]
         )
 
     @router.get("/sectors/resolve", response_model=SectorResponse)
     def resolve_sector(choice: str = Query(min_length=1)) -> SectorResponse:
-        try:
-            name = discover.resolve_sector(choice)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        name = _resolve(discover.resolve_sector, choice)
         return SectorResponse(
             choice=discover.MENU_CHOICES.index(name) + 1,
             name=name,
-            kind="theme" if name in discover.THEMES else "sector",
+            kind=_sector_kind(name),
         )
 
     @router.get("/sectors/{choice}/companies", response_model=SectorCompaniesResponse)
@@ -1034,12 +1281,9 @@ def create_mobile_router(config: Config) -> APIRouter:
         limit: int = Query(default=10, ge=1, le=50),
         min_market_cap: float = Query(default=2e9, ge=0),
     ) -> SectorCompaniesResponse:
-        try:
-            sector = discover.resolve_sector(choice)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        sector = _resolve(discover.resolve_sector, choice)
         found = discover.sector_companies(sector, limit, min_market_cap)
-        window = int(time.time() // 900)
+        window = _cache_window()
         with ThreadPoolExecutor(max_workers=8) as executor:
             revenues = list(executor.map(lambda item: _company_revenue(item.symbol, window), found))
         return SectorCompaniesResponse(
@@ -1080,19 +1324,13 @@ def create_mobile_router(config: Config) -> APIRouter:
 
     @router.get("/spending-flows/{choice}", response_model=SpendingFlowResponse)
     def spending_flow(choice: str) -> SpendingFlowResponse:
-        try:
-            flow = spending.resolve(choice)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        flow = _resolve(spending.resolve, choice)
         return _flow(spending.FLOWS.index(flow) + 1, flow)
 
     @router.get("/spending-flows/{choice}/growth", response_model=SpendingGrowthResponse)
     def spending_growth(choice: str) -> SpendingGrowthResponse:
-        try:
-            flow = spending.resolve(choice)
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        window = int(time.time() // 900)
+        flow = _resolve(spending.resolve, choice)
+        window = _cache_window()
         with ThreadPoolExecutor(max_workers=4) as executor:
             companies = list(executor.map(lambda symbol: _company_growth(symbol, window), flow.symbols))
         return SpendingGrowthResponse(companies=companies)
@@ -1102,32 +1340,26 @@ def create_mobile_router(config: Config) -> APIRouter:
         query: str = Query(min_length=1),
         limit: int = Query(default=8, ge=1, le=25),
     ) -> EventSearchResponse:
-        try:
+        with _status_on(kalshi.KalshiError, 502):
             markets = kalshi.search(query, limit=limit)
-        except kalshi.KalshiError as exc:
-            raise HTTPException(status_code=502, detail=str(exc)) from exc
         return EventSearchResponse(markets=[_market(market) for market in markets])
 
     @router.get("/event-markets/{ticker}", response_model=EventMarketResponse)
     def event_market(ticker: str) -> EventMarketResponse:
-        try:
+        with _status_on(kalshi.KalshiError, 404):
             return _market(kalshi.fetch(ticker))
-        except kalshi.KalshiError as exc:
-            raise _not_found(exc) from exc
 
     @router.get("/profiles/{symbol}", response_model=ProfileResponse)
     def profile(symbol: str) -> ProfileResponse:
-        try:
+        with _status_on(DataError, 404):
             data = MarketData(symbol, benchmark=config.benchmark)
-        except DataError as exc:
-            raise _not_found(exc) from exc
         panel = STRATEGIES["long"](TradeContext(data=data, config=deepcopy(config))).stock_info_panel()
         return ProfileResponse(
             symbol=data.symbol,
             name=data.name,
             price=data.price,
             as_of=data.last_date,
-            panel=_panel(panel) if panel else None,
+            panel=_optional_panel(panel),
         )
 
     @router.post("/options/quotes", response_model=OptionQuotesResponse)
@@ -1145,16 +1377,11 @@ def create_mobile_router(config: Config) -> APIRouter:
         expiries = sorted({contract.expiry for contract in request.contracts})
         with ThreadPoolExecutor(max_workers=min(4, len(expiries))) as pool:
             list(pool.map(data.chain, expiries))
-        quotes = []
-        for contract in request.contracts:
-            quote = data.contract_quote(contract.option_type, contract.strike, contract.expiry)
-            quotes.append(ContractQuoteResponse(
-                option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry,
-                found=quote is not None and quote.mid is not None,
-                bid=quote.bid if quote else None, ask=quote.ask if quote else None,
-                mid=quote.mid if quote else None,
-            ))
-        return OptionQuotesResponse(symbol=data.symbol, quotes=quotes)
+        rows = [
+            _contract_quote(contract, data.contract_quote(contract.option_type, contract.strike, contract.expiry))
+            for contract in request.contracts
+        ]
+        return OptionQuotesResponse(symbol=data.symbol, quotes=rows)
 
     @router.post("/quotes", response_model=PortfolioQuotesResponse)
     def portfolio_quotes(request: PortfolioQuotesRequest) -> PortfolioQuotesResponse:
@@ -1167,26 +1394,13 @@ def create_mobile_router(config: Config) -> APIRouter:
         parallel; both are kept for half an hour (tradeval.data.quotes), so a
         page opened again soon costs nothing upstream.
         """
-        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        symbols = _clean_symbols(request.symbols)
         found = quotes.latest_prices(symbols + [position.symbol for position in request.options])
         quotes.load_chains((position.symbol, contract.expiry)
                            for position in request.options for contract in position.contracts)
-        options = []
-        for position in request.options:
-            symbol = position.symbol.strip().upper()
-            rows = []
-            for contract in position.contracts:
-                quote = quotes.contract_quote(symbol, contract.option_type, contract.strike, contract.expiry)
-                rows.append(ContractQuoteResponse(
-                    option_type=contract.option_type, strike=contract.strike, expiry=contract.expiry,
-                    found=quote is not None and quote.mid is not None,
-                    bid=quote.bid if quote else None, ask=quote.ask if quote else None,
-                    mid=quote.mid if quote else None,
-                ))
-            options.append(OptionQuotesResponse(symbol=symbol, quotes=rows))
+        options = [_position_quotes(position) for position in request.options]
         return PortfolioQuotesResponse(
-            prices={symbol: (LatestPriceResponse(price=found[symbol][0], as_of=found[symbol][1]) if found.get(symbol) else None)
-                    for symbol in dict.fromkeys(symbols)},
+            prices=_per_symbol(found, symbols, lambda row: LatestPriceResponse(price=row[0], as_of=row[1])),
             options=options,
             fresh_for_seconds=quotes.FRESH_FOR,
         )
@@ -1198,7 +1412,7 @@ def create_mobile_router(config: Config) -> APIRouter:
         (tradeval.data.fundamentals)."""
         found = fundamentals.valuations(request.symbols)
         return ValuationsResponse(
-            companies={symbol: (CompanyValuationResponse(**value) if value else None) for symbol, value in found.items()},
+            companies=_per_symbol(found, found, lambda value: CompanyValuationResponse(**value)),
             fresh_for_seconds=fundamentals.FRESH_FOR,
         )
 
@@ -1215,14 +1429,13 @@ def create_mobile_router(config: Config) -> APIRouter:
         """
         today = dt.date.today()
         until = today + dt.timedelta(days=request.days)
-        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        symbols = _clean_symbols(request.symbols)
         found = catalysts.catalysts(symbols, until, today)
         return CatalystsResponse(
             as_of=today,
             window_end=until,
             macro=[_calendar_event(event, today) for event in macro.all_events(today) if event.date <= until],
-            companies={symbol: (CompanyCatalystsResponse(**found[symbol]) if found.get(symbol) else None)
-                       for symbol in dict.fromkeys(symbols)},
+            companies=_per_symbol(found, symbols, lambda value: CompanyCatalystsResponse(**value)),
             fresh_for_seconds=catalysts.FRESH_FOR,
         )
 
@@ -1242,29 +1455,22 @@ def create_mobile_router(config: Config) -> APIRouter:
         """
         today = stories.new_york_today()
         until = today + dt.timedelta(days=request.days)
-        symbols = [symbol.strip().upper() for symbol in request.symbols if symbol.strip()]
+        symbols = _clean_symbols(request.symbols)
         found = stories.stories(symbols, until, today)
         return StoriesResponse(
             as_of=today,
-            companies={symbol: (CompanyStoriesResponse(**found[symbol]) if found.get(symbol) else None)
-                       for symbol in dict.fromkeys(symbols)},
+            companies=_per_symbol(found, symbols, lambda value: CompanyStoriesResponse(**value)),
             fresh_for_seconds=stories.FRESH_FOR,
             pending=[symbol for symbol in dict.fromkeys(symbols) if symbol not in found],
         )
 
     @router.get("/profiles/{symbol}/earnings", response_model=EarningsPreviewResponse)
     def earnings(symbol: str) -> EarningsPreviewResponse:
-        found = _earnings_preview(symbol.strip().upper(), int(time.time() // 900))
-        if isinstance(found, DataError):
-            raise _not_found(found)
-        return found
+        return _found(_earnings_preview(symbol.strip().upper(), _cache_window()))
 
     @router.get("/profiles/{symbol}/performance", response_model=PerformanceResponse)
     def business_performance(symbol: str) -> PerformanceResponse:
-        found = _performance(symbol.strip().upper(), int(time.time() // 900))
-        if isinstance(found, DataError):
-            raise _not_found(found)
-        return found
+        return _found(_performance(symbol.strip().upper(), _cache_window()))
 
     @router.post("/trades/spreads", response_model=SpreadPickerResponse)
     def spread_choices(
@@ -1272,147 +1478,27 @@ def create_mobile_router(config: Config) -> APIRouter:
         buy_strike: Optional[float] = Query(default=None, gt=0),
         limit: int = Query(default=5, ge=1, le=100),
     ) -> SpreadPickerResponse:
-        from tradeval.analysis.spreads import VerticalSpread
-        if request.instrument not in ("call_spread", "put_spread"):
-            raise HTTPException(status_code=422, detail="Choose a debit spread instrument.")
-        try:
-            strategy = prepare(request, config)
-            legs = strategy.spread_legs()
-            strikes = sorted({leg.strike for leg in legs})
-            long_leg = next((leg for leg in legs if leg.strike == buy_strike), None) if buy_strike is not None else (legs[0] if legs else None)
-            if buy_strike is not None and long_leg is None:
-                raise HTTPException(status_code=422, detail="The buy strike is not available on this expiry.")
-            built = []
-            if long_leg:
-                shorts = sorted((leg for leg in legs if (leg.strike > long_leg.strike if request.instrument == "call_spread" else leg.strike < long_leg.strike)), key=lambda leg: abs(leg.strike - long_leg.strike))
-                for short in shorts:
-                    spread = VerticalSpread(long_leg, short)
-                    if spread.debit is None or spread.debit >= spread.width:
-                        continue
-                    built.append(SpreadChoiceResponse(
-                        contract="%g/%g" % (long_leg.strike, short.strike),
-                        buy_strike=long_leg.strike, sell_strike=short.strike,
-                        debit=spread.debit, max_loss=spread.max_loss,
-                        max_profit=spread.max_profit, breakeven=spread.breakeven,
-                        reward_risk=spread.reward_risk,
-                    ))
-            return SpreadPickerResponse(symbol=strategy.data.symbol, price=strategy.data.price,
-                as_of=strategy.data.last_date, expiry=strategy.chain_expiry,
-                buy_strike=long_leg.strike if long_leg else None, available_strikes=strikes,
-                spreads=built[:limit], has_more=len(built) > limit)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except DataError as exc:
-            raise _not_found(exc) from exc
+        return _spread_choices(request, config, buy_strike, limit)
 
     @router.post("/trades/options")
     def option_choices(request: ValidationRequest) -> Dict[str, Any]:
-        from tradeval.api.option_explorer import choices
-        if request.instrument != "options":
-            raise HTTPException(status_code=422, detail="Choose the options instrument.")
-        try:
-            return choices(prepare(request, config), request)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except DataError as exc:
-            raise _not_found(exc) from exc
+        return _option_choices(request, config)
 
     @router.post("/trades/option-payoff")
     def option_payoff(request: ValidationRequest) -> Dict[str, Any]:
-        from tradeval.api.option_explorer import payoff
-        if request.instrument != "options" or not request.contract or not request.expiry:
-            raise HTTPException(status_code=422, detail="Select an option and expiry first.")
-        try:
-            return payoff(prepare(request, config), request)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except DataError as exc:
-            raise _not_found(exc) from exc
+        return _option_payoff(request, config)
 
     @router.post("/trades/spread-payoff")
     def spread_payoff(request: ValidationRequest) -> Dict[str, Any]:
-        from tradeval.analysis.pricing import black_scholes
-        if request.instrument not in ("call_spread", "put_spread") or not request.contract:
-            raise HTTPException(status_code=422, detail="Select a debit spread first.")
-        try:
-            strategy = prepare(request, config)
-            apply_sizing(strategy, request)
-            spread = strategy._typed_spread()
-            spot = strategy.data.price
-            days = max(0, (strategy.chain_expiry - dt.date.today()).days)
-            volatility = strategy.reprice_volatility
-            rate = strategy.option_rules.risk_free_rate_pct / 100.0
-            radius = max(spot * .15, spread.width * 2)
-            low = max(.01, min(spot, spread.long_leg.strike, spread.short_leg.strike) - radius)
-            high = max(spot, spread.long_leg.strike, spread.short_leg.strike) + radius
-            prices = sorted(set([round(low + (high-low)*i/100, 4) for i in range(101)] + [spot, spread.long_leg.strike, spread.short_leg.strike, spread.breakeven]))
-            remaining = [days * (1-i/60) for i in range(61)] if days and volatility else [0]
-            curves = []
-            for left in remaining:
-                values = []
-                for price in prices:
-                    long_value = black_scholes(spread.kind, price, spread.long_leg.strike, left, volatility or .2, rate)
-                    short_value = black_scholes(spread.kind, price, spread.short_leg.strike, left, volatility or .2, rate)
-                    values.append(round(max(0, min(spread.width, long_value-short_value))*100, 4))
-                curves.append({"days_left": round(left, 3), "values": values})
-            return {"symbol": strategy.data.symbol, "contract": request.contract,
-                "expiry": strategy.chain_expiry, "spot": spot, "cost": spread.cost,
-                "width": spread.width, "breakeven": spread.breakeven,
-                "volatility_pct": volatility*100 if volatility else None,
-                "rate_pct": rate*100, "prices": prices, "curves": curves,
-                "model_note": "Black-Scholes estimates with fixed volatility and rates, no dividends, fees, or early exercise. Expiry values use intrinsic value. " + strategy.volatility_caveat}
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except DataError as exc:
-            raise _not_found(exc) from exc
+        return _spread_payoff(request, config)
 
     @router.post("/trades/preview", response_model=TradePreviewResponse)
     def trade_preview(request: ValidationRequest) -> TradePreviewResponse:
-        try:
-            strategy = prepare(request, config)
-            apply_sizing(strategy, request)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except DataError as exc:
-            raise _not_found(exc) from exc
-
-        profile = strategy.profile_panel()
-        option_panels = strategy.option_panels() if strategy.ctx.trades_options else []
-        key = strategy.key
-        return TradePreviewResponse(
-            symbol=strategy.data.symbol,
-            name=strategy.data.name,
-            strategy=StrategyChoice(
-                choice=list(STRATEGIES).index(key) + 1,
-                key=key,
-                name=strategy.name,
-                description=strategy.description,
-            ),
-            price=strategy.data.price,
-            as_of=strategy.data.last_date,
-            profile=_panel(profile) if profile else None,
-            option_panels=[_panel(panel) for panel in option_panels],
-        )
+        return _trade_preview(request, config)
 
     @router.post("/event-contracts/validate")
     def validate_event_contract(request: EventContractRequest) -> Dict[str, Any]:
-        try:
-            market = kalshi.fetch(request.ticker)
-        except kalshi.KalshiError as exc:
-            raise _not_found(exc) from exc
-        report = EventContractStrategy(
-            market,
-            EventTrade(
-                side=resolve_side(request.side),
-                probability=request.probability,
-                contracts=request.contracts,
-                account_size=request.account,
-                limit_price=request.limit_price,
-            ),
-            deepcopy(config),
-            siblings=kalshi.siblings(market.event_ticker) if market.event_ticker else [],
-        ).run()
-        return report_to_dict(report)
+        return _validate_event_contract(request, config)
 
     from tradeval.api.social import social_router
     router.include_router(social_router(config))

@@ -74,18 +74,21 @@ def test_request_weights_reach_the_report(offline):
 
 
 def test_unknown_strategy_is_a_validation_error(offline):
+    request = ValidationRequest(symbol="TEST", strategy="nonsense")
     with pytest.raises(ValidationError, match="Unknown trade type"):
-        validate(ValidationRequest(symbol="TEST", strategy="nonsense"))
+        validate(request)
 
 
 def test_event_contract_is_pointed_elsewhere(offline):
+    request = ValidationRequest(symbol="TEST", strategy="event")
     with pytest.raises(ValidationError, match="event contract"):
-        validate(ValidationRequest(symbol="TEST", strategy="event"))
+        validate(request)
 
 
 def test_unknown_horizon_is_a_validation_error(offline):
+    request = ValidationRequest(symbol="TEST", strategy="short", horizon="99y")
     with pytest.raises(ValidationError, match="Unknown horizon"):
-        validate(ValidationRequest(symbol="TEST", strategy="short", horizon="99y"))
+        validate(request)
 
 
 def test_horizon_defaults_from_the_config(config):
@@ -120,7 +123,8 @@ def test_build_context_carries_the_trade_terms(config):
     )
     ctx = build_context(request, config, make_market_data())
     assert (ctx.entry, ctx.stop, ctx.target) == (101.0, 95.0, 120.0)
-    assert ctx.account_size == 50_000.0 and ctx.risk_pct == 1.0
+    assert ctx.account_size == 50_000.0
+    assert ctx.risk_pct == 1.0
     assert ctx.reward_risk == pytest.approx(19.0 / 6.0)
 
 
@@ -168,8 +172,9 @@ def test_selected_expiry_is_used_and_unavailable_expiry_is_rejected():
     data = make_market_data(option_expiries=[expiry])
     strategy = prepare(ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", expiry=expiry), data=data)
     assert strategy.chain_expiry == expiry
+    stale = ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", expiry=expiry+dt.timedelta(days=1))
     with pytest.raises(ValidationError, match="expiry is no longer available"):
-        prepare(ValidationRequest(symbol="TEST", strategy="short", instrument="call_spread", expiry=expiry+dt.timedelta(days=1)), data=data)
+        prepare(stale, data=data)
 
 
 def test_unpriced_selected_spread_is_rejected_instead_of_grading_another_pair():

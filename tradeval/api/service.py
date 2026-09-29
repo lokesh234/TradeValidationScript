@@ -99,17 +99,25 @@ def apply_sizing(strategy: Strategy, request: ValidationRequest) -> None:
         # A selected strike may be outside the default ATM display window.
         ctx.strikes = strategy.max_strikes() or ctx.strikes
     if ctx.trades_spread and ctx.contract:
-        from tradeval.analysis.spreads import parse_pair
-        pair = parse_pair(ctx.contract)
-        chosen = strategy._typed_spread() if pair else None
-        valid_order = pair and (pair[0] < pair[1] if ctx.spread_kind == "call" else pair[0] > pair[1])
-        if not valid_order or chosen is None or chosen.debit is None or chosen.debit >= chosen.width:
-            raise ValidationError("The selected debit spread cannot be priced. Choose another pair.")
+        _check_spread(strategy)
     # Shares are given as a count or as dollars; the context wants both, and
     # the count is the one that was meant literally.
     if request.shares:
         ctx.shares = request.shares
         ctx.size = request.shares * strategy.data.price
+
+
+def _check_spread(strategy: Strategy) -> None:
+    """Refuse a chosen spread pair that is written the wrong way round for its
+    side (a call spread buys the lower strike, a put spread the higher), or
+    that cannot be bought for less than its width."""
+    from tradeval.analysis.spreads import parse_pair
+    ctx = strategy.ctx
+    pair = parse_pair(ctx.contract)
+    chosen = strategy._typed_spread() if pair else None
+    valid_order = pair and (pair[0] < pair[1] if ctx.spread_kind == "call" else pair[0] > pair[1])
+    if not valid_order or chosen is None or chosen.debit is None or chosen.debit >= chosen.width:
+        raise ValidationError("The selected debit spread cannot be priced. Choose another pair.")
 
 
 def prepare(

@@ -333,7 +333,7 @@ def classify(sentence: str, default: str = "other") -> str:
 # -- dates in text -----------------------------------------------------------------
 
 _MONTHS = {name: n for n, name in enumerate(calendar.month_name) if name}
-_MONTHS.update({name.lower(): n for name, n in list(_MONTHS.items())})
+_MONTHS.update({name.lower(): n for name, n in _MONTHS.items()})
 for _n in range(1, 13):
     _abbr = calendar.month_abbr[_n]
     _MONTHS[_abbr.lower()] = _n
@@ -411,70 +411,90 @@ def _period(year: int, part: int, parts: int, fiscal: bool, fiscal_year_end: Opt
     return dt.date(start_year, first, 1), _month_end(end_year, last)
 
 
+class _DateScan:
+    """One sentence's dates, read pattern by pattern, most specific first; a
+    span one pattern has claimed is not read again by a looser one."""
+
+    def __init__(self, sentence: str, fiscal_year_end: Optional[str], lag: int) -> None:
+        self.sentence = sentence
+        self.fiscal_year_end = fiscal_year_end
+        self.lag = lag
+        self.found: List[When] = []
+        self.taken: List[Tuple[int, int]] = []
+
+    def free(self, match) -> bool:
+        return not any(match.start() < end and start < match.end() for start, end in self.taken)
+
+    def add(self, kind: str, start: dt.date, end: dt.date, match, fiscal_end: Optional[dt.date] = None) -> None:
+        self.found.append(When(kind, start, end, match.span(), fiscal_end if fiscal_end != end else None))
+        self.taken.append(match.span())
+
+    def fiscal_reading(self, match, year: int, part: int, parts: int, fiscal: bool) -> Optional[dt.date]:
+        if fiscal or not self.fiscal_year_end or "calendar" in match.group(0).lower():
+            return None
+        return _period(year, part, parts, True, self.fiscal_year_end, self.lag)[1]
+
+    def add_period(self, kind: str, match, year: int, part: int, parts: int, fiscal: bool) -> None:
+        """A quarter or half that may be fiscal or calendar, both readings kept."""
+        start, end = _period(year, part, parts, fiscal, self.fiscal_year_end, self.lag)
+        self.add(kind, start, end, match, self.fiscal_reading(match, year, part, parts, fiscal))
+
+    def days(self) -> None:
+        for match in _EXACT.finditer(self.sentence):
+            try:
+                day = dt.date(int(match.group(3)), _MONTHS[match.group(1).lower()], int(match.group(2)))
+            except (KeyError, ValueError):
+                continue
+            self.add("exact", day, day, match)
+        for match in _NUMERIC.finditer(self.sentence):
+            try:
+                day = dt.date(int(match.group(3)), int(match.group(1)), int(match.group(2)))
+            except ValueError:
+                continue
+            if self.free(match):
+                self.add("exact", day, day, match)
+
+    def months(self) -> None:
+        for match in _MONTH_YEAR.finditer(self.sentence):
+            if not self.free(match):
+                continue
+            month, year = _MONTHS[match.group(1).lower()], int(match.group(2))
+            self.add("month", dt.date(year, month, 1), _month_end(year, month), match)
+
+    def quarters(self) -> None:
+        for match in _QUARTER.finditer(self.sentence):
+            if self.free(match):
+                fiscal = bool(match.group(2) or match.group(3))
+                self.add_period("quarter", match, int(match.group(4)), _ORDINAL[match.group(1).lower()], 4, fiscal)
+        for match in _QUARTER_FISCAL_FIRST.finditer(self.sentence):
+            if self.free(match):
+                part = _ORDINAL[match.group(3).lower()]
+                start, end = _period(int(match.group(2)), part, 4, True, self.fiscal_year_end, self.lag)
+                self.add("quarter", start, end, match)
+        for match in _QUARTER_SHORT.finditer(self.sentence):
+            if self.free(match):
+                self.add_period("quarter", match, _year(match.group(3)), int(match.group(1)), 4, bool(match.group(2)))
+
+    def halves(self) -> None:
+        for match in _HALF.finditer(self.sentence):
+            if self.free(match):
+                part = _ORDINAL[match.group(1).lower()]
+                self.add_period("half", match, int(match.group(3)), part, 2, bool(match.group(2)))
+        for match in _HALF_SHORT.finditer(self.sentence):
+            if self.free(match):
+                part = int(match.group(1) or match.group(2))
+                self.add_period("half", match, _year(match.group(4)), part, 2, bool(match.group(3)))
+
+
 def dates_in(sentence: str, fiscal_year_end: Optional[str] = None, lag: int = 0) -> List[When]:
     """Every date or period a sentence names, in the order they appear;
     fiscal ones numbered with ``lag`` (see :func:`_period`)."""
-    found: List[When] = []
-    taken: List[Tuple[int, int]] = []
-
-    def free(match) -> bool:
-        return not any(match.start() < end and start < match.end() for start, end in taken)
-
-    def add(kind: str, start: dt.date, end: dt.date, match, fiscal_end: Optional[dt.date] = None) -> None:
-        found.append(When(kind, start, end, match.span(), fiscal_end if fiscal_end != end else None))
-        taken.append(match.span())
-
-    def fiscal_reading(match, year: int, part: int, parts: int, fiscal: bool) -> Optional[dt.date]:
-        if fiscal or not fiscal_year_end or "calendar" in match.group(0).lower():
-            return None
-        return _period(year, part, parts, True, fiscal_year_end, lag)[1]
-
-    for match in _EXACT.finditer(sentence):
-        try:
-            day = dt.date(int(match.group(3)), _MONTHS[match.group(1).lower()], int(match.group(2)))
-        except (KeyError, ValueError):
-            continue
-        add("exact", day, day, match)
-    for match in _NUMERIC.finditer(sentence):
-        try:
-            day = dt.date(int(match.group(3)), int(match.group(1)), int(match.group(2)))
-        except ValueError:
-            continue
-        if free(match):
-            add("exact", day, day, match)
-    for match in _MONTH_YEAR.finditer(sentence):
-        if not free(match):
-            continue
-        month, year = _MONTHS[match.group(1).lower()], int(match.group(2))
-        add("month", dt.date(year, month, 1), _month_end(year, month), match)
-    for match in _QUARTER.finditer(sentence):
-        if free(match):
-            fiscal = bool(match.group(2) or match.group(3))
-            year, part = int(match.group(4)), _ORDINAL[match.group(1).lower()]
-            start, end = _period(year, part, 4, fiscal, fiscal_year_end, lag)
-            add("quarter", start, end, match, fiscal_reading(match, year, part, 4, fiscal))
-    for match in _QUARTER_FISCAL_FIRST.finditer(sentence):
-        if free(match):
-            part = _ORDINAL[match.group(3).lower()]
-            start, end = _period(int(match.group(2)), part, 4, True, fiscal_year_end, lag)
-            add("quarter", start, end, match)
-    for match in _QUARTER_SHORT.finditer(sentence):
-        if free(match):
-            year, part, fiscal = _year(match.group(3)), int(match.group(1)), bool(match.group(2))
-            start, end = _period(year, part, 4, fiscal, fiscal_year_end, lag)
-            add("quarter", start, end, match, fiscal_reading(match, year, part, 4, fiscal))
-    for match in _HALF.finditer(sentence):
-        if free(match):
-            year, part, fiscal = int(match.group(3)), _ORDINAL[match.group(1).lower()], bool(match.group(2))
-            start, end = _period(year, part, 2, fiscal, fiscal_year_end, lag)
-            add("half", start, end, match, fiscal_reading(match, year, part, 2, fiscal))
-    for match in _HALF_SHORT.finditer(sentence):
-        if free(match):
-            part = int(match.group(1) or match.group(2))
-            year, fiscal = _year(match.group(4)), bool(match.group(3))
-            start, end = _period(year, part, 2, fiscal, fiscal_year_end, lag)
-            add("half", start, end, match, fiscal_reading(match, year, part, 2, fiscal))
-    return sorted(found, key=lambda when: when.span)
+    scan = _DateScan(sentence, fiscal_year_end, lag)
+    scan.days()
+    scan.months()
+    scan.quarters()
+    scan.halves()
+    return sorted(scan.found, key=lambda when: when.span)
 
 
 def upcoming(when: When, today: dt.date, until: dt.date) -> bool:
@@ -572,27 +592,40 @@ def mentions_in(text: str, filing: edgar.Filing, document: str, today: dt.date, 
             continue
         for start, end in sentences(paragraph):
             sentence = paragraph[start:end].strip()
-            if len(sentence) < 30 or len(sentence.split()) < 6 or _ACCOUNTING.search(sentence):
+            if not _worth_reading(sentence):
                 continue
-            if _DROP.search(sentence) or _FOOTNOTE.match(sentence):
-                continue
-            found = keywords_in(sentence)
-            if not found:
-                continue
-            ahead = [when for when in dates_in(sentence, fiscal_year_end, lag) if upcoming(when, today, until)
-                     and not _PERIOD_END.search(sentence[max(0, when.span[0] - 40):when.span[0]])]
-            if not ahead:
-                continue
-            keyword = found[0]
-            place = keyword.pattern.search(_NOISE.sub(lambda m: " " * len(m.group(0)), sentence))
-            when = _nearest(ahead, place.start() if place else 0)
-            keep = [when.span] + ([place.span()] if place else [])
-            quote = _excerpt(sentence, keep)
-            if quote is None:
-                continue
-            out.append(Mention(quote=quote, when=when, keyword=keyword, category=classify(sentence, keyword.category),
-                               filing=filing, document=document))
+            mention = _mention(sentence, filing, document, today, until, fiscal_year_end, lag)
+            if mention is not None:
+                out.append(mention)
     return out
+
+
+def _worth_reading(sentence: str) -> bool:
+    """Long enough to be prose, and not accounting, boilerplate or a footnote."""
+    if len(sentence) < 30 or len(sentence.split()) < 6 or _ACCOUNTING.search(sentence):
+        return False
+    return not (_DROP.search(sentence) or _FOOTNOTE.match(sentence))
+
+
+def _mention(sentence: str, filing: edgar.Filing, document: str, today: dt.date, until: dt.date,
+             fiscal_year_end: Optional[str], lag: int) -> Optional[Mention]:
+    """The sentence as a mention, if it names a catalyst word and a date still ahead."""
+    found = keywords_in(sentence)
+    if not found:
+        return None
+    ahead = [when for when in dates_in(sentence, fiscal_year_end, lag) if upcoming(when, today, until)
+             and not _PERIOD_END.search(sentence[max(0, when.span[0] - 40):when.span[0]])]
+    if not ahead:
+        return None
+    keyword = found[0]
+    place = keyword.pattern.search(_NOISE.sub(lambda m: " " * len(m.group(0)), sentence))
+    when = _nearest(ahead, place.start() if place else 0)
+    keep = [when.span] + ([place.span()] if place else [])
+    quote = _excerpt(sentence, keep)
+    if quote is None:
+        return None
+    return Mention(quote=quote, when=when, keyword=keyword, category=classify(sentence, keyword.category),
+                   filing=filing, document=document)
 
 
 def _heading(sentence: str) -> bool:
@@ -602,6 +635,27 @@ def _heading(sentence: str) -> bool:
         return False
     words = [word for word in re.findall(r"[A-Za-z][A-Za-z'’-]*", sentence) if len(word) > 3]
     return bool(words) and sum(word[0].isupper() for word in words) / len(words) > 0.8
+
+
+def _first_sentence_under(heading: re.Pattern, paragraph: str, after: int,
+                          candidates: List[str]) -> Optional[str]:
+    """The first real sentence in the paragraphs under one heading, stopping
+    at the next item heading. ``paragraph`` is the heading's own, read only
+    past ``after``."""
+    for candidate in candidates:
+        if heading.match(candidate) and candidate is not paragraph:
+            break
+        if re.match(r"^Item\s*\d\.\d\d", candidate, re.IGNORECASE) and candidate is not paragraph:
+            break
+        for start, end in sentences(candidate):
+            sentence = candidate[start:end].strip()
+            if candidate is paragraph and start < after:
+                continue
+            if len(sentence.split()) >= 8 and not _heading(sentence):
+                # A long first sentence is kept from its start, cut at a
+                # word and marked, as a dated quote is.
+                return _excerpt(sentence, [(0, min(len(sentence), 40))])
+    return None
 
 
 def _first_sentence_after(paragraphs: List[str], item: str) -> Optional[str]:
@@ -617,19 +671,9 @@ def _first_sentence_after(paragraphs: List[str], item: str) -> Optional[str]:
         # Heading and text in one paragraph: "Item 8.01 Other Events. On ..."
         if len(rest) > 80:
             candidates = [paragraph] + candidates
-        for candidate in candidates:
-            if heading.match(candidate) and candidate is not paragraph:
-                break
-            if re.match(r"^Item\s*\d\.\d\d", candidate, re.IGNORECASE) and candidate is not paragraph:
-                break
-            for start, end in sentences(candidate):
-                sentence = candidate[start:end].strip()
-                if candidate is paragraph and start < found.end():
-                    continue
-                if len(sentence.split()) >= 8 and not _heading(sentence):
-                    # A long first sentence is kept from its start, cut at a
-                    # word and marked, as a dated quote is.
-                    return _excerpt(sentence, [(0, min(len(sentence), 40))])
+        first = _first_sentence_under(heading, paragraph, found.end(), candidates)
+        if first is not None:
+            return first
         # Nothing under this one -- a table of contents lists every item
         # heading before the body repeats it -- so keep looking.
     return None
@@ -645,7 +689,7 @@ def _info(symbol: str) -> Optional[dict]:
         return None
 
 
-def _display_name(info: Optional[dict], edgar_title: Optional[str], symbol: str) -> Optional[str]:
+def _display_name(info: Optional[dict], edgar_title: Optional[str]) -> Optional[str]:
     name = (info or {}).get("longName") or (info or {}).get("shortName")
     if name:
         return str(name)
@@ -700,9 +744,9 @@ _CATEGORY_PHRASE = {
 }
 
 
-def _filing_story(symbol: str, short: str, filing: edgar.Filing, paragraphs: Optional[List[str]]) -> dict:
-    item = primary_item(filing.items)
-    quote = _first_sentence_after(paragraphs or [], item) if item and paragraphs else None
+def _filing_category_and_title(short: str, filing: edgar.Filing, item: Optional[str],
+                               quote: Optional[str]) -> Tuple[str, str]:
+    """What kind of news an 8-K is, and the headline it is given."""
     category = _ITEM_CATEGORY.get(item or "", "other")
     if quote and (category == "other" or (item == "1.01" and len(filing.items) == 1)):
         category = classify(quote, category)
@@ -715,13 +759,28 @@ def _filing_story(symbol: str, short: str, filing: edgar.Filing, paragraphs: Opt
     # borrowing, not a deal.
     if quote and category == "deal" and item in ("1.01", "1.02") and _DROP.search(quote):
         category = "financing"
+    return category, title
+
+
+def _items_summary(filing: edgar.Filing) -> str:
+    """"8-K items 1.01 and 2.03" -- the exhibit list, item 9.01, left out
+    unless it is all there is."""
     shown = [code for code in filing.items if code != "9.01"] or list(filing.items)
+    if not shown:
+        return filing.form
+    return "%s item%s %s" % (filing.form, "s" if len(shown) > 1 else "", _and(shown))
+
+
+def _filing_story(symbol: str, short: str, filing: edgar.Filing, paragraphs: Optional[List[str]]) -> dict:
+    item = primary_item(filing.items)
+    quote = _first_sentence_after(paragraphs or [], item) if item and paragraphs else None
+    category, title = _filing_category_and_title(short, filing, item, quote)
     return {
         "id": "%s-8k-%s" % (symbol.lower(), filing.folder),
         "kind": "filing",
         "category": category,
         "title": title,
-        "summary": ("%s item%s %s" % (filing.form, "s" if len(shown) > 1 else "", _and(shown))) if shown else filing.form,
+        "summary": _items_summary(filing),
         "date": None, "window_start": None, "window_end": None, "date_kind": "none",
         "happened_on": filing.reported if filing.reported and filing.reported <= filing.filed else filing.filed,
         "status": "announced",
@@ -788,6 +847,57 @@ def quote_key(quote: str) -> str:
     return re.sub(r"[\W\d_]+", " ", quote.lower()).strip()
 
 
+# A document of a filing: the filing, the document's name, and its paragraphs
+# -- None where it could not be read.
+_Document = Tuple[edgar.Filing, str, Optional[List[str]]]
+
+
+def _exhibits(filing: edgar.Filing) -> Tuple[List[_Document], bool]:
+    """A current report's EX-99 exhibits, and whether all of them were read."""
+    try:
+        names = edgar.exhibits(filing)
+    except edgar.EdgarError:
+        return [], False
+    complete = True
+    documents: List[_Document] = []
+    for name in names:
+        exhibit = _read(filing.url(name))
+        complete = complete and exhibit is not None
+        documents.append((filing, name, exhibit))
+    return documents, complete
+
+
+def _periodic(periodic: edgar.Filing, fiscal_year_end: Optional[str]) -> Tuple[_Document, int]:
+    """The latest 10-K or 10-Q as a document, and the fiscal lag it settles."""
+    try:
+        raw = edgar.get_text(periodic.url())
+    except edgar.EdgarError:
+        raw = None
+    lag = 0
+    # The report says which fiscal year it is about, which settles how
+    # this company numbers its years (edgar.fiscal_lag).
+    if raw is not None:
+        lag = edgar.fiscal_lag(periodic.reported, fiscal_year_end, edgar.fiscal_year_focus(raw))
+    return (periodic, periodic.document, edgar.paragraphs(raw) if raw is not None else None), lag
+
+
+def _unique_mentions(symbol: str, documents: List[_Document], today: dt.date, until: dt.date,
+                     fiscal_year_end: Optional[str], lag: int) -> list:
+    """Mention stories from every document read, a repeated quote kept once."""
+    mentions = []
+    seen = set()
+    for filing, name, paragraphs in documents:
+        if not paragraphs:
+            continue
+        for mention in mentions_in("\n".join(paragraphs), filing, name, today, until, fiscal_year_end, lag):
+            key = quote_key(mention.quote)
+            if key in seen:
+                continue
+            seen.add(key)
+            mentions.append(_mention_story(symbol, mention))
+    return mentions
+
+
 def _filings(symbol: str, cik: int, short: str, today: dt.date, until: dt.date) -> Tuple[list, list, bool]:
     """The 8-K stories and dated mentions for one company, and whether
     everything that was tried could be read."""
@@ -797,48 +907,27 @@ def _filings(symbol: str, cik: int, short: str, today: dt.date, until: dt.date) 
     current = [filing for filing in found.filings if filing.form in CURRENT and filing.filed >= since]
     periodic = next((filing for filing in found.filings if filing.form in PERIODIC), None)
 
-    stories, mentions = [], []
-    documents: List[Tuple[edgar.Filing, str, Optional[List[str]]]] = []
+    stories = []
+    documents: List[_Document] = []
     for filing in current:
         paragraphs = _read(filing.url())
         complete = complete and paragraphs is not None
         documents.append((filing, filing.document, paragraphs))
         if not earnings_only(filing.items):
             stories.append(_filing_story(symbol, short, filing, paragraphs))
-        try:
-            names = edgar.exhibits(filing)
-        except edgar.EdgarError:
-            names, complete = [], False
-        for name in names:
-            exhibit = _read(filing.url(name))
-            complete = complete and exhibit is not None
-            documents.append((filing, name, exhibit))
+        exhibits, read_all = _exhibits(filing)
+        complete = complete and read_all
+        documents.extend(exhibits)
     lag = 0
     if periodic is not None:
-        try:
-            raw = edgar.get_text(periodic.url())
-        except edgar.EdgarError:
-            raw = None
-        complete = complete and raw is not None
-        # The report says which fiscal year it is about, which settles how
-        # this company numbers its years (edgar.fiscal_lag).
-        if raw is not None:
-            lag = edgar.fiscal_lag(periodic.reported, found.fiscal_year_end, edgar.fiscal_year_focus(raw))
-        documents.append((periodic, periodic.document, edgar.paragraphs(raw) if raw is not None else None))
+        document, lag = _periodic(periodic, found.fiscal_year_end)
+        complete = complete and document[2] is not None
+        documents.append(document)
 
     # Newest first, so when two filings repeat a sentence the newer one keeps
     # it; stable, so a filing's own exhibits stay after it.
     documents.sort(key=lambda document: document[0].filed, reverse=True)
-    seen = set()
-    for filing, name, paragraphs in documents:
-        if not paragraphs:
-            continue
-        for mention in mentions_in("\n".join(paragraphs), filing, name, today, until, found.fiscal_year_end, lag):
-            key = quote_key(mention.quote)
-            if key in seen:
-                continue
-            seen.add(key)
-            mentions.append(_mention_story(symbol, mention))
+    mentions = _unique_mentions(symbol, documents, today, until, found.fiscal_year_end, lag)
     return stories, mentions, complete
 
 
@@ -847,6 +936,22 @@ def _stories(symbol: str) -> Tuple[Optional[dict], float]:
     call in it impatient, and none started after :data:`SYMBOL_BUDGET`."""
     with http.patience(CALL_TIMEOUT, CALL_RETRIES, time.monotonic() + SYMBOL_BUDGET):
         return _look_up(symbol)
+
+
+def _filings_or_nothing(symbol: str, cik: int, short: str, today: dt.date,
+                        until: dt.date) -> Tuple[list, list, bool]:
+    """:func:`_filings`, with EDGAR being down read as nothing found, incompletely."""
+    try:
+        return _filings(symbol, cik, short, today, until)
+    except edgar.EdgarError:
+        return [], [], False
+
+
+def _markets_or_nothing(symbol: str, name: str, today: dt.date, until: dt.date) -> Tuple[list, bool]:
+    try:
+        return prediction_markets.markets(symbol, name, today, until)
+    except Exception:  # noqa: BLE001 -- a venue's surprise costs its stories only
+        return [], False
 
 
 def _look_up(symbol: str) -> Tuple[Optional[dict], float]:
@@ -863,22 +968,16 @@ def _look_up(symbol: str) -> Tuple[Optional[dict], float]:
         # Unknown to both -- or EDGAR was down and Yahoo does not know it.
         return None, MISS_FOR
     cik, title = listed if listed else (None, None)
-    name = _display_name(info if known else None, title, symbol) or symbol
+    name = _display_name(info if known else None, title) or symbol
     names = prediction_markets.names_for(symbol, name)
     short = names[-1] if names else strip_legal_form(name) or symbol
 
     filed, mentions = [], []
     if cik is not None:
-        try:
-            filed, mentions, read_all = _filings(symbol, cik, short, today_, until)
-            complete = complete and read_all
-        except edgar.EdgarError:
-            complete = False
-    try:
-        found, answered = prediction_markets.markets(symbol, name, today_, until)
-        complete = complete and answered
-    except Exception:  # noqa: BLE001 -- a venue's surprise costs its stories only
-        found, complete = [], False
+        filed, mentions, read_all = _filings_or_nothing(symbol, cik, short, today_, until)
+        complete = complete and read_all
+    found, answered = _markets_or_nothing(symbol, name, today_, until)
+    complete = complete and answered
     return {
         "name": name,
         "cik": edgar.cik_text(cik) if cik is not None else None,
@@ -949,6 +1048,16 @@ def _start(symbol: str) -> "Future":
         return running
 
 
+def _finished(started: Dict[str, "Future"], within: float) -> Dict[str, Optional[dict]]:
+    """The lookups that finished, without failing, inside ``within`` seconds."""
+    finished, _ = wait(list(started.values()), timeout=within)
+    return {
+        symbol: future.result()
+        for symbol, future in started.items()
+        if future in finished and future.exception() is None
+    }
+
+
 def stories(symbols: Iterable[str], until: dt.date, today: Optional[dt.date] = None,
             within: Optional[float] = None) -> Dict[str, Optional[dict]]:
     """Each symbol's recent filings, dated filing mentions and open markets
@@ -971,10 +1080,7 @@ def stories(symbols: Iterable[str], until: dt.date, today: Optional[dt.date] = N
         else:
             started[symbol] = _start(symbol)
     if started:
-        finished, _ = wait(list(started.values()), timeout=deadline() if within is None else within)
-        for symbol, future in started.items():
-            if future in finished and future.exception() is None:
-                held[symbol] = future.result()
+        held.update(_finished(started, deadline() if within is None else within))
     return {symbol: (_answer(entry, today, until) if entry else None) for symbol, entry in held.items()}
 
 

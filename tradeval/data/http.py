@@ -144,6 +144,24 @@ class HttpClient:
         # Exponential backoff with jitter so parallel callers do not sync up.
         return self.backoff * (2 ** attempt) + random.uniform(0, self.backoff)
 
+    def _take_turn(self, url: str, last_error: str, status: Optional[int]) -> float:
+        """Wait for this attempt's turn with the provider; return its timeout."""
+        # Per attempt rather than per call: a retry is another request the
+        # provider has to answer, and the run that is retrying is usually
+        # the one that has already been asked to slow down.
+        if self.limiter is not None:
+            self.limiter.acquire()
+        self._throttle()
+        # Out of time is out of attempts: a call that could only answer
+        # after the caller has given up is not worth the provider's while.
+        timeout = self.timeout
+        if self.deadline is not None:
+            left = self.deadline - time.monotonic()
+            if left <= 0:
+                raise HttpError("out of time before %s (%s)" % (url, last_error), status)
+            timeout = min(timeout, max(left, 0.5))
+        return timeout
+
     def request(
         self,
         method: str,
@@ -158,20 +176,7 @@ class HttpClient:
         status: Optional[int] = None
 
         for attempt in range(self.retries + 1):
-            # Per attempt rather than per call: a retry is another request the
-            # provider has to answer, and the run that is retrying is usually
-            # the one that has already been asked to slow down.
-            if self.limiter is not None:
-                self.limiter.acquire()
-            self._throttle()
-            # Out of time is out of attempts: a call that could only answer
-            # after the caller has given up is not worth the provider's while.
-            timeout = self.timeout
-            if self.deadline is not None:
-                left = self.deadline - time.monotonic()
-                if left <= 0:
-                    raise HttpError("out of time before %s (%s)" % (url, last_error), status)
-                timeout = min(timeout, max(left, 0.5))
+            timeout = self._take_turn(url, last_error, status)
             response = None
             try:
                 response = self._session.request(

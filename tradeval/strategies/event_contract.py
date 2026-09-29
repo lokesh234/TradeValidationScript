@@ -42,6 +42,9 @@ from .base import Panel, Report
 KEY = "event"
 NAME = "Event Contract"
 
+# A contract price, which is quoted in whole cents.
+CENTS = "%.0fc"
+
 
 def _count(value: Optional[float]) -> str:
     """Contracts, which are whole things even when the API sends decimals."""
@@ -321,7 +324,7 @@ class EventContractStrategy:
         if self.price is None:
             return skipped(name, "nothing offered on this side", 1.0)
         rules = self.rules
-        value = "%.0fc" % self.price
+        value = CENTS % self.price
         if rules.min_price_cents <= self.price <= rules.max_price_cents:
             return passed(
                 name,
@@ -625,7 +628,7 @@ class EventContractStrategy:
 
     def _market_panel(self) -> Panel:
         market = self.market
-        quote = lambda value: "n/a" if value is None else "%.0fc" % value
+        quote = lambda value: "n/a" if value is None else CENTS % value
 
         rows = [
             ["Yes", quote(market.yes_ask), "bid %s" % quote(market.yes_bid), "what buying yes costs"],
@@ -763,8 +766,8 @@ class EventContractStrategy:
             rows.append(
                 [
                     market.subtitle or market.ticker,
-                    "%.0fc" % market.yes_ask,
-                    "%.0fc" % (market.yes_bid or 0.0),
+                    CENTS % market.yes_ask,
+                    CENTS % (market.yes_bid or 0.0),
                     _count(market.volume_24h),
                     market.ticker,
                 ]

@@ -134,7 +134,7 @@ def driver():
     this tool runs on a checkout that never installed it.
     """
     try:
-        import psycopg  # noqa: PLC0415 -- deliberately late, see above
+        import psycopg  # noqa: PLC0415 -- deliberately late as explained above
     except ImportError as exc:  # pragma: no cover -- exercised with a stub
         raise DatabaseUnavailable(
             "psycopg is not installed. Run:  pip install -r requirements.txt"

@@ -270,6 +270,22 @@ def _client(timeout: float) -> HttpClient:
     return HttpClient(USER_AGENT, timeout=timeout, retries=2, limiter=for_provider("kalshi"))
 
 
+def _first_open(hit: Optional[Dict[str, Any]], now: dt.datetime) -> Optional[EventMarket]:
+    """The first market of a search hit that can still be traded."""
+    for raw in (hit or {}).get("markets") or []:
+        market = _market_from_search(raw, hit)
+        if not market.ticker:
+            continue
+        # The index keeps settled markets, which quote 0/100c and cannot be
+        # traded. Dropped here rather than shown and vetoed later, so a
+        # shutdown that ended last October stops taking a slot from one
+        # that has not happened yet.
+        if market.close_time is not None and market.close_time <= now:
+            continue
+        return market
+    return None
+
+
 def search(phrase: str, limit: int = 8, timeout: float = 8.0) -> List[EventMarket]:
     """Markets matching a phrase, best first, at most one per event.
 
@@ -290,18 +306,9 @@ def search(phrase: str, limit: int = 8, timeout: float = 8.0) -> List[EventMarke
     now = dt.datetime.now(dt.timezone.utc)
     out: List[EventMarket] = []
     for hit in (payload or {}).get("current_page") or []:
-        for raw in (hit or {}).get("markets") or []:
-            market = _market_from_search(raw, hit)
-            if not market.ticker:
-                continue
-            # The index keeps settled markets, which quote 0/100c and cannot be
-            # traded. Dropped here rather than shown and vetoed later, so a
-            # shutdown that ended last October stops taking a slot from one
-            # that has not happened yet.
-            if market.close_time is not None and market.close_time <= now:
-                continue
+        market = _first_open(hit, now)
+        if market is not None:
             out.append(market)
-            break
         if len(out) >= limit:
             break
     return out

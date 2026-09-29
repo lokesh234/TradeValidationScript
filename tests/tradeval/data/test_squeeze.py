@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import io
 import json
+import sys
+import types
 
 import pytest
 
@@ -34,6 +37,32 @@ def test_nothing_configured_or_a_missing_file_is_not_published(tmp_path, monkeyp
     monkeypatch.setenv("TRADEVAL_SQUEEZE_FILE", str(tmp_path / "missing.json"))
     with pytest.raises(squeeze.NotPublished):
         squeeze.latest()
+
+
+def test_reads_s3_only_from_a_bucket_this_account_owns(monkeypatch):
+    calls = []
+
+    class Client:
+        def __init__(self, service):
+            self.service = service
+
+        def get_caller_identity(self):
+            calls.append(("sts",))
+            return {"Account": "123456789012"}
+
+        def get_object(self, **kwargs):
+            calls.append(("s3", kwargs))
+            return {"Body": io.BytesIO(json.dumps({"version": 1}).encode())}
+
+    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=Client))
+    monkeypatch.setattr(squeeze, "_account", {"id": None})
+    monkeypatch.setenv("TRADEVAL_SQUEEZE_S3", "bucket/predictions/latest.json")
+    assert squeeze.latest(now=0) == {"version": 1}
+    squeeze.clear()
+    squeeze.latest(now=0)
+    wanted = {"Bucket": "bucket", "Key": "predictions/latest.json", "ExpectedBucketOwner": "123456789012"}
+    # The account is asked for once, however often the file is re-read.
+    assert calls == [("sts",), ("s3", wanted), ("s3", wanted)]
 
 
 def test_the_endpoint_answers_503_until_published(monkeypatch, tmp_path):
