@@ -443,3 +443,29 @@ def test_spending_outlook_is_consistent_in_list_and_detail(client, monkeypatch):
     assert missing["projected_amount"] is None
     assert missing["change_pct"] is None
     assert client.get("/mobile/spending-flows/not-a-flow").status_code == 422
+
+
+def test_mobile_datacenter_lists_parts_with_ai_capex_shares(client):
+    response = client.get("/mobile/datacenter")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["flow"] == "AI Capex"
+    assert client.get("/mobile/spending-flows/%d" % body["flow_choice"]).json()["name"] == "AI Capex"
+    assert body["size"] and body["as_of"]
+    assert "$180" in body["unlisted_note"]
+    parts = {part["id"]: part for part in body["parts"]}
+    assert parts["compute_tray"]["parent"] == "rack"
+    assert parts["hall"]["parent"] is None
+    nvda = [s for s in parts["compute_tray"]["suppliers"] if s["symbol"] == "NVDA"]
+    assert nvda == [{"symbol": "NVDA", "role": nvda[0]["role"], "share_per_thousand": 350}]
+    assert {"symbol", "role", "share_per_thousand"} == set(parts["cdu"]["suppliers"][0])
+    # The compute tray model's parts are all served, under the tray.
+    for tray_part in ("tray_chassis", "tray_board", "cold_plate", "gpu", "hbm", "package",
+                      "cpu", "nic", "dpu", "ssd", "vrm", "tray_connectors"):
+        assert parts[tray_part]["parent"] == "compute_tray", tray_part
+    assert {s["symbol"]: s["share_per_thousand"] for s in parts["gpu"]["suppliers"]}["TSM"] == 90
+    # The other drill-down models' parts are served under their rack parts.
+    for piece, parent in (("nvs_chip", "nvlink_switch"), ("tor_asic", "tor_switch"), ("shelf_psu", "power_shelf"),
+                          ("psu_semis", "shelf_psu"), ("cart_cables", "nvlink_spine"), ("rinfra_qd", "rack")):
+        assert parts[piece]["parent"] == parent, piece
+        assert all(s["share_per_thousand"] is None for s in parts[piece]["suppliers"]), piece

@@ -32,7 +32,7 @@ from tradeval.api.serialize import panel_to_dict, report_to_dict
 from tradeval.api.service import ValidationError, apply_sizing, prepare
 from tradeval.config import Config
 from tradeval.context import TradeContext
-from tradeval.data import catalysts, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, spending_outlook, squeeze, stories, valuation
+from tradeval.data import catalysts, datacenter, discover, earnings_preview, fundamentals, indices, kalshi, macro, performance, quotes, spending, spending_outlook, squeeze, stories, valuation
 from tradeval.data.market import DataError, MarketData
 from tradeval.strategies import STRATEGIES
 from tradeval.strategies.event_contract import EventContractStrategy, EventTrade, resolve_side
@@ -268,6 +268,24 @@ class SpendingFlowResponse(BaseModel):
 class SpendingFlowListResponse(BaseModel):
     as_of: str
     flows: List[SpendingFlowResponse]
+
+
+class DatacenterPartResponse(BaseModel):
+    id: str
+    label: str
+    what: str
+    parent: Optional[str] = None
+    suppliers: List[BeneficiaryResponse]
+
+
+class DatacenterResponse(BaseModel):
+    as_of: str
+    flow: str
+    # The /spending-flows choice for the same flow, so a part can link to it.
+    flow_choice: int
+    size: str
+    unlisted_note: str
+    parts: List[DatacenterPartResponse]
 
 
 class EventMarketResponse(BaseModel):
@@ -1349,6 +1367,35 @@ def create_mobile_router(config: Config) -> APIRouter:
     def spending_flow(choice: str) -> SpendingFlowResponse:
         flow = _resolve(spending.resolve, choice)
         return _flow(spending.FLOWS.index(flow) + 1, flow)
+
+    @router.get("/datacenter", response_model=DatacenterResponse)
+    def datacenter_parts() -> DatacenterResponse:
+        # Static catalogue: no provider calls here, prices come from /quotes.
+        flow = datacenter.flow()
+        return DatacenterResponse(
+            as_of=datacenter.AS_OF,
+            flow=flow.name,
+            flow_choice=datacenter.flow_choice(),
+            size=flow.size,
+            unlisted_note=flow.split,
+            parts=[
+                DatacenterPartResponse(
+                    id=item.id,
+                    label=item.label,
+                    what=item.what,
+                    parent=item.parent,
+                    suppliers=[
+                        BeneficiaryResponse(
+                            symbol=supplier.symbol,
+                            role=supplier.role,
+                            share_per_thousand=supplier.share,
+                        )
+                        for supplier in item.suppliers
+                    ],
+                )
+                for item in datacenter.PARTS
+            ],
+        )
 
     @router.get("/spending-flows/{choice}/growth", response_model=SpendingGrowthResponse)
     def spending_growth(choice: str) -> SpendingGrowthResponse:
