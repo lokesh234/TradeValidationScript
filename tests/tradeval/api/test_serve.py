@@ -469,3 +469,10 @@ def test_mobile_datacenter_lists_parts_with_ai_capex_shares(client):
                           ("psu_semis", "shelf_psu"), ("cart_cables", "nvlink_spine"), ("rinfra_qd", "rack")):
         assert parts[piece]["parent"] == parent, piece
         assert all(s["share_per_thousand"] is None for s in parts[piece]["suppliers"]), piece
+    # The upstream layer is served, marked so the $1,000 can leave it out.
+    assert parts["gpu"]["tier"] is None
+    assert parts["lithography"]["tier"] == "upstream" and parts["lithography"]["parent"] == "fab"
+    assert parts["euv_source"]["parent"] == "lithography"
+    amat = [s for s in parts["deposition_etch"]["suppliers"] if s["symbol"] == "AMAT"]
+    assert amat[0]["share_per_thousand"] == 25
+    assert "AMAT" not in {s["symbol"] for s in parts["gpu"]["suppliers"]}

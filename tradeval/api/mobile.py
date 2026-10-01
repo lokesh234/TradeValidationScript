@@ -276,6 +276,8 @@ class DatacenterPartResponse(BaseModel):
     what: str
     parent: Optional[str] = None
     suppliers: List[BeneficiaryResponse]
+    # "upstream" for the layer behind the $1,000, which is not added to it.
+    tier: Optional[str] = None
 
 
 class DatacenterResponse(BaseModel):
@@ -1384,6 +1386,7 @@ def create_mobile_router(config: Config) -> APIRouter:
                     label=item.label,
                     what=item.what,
                     parent=item.parent,
+                    tier=item.tier,
                     suppliers=[
                         BeneficiaryResponse(
                             symbol=supplier.symbol,

@@ -16,6 +16,14 @@ that revenue is actually earned -- and appears with no share on the others,
 so adding up the parts never counts the same dollar twice. Every other
 supplier is listed without a share: it is in the path of the money, but the
 flow does not estimate its cut.
+
+Some parts sit a level further back than the $1,000: the fabs that make the
+chips, the machines inside them and the design software. They carry
+``tier="upstream"``. Their money is already inside the $1,000 -- it is what
+TSMC, Micron, Nvidia and Broadcom spend out of their own takings -- so a
+picture of the $1,000 leaves them out rather than adding them in. The one AI
+Capex share on them, Applied Materials', is there for that reason: it is paid
+out of the chipmakers' capex, not by the hyperscaler directly.
 """
 
 from __future__ import annotations
@@ -29,6 +37,9 @@ from tradeval.data.spending import Beneficiary
 # The flow every share on this page is taken from.
 FLOW_NAME = "AI Capex"
 
+# The layer one step further back than the $1,000 (see the module docstring).
+UPSTREAM = "upstream"
+
 # The catalogue is as current as the flow it borrows its figures from.
 AS_OF = spending.AS_OF
 
@@ -40,6 +51,8 @@ class DatacenterPart:
     ``parent`` is the part this one sits inside, for drill-down; None is the
     top of the tree. ``what`` is one or two plain sentences on what the part
     physically does, written for someone who has never been inside a hall.
+    ``tier`` is None for the $1,000 itself and ``UPSTREAM`` for the layer
+    behind it, which is not added to the $1,000.
     """
 
     id: str
@@ -47,6 +60,7 @@ class DatacenterPart:
     what: str
     parent: Optional[str]
     suppliers: List[Beneficiary] = field(default_factory=list)
+    tier: Optional[str] = None
 
 
 def flow() -> spending.SpendingFlow:
@@ -266,7 +280,6 @@ PARTS: List[DatacenterPart] = [
         suppliers=[
             Beneficiary("NVDA", "designs the GPU and sells it"),
             _earns("TSM", "makes the GPU chips in its fabs"),
-            _earns("AMAT", "sells the machines that make the chips"),
             Beneficiary("AMD", "makes rival AI chips"),
         ],
     ),
@@ -991,6 +1004,226 @@ PARTS: List[DatacenterPart] = [
             Beneficiary("NRG", "power generation"),
             Beneficiary("GEV", "gas turbines"),
         ],
+    ),
+    # --- Upstream: already inside the $1,000, not added to it -------------
+    # Where the chipmakers' and chip designers' own spending goes. The ids
+    # match the upstream flow view and the EUV machine model
+    # (assets/CONTRACT-euv.md). The dollars are worked out on the site
+    # (upstream.js) from the chipmakers' capex and the Semiconductor Fabs and
+    # Equipment flow's split; only Applied Materials' AI Capex share sits here.
+    DatacenterPart(
+        id="fab",
+        label="Chip factories (fabs)",
+        what=(
+            "The factories where chips are made. A leading-edge fab costs $20 billion "
+            "or more: about a third goes on the building and its cleanroom, a room "
+            "kept far cleaner than an operating theatre, and the rest on the machines "
+            "inside. The money is TSMC's and Micron's, spent out of what they earn."
+        ),
+        parent=None,
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("TSM", "builds the fabs that make the GPU dies and packages"),
+            Beneficiary("MU", "builds the fabs that make HBM memory"),
+        ],
+    ),
+    DatacenterPart(
+        id="lithography",
+        label="Lithography machines",
+        what=(
+            "Machines that print a chip's pattern onto the silicon wafer with light, in "
+            "lines a few billionths of a metre wide, one layer at a time. For the finest "
+            "layers only ASML's EUV machines, which use extreme-ultraviolet light, can do "
+            "it. Their mirrors come from Zeiss and their lasers from Trumpf, both private."
+        ),
+        parent="fab",
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("ASML", "the only maker of EUV machines, and most of the older kind"),
+        ],
+    ),
+    DatacenterPart(
+        id="deposition_etch",
+        label="Deposition and etch tools",
+        what=(
+            "Deposition lays down films of material a few atoms thick; etching cuts "
+            "away whatever the printed pattern leaves exposed. A chip goes through "
+            "hundreds of these steps, so fabs spend more on these tools than on any "
+            "other kind."
+        ),
+        parent="fab",
+        tier=UPSTREAM,
+        suppliers=[
+            _earns("AMAT", "deposition and etch, the broadest tool line"),
+            Beneficiary("LRCX", "etch and deposition, weighted to memory"),
+            Beneficiary("TOELY", "Tokyo Electron: deposition, etch and coating tools (OTC ADR)"),
+        ],
+    ),
+    DatacenterPart(
+        id="process_control",
+        label="Inspection and measurement",
+        what=(
+            "Tools that check each wafer between steps for specks of dust, misprinted "
+            "patterns and layers of the wrong thickness, so a fault is caught before "
+            "hundreds more steps are spent on a bad wafer."
+        ),
+        parent="fab",
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("KLAC", "wafer inspection and measurement"),
+            Beneficiary("ONTO", "inspection and measurement, much of it for chip packages"),
+        ],
+    ),
+    DatacenterPart(
+        id="materials",
+        label="Materials and gases",
+        what=(
+            "The silicon wafers, ultrapure chemicals, filters and gases every step "
+            "uses up. The wafers themselves come mostly from Shin-Etsu and SUMCO, "
+            "listed in Japan."
+        ),
+        parent="fab",
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("ENTG", "ultrapure materials, filters and wafer carriers"),
+            Beneficiary("LIN", "industrial and specialty gases"),
+            Beneficiary("APD", "industrial and specialty gases"),
+        ],
+    ),
+    DatacenterPart(
+        id="test",
+        label="Chip testing",
+        what=(
+            "Machines that switch each finished chip on and check it works at full "
+            "speed before it ships. An AI chip is tested several times over, because "
+            "one bad die spoils a whole package. Advantest, listed in Japan, is the "
+            "other main maker."
+        ),
+        parent="fab",
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("TER", "chip test systems"),
+        ],
+    ),
+    DatacenterPart(
+        id="eda",
+        label="Chip design software",
+        what=(
+            "The software engineers use to lay out a chip and prove it will work "
+            "before a single wafer is made, called EDA (electronic design automation). "
+            "A GPU has over 200 billion transistors; nobody could place them by hand. "
+            "Siemens sells these tools too."
+        ),
+        parent=None,
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("SNPS", "design and verification software"),
+            Beneficiary("CDNS", "design and verification software"),
+        ],
+    ),
+    DatacenterPart(
+        id="chip_ip",
+        label="Licensed chip designs",
+        what=(
+            "Ready-made blocks of chip design that a company licenses rather than "
+            "draws itself: processor cores, memory controllers, the circuits that "
+            "connect chips. Nvidia's Grace CPU is built on Arm's designs, and Arm is "
+            "paid a licence fee plus a royalty on every chip."
+        ),
+        parent=None,
+        tier=UPSTREAM,
+        suppliers=[
+            Beneficiary("ARM", "licenses processor designs and collects royalties"),
+            Beneficiary("SNPS", "licenses interface and memory designs"),
+            Beneficiary("CDNS", "licenses interface and memory designs"),
+        ],
+    ),
+    # Inside an EUV lithography machine (assets/CONTRACT-euv.md). ASML builds
+    # and sells the whole machine; the modules name who makes what inside it.
+    DatacenterPart(
+        id="euv_frame",
+        label="Frame and vacuum chamber",
+        what=(
+            "The frame, the panels and the vacuum chamber that hold everything else. "
+            "Air absorbs extreme-ultraviolet light, so the light's whole path runs "
+            "through a vacuum."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "designs and assembles the machine")],
+    ),
+    DatacenterPart(
+        id="euv_source",
+        label="Light source",
+        what=(
+            "A laser fires at tiny drops of molten tin, some 50,000 a second, turning "
+            "each into a plasma hotter than the surface of the sun that gives off "
+            "extreme-ultraviolet light. The laser comes from Trumpf; the source is "
+            "built by Cymer, part of ASML."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "builds the source through Cymer, with Trumpf's laser")],
+    ),
+    DatacenterPart(
+        id="euv_illuminator",
+        label="Illuminator",
+        what=(
+            "Curved mirrors that shape the light into an even beam and aim it at the "
+            "mask. Extreme-ultraviolet light cannot pass through glass lenses, so "
+            "every optic in the machine is a mirror; Zeiss makes them."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "fits Zeiss's illuminator mirrors")],
+    ),
+    DatacenterPart(
+        id="euv_reticle_stage",
+        label="Mask stage",
+        what=(
+            "Holds the mask, called a reticle: the master pattern of one layer of a "
+            "chip. It sweeps back and forth at high speed, in exact step with the "
+            "wafer below."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "builds the mask stage")],
+    ),
+    DatacenterPart(
+        id="euv_optics",
+        label="Projection mirrors",
+        what=(
+            "A column of mirrors, polished smooth to within the width of an atom, "
+            "that shrinks the mask's pattern four times and focuses it on the wafer. "
+            "Zeiss makes them in Germany."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "fits Zeiss's projection optics")],
+    ),
+    DatacenterPart(
+        id="euv_wafer_stage",
+        label="Wafer stages",
+        what=(
+            "Two tables that carry wafers under the light, placed to within a "
+            "billionth of a metre while moving fast. One wafer is measured while the "
+            "other is being printed."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "builds the twin wafer stages")],
+    ),
+    DatacenterPart(
+        id="euv_wafer_handler",
+        label="Wafer handling",
+        what=(
+            "The load port and robot that take wafers out of their sealed carrier, "
+            "called a FOUP, and feed them into the machine without letting in a "
+            "speck of dust."
+        ),
+        parent="lithography",
+        tier=UPSTREAM,
+        suppliers=[Beneficiary("ASML", "builds the wafer handler")],
     ),
 ]
 
